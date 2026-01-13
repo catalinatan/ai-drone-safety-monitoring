@@ -1,0 +1,6 @@
+# --- Human Detection Dependencies ---
+ultralytics~=8.3.252
+opencv-python-headless
+numpy~=2.2.6
+opencv-python~=4.12.0.88
+# ------------------------------------
