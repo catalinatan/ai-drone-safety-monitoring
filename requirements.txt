@@ -1,10 +1,19 @@
-# --- Human Detection Dependencies ---
+# --- Core Image Processing ---
+opencv-python-headless>=4.9.0.80
+numpy>=1.26.0
+setuptools>=69.0.0
+Pillow>=10.0.0
 ultralytics~=8.3.252
-opencv-python-headless
-numpy~=2.2.6
-opencv-python~=4.12.0.88
-# ------------------------------------
+
+# --- Visualization & Utilities ---
+matplotlib>=3.7.0
+scipy>=1.10.0
+tqdm>=4.65.0
 
 # --- Testing Dependencies ---
-pytest
-# ------------------------------------
+pytest>=8.0.0
+
+# --- Deep Learning (Optional - Uncomment if needed) ---
+# torch>=2.0.0
+# torchvision>=0.15.0
+# ultralytics>=8.0.0  # For YOLOv8
