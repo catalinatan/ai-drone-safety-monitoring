@@ -50,7 +50,7 @@ class TestRealSystem:
         If the file exists, it proves the model can actually find a human.
         If not, it skips.
         """
-        image_path = "tests/data/person_bridge_image.jpg"
+        image_path = "data/human_images/suggested-hhFaD71gfpD4xdNKKULr_jpg.rf.55019e75fd6eee006c2f06d896b5bc35.jpg"
 
         if not os.path.exists(image_path):
             pytest.skip(f"Skipping: No test image found at {image_path}")
