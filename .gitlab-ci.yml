@@ -1,28 +1,28 @@
 # This is a test GitLab CI/CD configuration file to check Python code and build a Docker image.
 stages:
-- test
-- build
+  - test
+  - build
 
 test_project:
-stage: test
-image: python:3.12-slim
-script:
-- apt-get update && apt-get install -y libgl1 libglib2.0-0
-- pip install -r requirements.txt
-- python -m compileall .
+  stage: test
+  image: python:3.12-slim
+  script:
+    - apt-get update && apt-get install -y libgl1 libglib2.0-0
+    - pip install -r requirements.txt
+    - python -m compileall .
 
 build_docker_image:
-stage: build
-image: docker:24.0.5
-services:
-- docker:24.0.5-dind
-variables:
-DOCKER_TLS_CERTDIR: "/certs"
-before_script:
-- docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" $CI_REGISTRY
-script:
-- docker build -t "$CI_REGISTRY_IMAGE:$CI_COMMIT_REF_SLUG" .
-- docker push "$CI_REGISTRY_IMAGE:$CI_COMMIT_REF_SLUG"
-rules:
-- if: $CI_COMMIT_BRANCH == "master"
-- if: $CI_COMMIT_BRANCH == "dev"
+  stage: build
+  image: docker:24.0.5
+  services:
+    - docker:24.0.5-dind
+  variables:
+    DOCKER_TLS_CERTDIR: "/certs"
+  before_script:
+    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" $CI_REGISTRY
+  script:
+    - docker build -t "$CI_REGISTRY_IMAGE:$CI_COMMIT_REF_SLUG" .
+    - docker push "$CI_REGISTRY_IMAGE:$CI_COMMIT_REF_SLUG"
+  rules:
+    - if: $CI_COMMIT_BRANCH == "master"
+    - if: $CI_COMMIT_BRANCH == "dev"
