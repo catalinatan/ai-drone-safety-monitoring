@@ -34,6 +34,36 @@ keep_classes = ["ships", "bridges", "railways"]
 keep_ids = [base.class_to_idx[c] for c in keep_classes if c in base.class_to_idx]
 kept_indices = [i for i, y in enumerate(base.targets) if y in keep_ids]
 
+# --- Stratified train/val/test split ---
+id_map = {orig: new for new, orig in enumerate(keep_ids)}
+kept_labels = np.array([id_map[base.targets[i]] for i in kept_indices], dtype=np.int64)
+
+rng = np.random.default_rng(42)
+kept_indices = np.array(kept_indices, dtype=int)
+
+train_idx, val_idx, test_idx = [], [], []
+train_ratio, val_ratio = 0.8, 0.1  # test = remainder
+
+for c in np.unique(kept_labels):
+    cls_idx = kept_indices[kept_labels == c].copy()
+    rng.shuffle(cls_idx)
+
+    n = len(cls_idx)
+    n_train = int(round(n * train_ratio))
+    n_val = int(round(n * val_ratio))
+
+    train_idx.append(cls_idx[:n_train])
+    val_idx.append(cls_idx[n_train:n_train + n_val])
+    test_idx.append(cls_idx[n_train + n_val:])
+
+train_idx = np.concatenate(train_idx) if train_idx else np.array([], dtype=int)
+val_idx   = np.concatenate(val_idx)   if val_idx   else np.array([], dtype=int)
+test_idx  = np.concatenate(test_idx)  if test_idx  else np.array([], dtype=int)
+
+rng.shuffle(train_idx)
+rng.shuffle(val_idx)
+rng.shuffle(test_idx)
+
 # --- Datasets with timm transforms ---
 train_base = datasets.ImageFolder(root=str(data_dir), transform=train_tfms)
 eval_base  = datasets.ImageFolder(root=str(data_dir), transform=eval_tfms)
@@ -51,17 +81,17 @@ class RemapSubset(Dataset):
         x, y = self.subset[idx]
         return x, self.id_map[y]
 
-id_map = {orig: new for new, orig in enumerate(keep_ids)}
-
-filtered_train = RemapSubset(Subset(train_base, kept_indices), id_map)
-filtered_eval  = RemapSubset(Subset(eval_base,  kept_indices), id_map)
+# Train/val/test datasets with remapped labels
+train_ds = RemapSubset(Subset(train_base, train_idx.tolist()), id_map)
+val_ds   = RemapSubset(Subset(eval_base,  val_idx.tolist()),   id_map)
+test_ds  = RemapSubset(Subset(eval_base,  test_idx.tolist()),  id_map)
 
 # --- Oversampling minority classes ---
-filtered_targets = np.array([id_map[base.targets[i]] for i in kept_indices], dtype=np.int64)
+train_targets = np.array([id_map[base.targets[i]] for i in train_idx], dtype=np.int64)
 
-class_counts = np.bincount(filtered_targets)    
-class_weights = 1.0 / class_counts
-sample_weights = class_weights[filtered_targets]
+class_counts = np.bincount(train_targets, minlength=3)
+class_weights = 1.0 / np.maximum(class_counts, 1)
+sample_weights = class_weights[train_targets]
 
 # --- DataLoaders ---
 random_seed = 42
@@ -75,15 +105,23 @@ sampler = WeightedRandomSampler(
 )
 
 train_loader = DataLoader(
-    filtered_train,
+    train_ds,
     batch_size=32,
     sampler=sampler,
     num_workers=2,
     pin_memory=True
 )
 
-eval_loader = DataLoader(
-    filtered_eval,
+val_loader = DataLoader(
+    val_ds,
+    batch_size=32,
+    shuffle=False,
+    num_workers=2,
+    pin_memory=True
+)
+
+test_loader = DataLoader(
+    test_ds,
     batch_size=32,
     shuffle=False,
     num_workers=2,
@@ -91,11 +129,12 @@ eval_loader = DataLoader(
 )
 
 # --- Sanity checks ---
-x, y = filtered_train[0]
-print("Sample shape:", x.shape)
-print("Sample label:", y)  # must be 0, 1, or 2
+x, y = train_ds[0]
+print("Train sample shape:", x.shape)
+print("Train sample label:", y)  # must be 0, 1, or 2
 
 logging.info("Class mapping: %s", base.class_to_idx)
 logging.info("Kept class ids: %s", keep_ids)
-logging.info("Train batches: %d Eval batches: %d",
-             len(train_loader), len(eval_loader))
+logging.info("Split sizes: train=%d val=%d test=%d", len(train_ds), len(val_ds), len(test_ds))
+logging.info("Train batches: %d Val batches: %d Test batches: %d",
+             len(train_loader), len(val_loader), len(test_loader))
