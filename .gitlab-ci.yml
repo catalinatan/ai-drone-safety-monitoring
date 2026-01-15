@@ -23,6 +23,11 @@ build_docker_image:
     IMAGE_TAG: "$CI_COMMIT_SHA"
   before_script:
     # - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" $CI_REGISTRY
+    - echo "CI_REGISTRY      = $CI_REGISTRY"
+    - echo "CI_PROJECT_PATH  = $CI_PROJECT_PATH"
+    - echo "IMAGE_NAME       = $IMAGE_NAME"
+    - echo "REGISTRY_USER    = $REGISTRY_USER"
+    - echo "Has REGISTRY_PASSWORD? $( [ -n "$REGISTRY_PASSWORD" ] && echo yes || echo no )"
     - echo "$REGISTRY_PASSWORD" | docker login "$CI_REGISTRY" -u "$REGISTRY_USER" --password-stdin
   script:
     - test -n "$IMAGE_NAME"
