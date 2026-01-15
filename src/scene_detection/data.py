@@ -41,7 +41,6 @@ def make_transforms(model_name: str = "mobilenetv3_large_100", input_size=None):
 
 def build_loaders(
     data_dir: str | None = None,
-    keep_classes=("ships", "bridges", "railways"),
     batch_size: int = 32,
     num_workers: int = 2,
     pin_memory: bool = True,
@@ -52,7 +51,8 @@ def build_loaders(
 ):
     """
     Builds stratified train/val/test DataLoaders from a single ImageFolder root.
-    Returns: train_loader, val_loader, test_loader, id_map, cfg
+    Keeps all classes found in the data directory.
+    Returns: train_loader, val_loader, test_loader, class_to_idx, cfg
     """
     if data_dir is None:
         grandparent_dir = Path(__file__).resolve().parents[2]
@@ -63,23 +63,16 @@ def build_loaders(
 
     # Base dataset (no transforms) just to read targets and class_to_idx
     base = datasets.ImageFolder(root=str(data_dir))
-
-    keep_ids = [base.class_to_idx[c] for c in keep_classes if c in base.class_to_idx]
-    if len(keep_ids) != len(keep_classes):
-        missing = [c for c in keep_classes if c not in base.class_to_idx]
-        raise RuntimeError(f"Missing class folders in {data_dir}: {missing}")
-
-    kept_indices = np.array([i for i, y in enumerate(base.targets) if y in keep_ids], dtype=int)
-
-    # Remap original ids -> 0..K-1
-    id_map = {orig: new for new, orig in enumerate(keep_ids)}
-    kept_labels = np.array([id_map[base.targets[i]] for i in kept_indices], dtype=np.int64)
+    
+    all_indices = np.arange(len(base.targets), dtype=int)
+    all_labels = np.array(base.targets, dtype=np.int64)
+    num_classes = len(base.classes)
 
     # Stratified split
     rng = np.random.default_rng(seed)
     train_idx, val_idx, test_idx = [], [], []
-    for c in np.unique(kept_labels):
-        cls_idx = kept_indices[kept_labels == c].copy()
+    for c in range(num_classes):
+        cls_idx = all_indices[all_labels == c].copy()
         rng.shuffle(cls_idx)
 
         n = len(cls_idx)
@@ -102,13 +95,13 @@ def build_loaders(
     train_base = datasets.ImageFolder(root=str(data_dir), transform=train_tfms)
     eval_base  = datasets.ImageFolder(root=str(data_dir), transform=eval_tfms)
 
-    train_ds = RemapSubset(Subset(train_base, train_idx.tolist()), id_map)
-    val_ds   = RemapSubset(Subset(eval_base,  val_idx.tolist()),   id_map)
-    test_ds  = RemapSubset(Subset(eval_base,  test_idx.tolist()),  id_map)
+    train_ds = Subset(train_base, train_idx.tolist())
+    val_ds   = Subset(eval_base,  val_idx.tolist())
+    test_ds  = Subset(eval_base,  test_idx.tolist())
 
     # Oversampling on train only
-    train_targets = np.array([id_map[base.targets[i]] for i in train_idx], dtype=np.int64)
-    class_counts = np.bincount(train_targets, minlength=len(keep_classes))
+    train_targets = np.array([base.targets[i] for i in train_idx], dtype=np.int64)
+    class_counts = np.bincount(train_targets, minlength=num_classes)
     class_weights = 1.0 / np.maximum(class_counts, 1)
     sample_weights = class_weights[train_targets]
 
@@ -133,12 +126,12 @@ def build_loaders(
         num_workers=num_workers, pin_memory=pin_memory
     )
 
-    return train_loader, val_loader, test_loader, id_map, cfg
+    return train_loader, val_loader, test_loader, base.class_to_idx, cfg
 
 
 if __name__ == "__main__":
-    train_loader, val_loader, test_loader, id_map, cfg = build_loaders()
+    train_loader, val_loader, test_loader, class_to_idx, cfg = build_loaders()
     x, y = next(iter(train_loader))
     print("Batch:", x.shape, y.min().item(), y.max().item())
-    print("id_map:", id_map)
+    print("class_to_idx:", class_to_idx)
     print("cfg:", cfg)
