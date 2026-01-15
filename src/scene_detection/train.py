@@ -7,15 +7,13 @@ import torch
 from torch import nn
 
 import timm
-from data import build_loaders
-
+from data import get_dataloaders
 
 def setup_logging(level: str = "INFO"):
     logging.basicConfig(
         level=getattr(logging, level.upper(), logging.INFO),
         format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
     )
-
 
 def train_one_epoch(model, loader, criterion, optimizer, scaler, device):
     model.train()
@@ -87,7 +85,13 @@ def main():
     setup_logging(args.log_level)
     log = logging.getLogger("training")
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
+
     use_amp = (device.type == "cuda") and (not args.no_amp)
 
     log.info("Device=%s | AMP=%s", device, use_amp)
@@ -95,13 +99,13 @@ def main():
              args.model_name, args.epochs, args.batch_size, args.lr, args.weight_decay)
 
     # --- Data ---
-    train_loader, val_loader, test_loader, id_map, data_cfg = build_loaders(
+    train_loader, val_loader, test_loader, id_map, data_cfg = get_dataloaders(
         data_dir=args.data_dir,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
         seed=args.seed,
         model_name=args.model_name,
-        keep_classes=("ships", "bridges", "railways"),
+        # keep_classes=("ships", "bridges", "railways"),
         train_ratio=0.8,
         val_ratio=0.1,
     )
@@ -112,7 +116,7 @@ def main():
              len(train_loader), len(val_loader), len(test_loader))
 
     # --- Model ---
-    model = timm.create_model(args.model_name, pretrained=True, num_classes=3).to(device)
+    model = timm.create_model(args.model_name, pretrained=True, num_classes=4).to(device)
 
     # --- Loss / Optim / Sched ---
     criterion = nn.CrossEntropyLoss()
@@ -141,7 +145,7 @@ def main():
                 {
                     "model_state": model.state_dict(),
                     "model_name": args.model_name,
-                    "num_classes": 3,
+                    "num_classes": 4,
                     "id_map": id_map,
                     "data_cfg": data_cfg,
                 },
