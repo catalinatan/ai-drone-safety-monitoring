@@ -1,8 +1,11 @@
 # my settings
 env.py
 tmp/
-data/
-.vscode/
+data/*
+# # But allow YOLO dataset structure
+# !data/railway_dataset/
+# !data/railway_dataset/**
+# .vscode/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
