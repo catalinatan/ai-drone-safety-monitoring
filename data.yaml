@@ -1,0 +1,11 @@
+names:
+- rail-track
+- rail-raised
+- rail-embedded
+- tram-track
+- trackbed
+- on-rails
+nc: 6
+path: /vol/bitbucket/ba325/ai-safety-monitoring/data/railway_dataset
+train: images/train
+val: images/val
