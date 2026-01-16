@@ -75,9 +75,9 @@ def prepare_dataset_yaml():
 
 def train_model(
     model_name='yolov11n-seg',
-    epochs=100,
+    epochs=50,
     imgsz=640,
-    batch_size=16,
+    batch_size=-1,
     device=0,
     patience=20,
     data_yaml_path='data.yaml'
@@ -169,9 +169,9 @@ if __name__ == '__main__':
         logger.info("\nStarting YOLO11n-seg training...")
         results = train_model(
             model_name='yolov11n-seg',
-            epochs=100,
+            epochs=50,
             imgsz=640,
-            batch_size=16,
+            batch_size=-1,
             device=0,  # Change to -1 if training on CPU
             patience=20
         )
