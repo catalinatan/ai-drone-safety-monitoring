@@ -74,7 +74,7 @@ def prepare_dataset_yaml():
     logger.info("data.yaml created successfully")
 
 def train_model(
-    model_name='yolov11n-seg',
+    model_name='yolo11n-seg',
     epochs=50,
     imgsz=640,
     batch_size=-1,
@@ -168,7 +168,7 @@ if __name__ == '__main__':
         # Train the model
         logger.info("\nStarting YOLO11n-seg training...")
         results = train_model(
-            model_name='yolov11n-seg',
+            model_name='yolo11n-seg',
             epochs=50,
             imgsz=640,
             batch_size=-1,
