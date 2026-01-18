@@ -3,8 +3,10 @@ env.py
 tmp/
 data/*
 # But allow YOLO dataset structure
-!data/railway_dataset/
-!data/railway_dataset/**
+!data/bridge_dataset/
+!data/bridge_dataset/**
+!data/ship_dataset/
+!data/ship_dataset/**
 .vscode/
 
 # Byte-compiled / optimized / DLL files
