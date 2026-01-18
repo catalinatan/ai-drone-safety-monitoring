@@ -60,12 +60,36 @@ def visualize_results(model_path, image_dir, num_samples=5, conf=0.5):
 
 if __name__ == "__main__":
     # ADJUST THESE PATHS AS NEEDED
-    MODEL = 'runs/segment/runs/segment/railway_hazard/weights/best.pt'
-    VAL_IMAGES = 'data/railway_dataset/images/val'
+    DATASET_CONFIGS = {
+    "railway": {
+        "model": "runs/segment/runs/segment/railway_hazard/weights/best.pt",
+        "images": "data/railway_dataset/images/val"
+    },
+    "ship": {
+        "model": "runs/segment/runs/segment/ship_hazard/weights/best.pt",
+        "images": "data/ship_dataset/images/val"
+    },
+    "bridge": {
+        "model": "runs/segment/runs/segment/bridge_hazard/weights/best.pt",
+        "images": "data/bridge_dataset/images/val"
+    }
+}
     
     visualize_results(
-        model_path=MODEL,
-        image_dir=VAL_IMAGES,
-        num_samples=5,
-        conf=0.5  # Lowered confidence to help see early results
+        model_path=DATASET_CONFIGS["railway"]["model"],
+        image_dir=DATASET_CONFIGS["railway"]["images"],
+        num_samples=3,
+        conf=0.5
+    )
+    visualize_results(
+        model_path=DATASET_CONFIGS["bridge"]["model"],
+        image_dir=DATASET_CONFIGS["bridge"]["images"],
+        num_samples=3,
+        conf=0.5
+    )
+    visualize_results(
+        model_path=DATASET_CONFIGS["ship"]["model"],
+        image_dir=DATASET_CONFIGS["ship"]["images"],
+        num_samples=3,
+        conf=0.5
     )
