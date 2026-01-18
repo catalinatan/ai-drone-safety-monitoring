@@ -1,55 +1,71 @@
 import cv2
-import numpy as np
 from pathlib import Path
 import random
+from ultralytics import YOLO
+import os
 
-def visualize_hazardous_zones(image_dir, label_dir, num_samples=5):
-    img_files = list(Path(image_dir).glob('*.jpg'))
+def visualize_results(model_path, image_dir, num_samples=5, conf=0.5):
+    """
+    Visualize predictions using the built-in Ultralytics plotting tools.
+    """
+    # 1. Validation checks
+    if not os.path.exists(model_path):
+        print(f"ERROR: Model file not found at {model_path}")
+        return
+
+    # 2. Load Model
+    print(f"Loading model: {model_path}")
+    model = YOLO(model_path)
+    
+    # 3. Get Images
+    img_path = Path(image_dir)
+    img_files = list(img_path.glob('*.jpg')) + list(img_path.glob('*.png'))
+    
+    if not img_files:
+        print(f"ERROR: No images found in {image_dir}")
+        return
+    
     samples = random.sample(img_files, min(len(img_files), num_samples))
     
-    # Define a single color for all hazardous areas (BGR format: Red is (0, 0, 255))
-    HAZARD_COLOR = (0, 0, 255) 
+    print(f"Processing {len(samples)} samples at confidence {conf}...")
+    print("TIP: Press any key to see the next image. Press 'q' to quit.")
 
-    for img_path in samples:
-        txt_path = Path(label_dir) / (img_path.stem + '.txt')
-        if not txt_path.exists():
-            print(f"No label found for {img_path.name}")
-            continue
-
-        img = cv2.imread(str(img_path))
-        if img is None: continue
+    for i, img_file in enumerate(samples):
+        # 4. Run Inference
+        # result is a list, we take the first element [0]
+        results = model.predict(source=str(img_file), conf=conf, save=False)[0]
         
-        h, w = img.shape[:2]
-        overlay = img.copy()
-
-        with open(txt_path, 'r') as f:
-            for line in f.readlines():
-                parts = line.split()
-                if not parts: continue
-                
-                # We ignore class_id and treat everything in this file as 'Hazard'
-                coords = np.array(parts[1:], dtype=np.float32).reshape(-1, 2)
-                
-                # Denormalize
-                points = (coords * [w, h]).astype(np.int32)
-                
-                # Draw the polygon in RED
-                cv2.fillPoly(overlay, [points], HAZARD_COLOR)
-                cv2.polylines(img, [points], True, HAZARD_COLOR, 2)
-
-        # Blend the red overlay (alpha 0.4 = 40% transparency)
-        alpha = 0.4
-        cv2.addWeighted(overlay, alpha, img, 1 - alpha, 0, img)
-
-        # Add a "Hazard Warning" text label on the image
-        cv2.putText(img, "DANGER: HAZARD ZONE", (30, 50), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
-
-        cv2.imshow(f"Hazard Visualization: {img_path.name}", img)
-        print(f"Showing {img_path.name}. Press any key for next...")
-        cv2.waitKey(0) 
+        # 5. Use the built-in plot() method
+        # This handles the mask overlay, labels, and boxes automatically
+        annotated_frame = results.plot(
+            conf=True, 
+            line_width=2, 
+            font_size=1,
+            labels=True
+        )
+        
+        # 6. Display using OpenCV
+        window_name = f"Sample {i+1}: {img_file.name}"
+        cv2.imshow(window_name, annotated_frame)
+        
+        # Wait for key press
+        key = cv2.waitKey(0) & 0xFF
+        cv2.destroyWindow(window_name)
+        
+        if key == ord('q'):
+            break
 
     cv2.destroyAllWindows()
+    print("Visualization complete.")
 
-# Run it
-visualize_hazardous_zones('data/railway_images', 'data/railway_labels', num_samples=3)
+if __name__ == "__main__":
+    # ADJUST THESE PATHS AS NEEDED
+    MODEL = 'runs/segment/runs/segment/railway_hazard/weights/best.pt'
+    VAL_IMAGES = 'data/railway_dataset/images/val'
+    
+    visualize_results(
+        model_path=MODEL,
+        image_dir=VAL_IMAGES,
+        num_samples=5,
+        conf=0.5  # Lowered confidence to help see early results
+    )
