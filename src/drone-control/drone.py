@@ -114,7 +114,10 @@ class DroneState:
                 self.is_navigating = False
                 self.nav_command_sent = False
                 if self.nav_task is not None:
-                    self.nav_task.cancel()
+                    try:
+                        self.nav_task.cancel()
+                    except (AttributeError, Exception) as e:
+                        print(f"[WARN] Could not cancel nav_task: {e}")
                     self.nav_task = None
 
     def get_mode(self) -> str:
@@ -140,7 +143,10 @@ class DroneState:
             self.is_navigating = False
             self.nav_command_sent = False
             if self.nav_task is not None:
-                self.nav_task.cancel()
+                try:
+                    self.nav_task.cancel()
+                except (AttributeError, Exception) as e:
+                    print(f"[WARN] Could not cancel nav_task: {e}")
                 self.nav_task = None
 
     def get_nav_snapshot(self) -> Tuple[Optional[Tuple[float, float, float]], bool, bool]:
@@ -159,7 +165,10 @@ class DroneState:
                 self.nav_command_sent = True
                 return True
             else:
-                task.cancel()
+                try:
+                    task.cancel()
+                except (AttributeError, Exception) as e:
+                    print(f"[WARN] Could not cancel task: {e}")
                 return False
 
     def get_idle_hover_sent(self) -> bool:
