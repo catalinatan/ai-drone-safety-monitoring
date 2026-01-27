@@ -22,3 +22,6 @@ pytest>=8.0.0
 
 # --- Deep Learning (Optional - Uncomment if needed) ---
 # ultralytics>=8.0.0  # For YOLOv8
+# --- Simulation & Control ---
+airsim>=1.8.1
+keyboard>=0.13.5
