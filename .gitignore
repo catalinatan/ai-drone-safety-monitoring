@@ -1,7 +1,7 @@
 # my settings
 env.py
 tmp/
-data/
+data/*
 .vscode/
 
 # Byte-compiled / optimized / DLL files
@@ -101,6 +101,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+*-venv/
 
 # Spyder project settings
 .spyderproject
