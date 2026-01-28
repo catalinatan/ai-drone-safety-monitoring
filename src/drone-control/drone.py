@@ -40,6 +40,7 @@ import cv2
 import numpy as np
 import keyboard
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import threading
@@ -78,6 +79,11 @@ class GotoRequest(BaseModel):
     y: float  # East (meters)
     z: Optional[float] = -10.0  # Down (meters, negative = above ground)
 
+class MoveRequest(BaseModel):
+    vx: float = 0.0  # North velocity (m/s)
+    vy: float = 0.0  # East velocity (m/s)
+    vz: float = 0.0  # Down velocity (m/s, negative = up)
+
 # ============================================================================
 # SHARED STATE (Thread-Safe)
 # ============================================================================
@@ -104,6 +110,7 @@ class DroneState:
         self.idle_hover_sent = False      # prevents issuing hover repeatedly when auto-mode has no target
         self.should_stop = False          # signals the control loop to land and exit
         self.current_frame = None         # latest camera frame (numpy array), served by /video_feed
+        self.api_velocity = (0.0, 0.0, 0.0)  # (vx, vy, vz) from /move API
 
     def set_mode(self, mode: str):
         """Switch mode. Switching to manual cancels any in-flight navigation."""
@@ -203,6 +210,16 @@ class DroneState:
         with self.lock:
             return self.home_position
 
+    def set_velocity(self, vx: float, vy: float, vz: float):
+        """Set velocity from API for manual control."""
+        with self.lock:
+            self.api_velocity = (vx, vy, vz)
+
+    def get_velocity(self) -> Tuple[float, float, float]:
+        """Get current API velocity. Velocity persists until UI sends new value."""
+        with self.lock:
+            return self.api_velocity
+
 # Global state instance
 drone_state = DroneState()
 
@@ -236,6 +253,15 @@ def check_safety(target_pos: Tuple[float, float, float]) -> Tuple[bool, str]:
 # ============================================================================
 
 app = FastAPI(title="Drone Control API")
+
+# Enable CORS for web UI
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.post("/mode")
 async def set_mode(request: ModeRequest):
@@ -310,6 +336,31 @@ async def get_status():
         "is_navigating": is_nav,
         "target_position": target
     }
+
+@app.post("/move")
+async def move_drone(request: MoveRequest):
+    """
+    Send velocity command for manual control (Manual mode only).
+    Velocities are in m/s using NED coordinates.
+    """
+    current_mode = drone_state.get_mode()
+
+    if current_mode != "manual":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot send move commands in {current_mode} mode. Switch to manual first."
+        )
+
+    # Clamp velocities for safety
+    max_horizontal = 5.0  # m/s
+    max_vertical = 3.0    # m/s
+    vx = max(-max_horizontal, min(max_horizontal, request.vx))
+    vy = max(-max_horizontal, min(max_horizontal, request.vy))
+    vz = max(-max_vertical, min(max_vertical, request.vz))
+
+    drone_state.set_velocity(vx, vy, vz)
+
+    return {"status": "success", "velocity": {"vx": vx, "vy": vy, "vz": vz}}
 
 def generate_frames():
     """Yields MJPEG frames for the /video_feed endpoint.
@@ -459,39 +510,46 @@ def drone_control_loop():
                         drone_state.mark_idle_hover_sent()
                     
             else:
-                # --- Manual mode: keyboard → velocity commands ---
-                # Each key maps to a fixed velocity (m/s) along one NED axis.
+                # --- Manual mode: API or keyboard → velocity commands ---
+                # Priority: API commands first, then local keyboard fallback.
                 # The short duration (0.1 s) means the drone stops quickly when
-                # the key is released, since the next loop iteration will send
-                # zero velocity.
+                # controls are released.
 
                 if keyboard.is_pressed('q'):
                     drone_state.request_stop()
                     break
 
-                # North / South (x-axis)
-                if keyboard.is_pressed('w'):
-                    vx = 3
-                elif keyboard.is_pressed('s'):
-                    vx = -3
-                else:
-                    vx = 0
+                # Check for API velocity commands first
+                api_vx, api_vy, api_vz = drone_state.get_velocity()
 
-                # East / West (y-axis)
-                if keyboard.is_pressed('d'):
-                    vy = 3
-                elif keyboard.is_pressed('a'):
-                    vy = -3
+                if api_vx != 0 or api_vy != 0 or api_vz != 0:
+                    # Use API velocity
+                    vx, vy, vz = api_vx, api_vy, api_vz
                 else:
-                    vy = 0
+                    # Fall back to local keyboard input
+                    # North / South (x-axis)
+                    if keyboard.is_pressed('w'):
+                        vx = 3
+                    elif keyboard.is_pressed('s'):
+                        vx = -3
+                    else:
+                        vx = 0
 
-                # Up / Down (z-axis, NED: negative = up)
-                if keyboard.is_pressed('z'):
-                    vz = -2
-                elif keyboard.is_pressed('x'):
-                    vz = 2
-                else:
-                    vz = 0
+                    # East / West (y-axis)
+                    if keyboard.is_pressed('d'):
+                        vy = 3
+                    elif keyboard.is_pressed('a'):
+                        vy = -3
+                    else:
+                        vy = 0
+
+                    # Up / Down (z-axis, NED: negative = up)
+                    if keyboard.is_pressed('z'):
+                        vz = -2
+                    elif keyboard.is_pressed('x'):
+                        vz = 2
+                    else:
+                        vz = 0
 
                 client.moveByVelocityAsync(
                     vx, vy, vz,
