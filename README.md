@@ -10,6 +10,7 @@ The drone control module (`src/drone-control/drone.py`) provides manual and auto
 2. **Python 3.10+** with dependencies installed:
 
 ```bash
+python -m pip install -U pip setuptools wheel
 pip install -r requirements.txt
 pip install fastapi uvicorn pyyaml requests
 ```
