@@ -1,5 +1,52 @@
 # AI Safety Monitoring
 
+A safety monitoring system with drone control capabilities, featuring a web-based control panel and AirSim simulation integration.
+
+## Quick Start
+
+```bash
+# Install Python dependencies
+pip install -r requirements.txt
+
+# Install UI dependencies
+cd src/ui && npm install
+
+# Run tests
+pytest
+```
+
+## Project Structure
+
+```
+ai-safety-monitoring/
+├── src/
+│   ├── drone-control/     # FastAPI backend + AirSim integration
+│   │   ├── drone.py       # Main control system
+│   │   └── config.yaml    # Safety & navigation parameters
+│   └── ui/                # React frontend
+│       └── src/
+│           └── components/
+│               ├── CommandPanel.tsx       # CCTV feed monitoring
+│               └── DroneControlPanel.tsx  # Drone flight controls
+├── requirements.txt       # Python dependencies
+└── README.md
+```
+
+## Running Tests
+
+```bash
+# Run all Python tests
+pytest
+
+# Run with verbose output
+pytest -v
+
+# Run specific test file
+pytest tests/test_example.py
+```
+
+---
+
 ## Drone Control System
 
 The drone control module (`src/drone-control/drone.py`) provides manual and automatic flight modes for a simulated drone via AirSim, exposed through a FastAPI server.
@@ -8,10 +55,10 @@ The drone control module (`src/drone-control/drone.py`) provides manual and auto
 
 1. **AirSim** running on your PC desktop with a simulation environment loaded (e.g., AirSim Neighbourhood, Blocks).
 2. **Python 3.10+** with dependencies installed:
+3. **Node.js 18+** for the web UI
 
 ```bash
 pip install -r requirements.txt
-pip install fastapi uvicorn pyyaml requests
 ```
 
 > Note: The `keyboard` library requires **administrator/root privileges** on Linux. On Windows, it works without elevation.
@@ -85,6 +132,7 @@ The FastAPI server exposes the following endpoints. Interactive docs are availab
 |--------|----------|-------------|
 | `POST` | `/mode` | Switch mode: `{"mode": "manual"}` or `{"mode": "automatic"}` |
 | `POST` | `/goto` | Fly to NED coordinates (automatic mode only): `{"x": float, "y": float, "z": float}` |
+| `POST` | `/move` | Send velocity command (manual mode only): `{"vx": float, "vy": float, "vz": float}` |
 | `POST` | `/return_home` | Return to takeoff position (automatic mode only) |
 | `GET` | `/status` | Current mode, navigation state, and target position |
 | `GET` | `/video_feed` | MJPEG camera stream from the drone |
@@ -106,6 +154,12 @@ curl -X POST http://localhost:8000/goto -H "Content-Type: application/json" -d '
 # Override back to manual
 curl -X POST http://localhost:8000/mode -H "Content-Type: application/json" -d '{"mode": "manual"}'
 
+# Send velocity command (manual mode) - move forward at 3 m/s
+curl -X POST http://localhost:8000/move -H "Content-Type: application/json" -d '{"vx": 3.0, "vy": 0, "vz": 0}'
+
+# Stop movement
+curl -X POST http://localhost:8000/move -H "Content-Type: application/json" -d '{"vx": 0, "vy": 0, "vz": 0}'
+
 # Return home
 curl -X POST http://localhost:8000/mode -H "Content-Type: application/json" -d '{"mode": "automatic"}'
 curl -X POST http://localhost:8000/return_home
@@ -120,7 +174,7 @@ curl -X POST http://localhost:8000/return_home
 │  drone_control_loop()                        │
 │  ├── Camera capture (both modes)             │
 │  ├── Automatic: dispatch nav / check distance│
-│  └── Manual: read keyboard / send velocity   │
+│  └── Manual: API velocity or keyboard input  │
 └──────────────────┬──────────────────────────-┘
                    │ reads/writes
             ┌──────┴──────┐
@@ -130,7 +184,62 @@ curl -X POST http://localhost:8000/return_home
 ┌──────────────────┴──────────────────────────-┐
 │              FastAPI Thread                   │
 │                                               │
-│  /mode, /goto, /return_home, /status          │
+│  /mode, /goto, /move, /return_home, /status   │
 │  /video_feed (MJPEG stream from DroneState)   │
 └───────────────────────────────────────────────┘
+                   │
+                   │ HTTP (CORS enabled)
+                   ▼
+┌───────────────────────────────────────────────┐
+│              Web UI (React)                   │
+│                                               │
+│  DroneControlPanel.tsx                        │
+│  ├── Video feed display                       │
+│  ├── Manual controls (WASD + ZX)              │
+│  ├── Mode toggle (Manual/Automatic)           │
+│  └── Return Home button                       │
+└───────────────────────────────────────────────┘
 ```
+
+---
+
+## Web UI
+
+The React-based web interface provides a visual control panel for drone operations.
+
+### Running the UI
+
+```bash
+# Terminal 1: Start the drone backend (requires AirSim running)
+python src/drone-control/drone.py
+
+# Terminal 2: Start the web UI
+cd src/ui
+npm install   # First time only
+npm run dev
+```
+
+Open http://localhost:5173 and navigate to **Drone Control**.
+
+### UI Features
+
+| Feature | Description |
+|---------|-------------|
+| **Video Feed** | Live MJPEG stream from drone camera |
+| **Connection Status** | Shows CONNECTED/DISCONNECTED state |
+| **Mode Toggle** | Switch between Manual and Automatic flight |
+| **Movement Controls** | WASD keys or on-screen buttons (Manual mode) |
+| **Altitude Controls** | Z/X keys or on-screen buttons (Manual mode) |
+| **Return Home** | One-click return to takeoff position |
+| **Deploy Equipment** | Placeholder for equipment deployment |
+
+### Keyboard Shortcuts (when UI is focused)
+
+| Key | Action |
+|-----|--------|
+| `W` | Move forward (North) |
+| `S` | Move backward (South) |
+| `A` | Move left (West) |
+| `D` | Move right (East) |
+| `Z` | Move up |
+| `X` | Move down |
