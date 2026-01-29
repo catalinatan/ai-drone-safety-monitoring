@@ -17,6 +17,7 @@ export interface Feed {
   location: string;
   imageSrc: string;
   zones: Zone[];
+  isLive?: boolean;
 }
 
 export interface NEDCoordinate {

@@ -48,12 +48,20 @@ export function FeedCard({ feed, onEdit, onExpand }: FeedCardProps) {
       </div>
 
       {/* Feed Image */}
-      <div className="relative aspect-video overflow-hidden">
-        <img
-          src={feed.imageSrc}
-          alt={`${feed.name} feed`}
-          className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
-        />
+      <div className="relative aspect-video overflow-hidden bg-gray-900">
+        {feed.isLive ? (
+          <img
+            src={feed.imageSrc}
+            alt={`${feed.name} feed`}
+            className="w-full h-full object-contain"
+          />
+        ) : (
+          <img
+            src={feed.imageSrc}
+            alt={`${feed.name} feed`}
+            className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+          />
+        )}
 
         {/* Zone count indicator */}
         {feed.zones.length > 0 && (

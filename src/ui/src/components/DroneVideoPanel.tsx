@@ -35,12 +35,20 @@ export default function DroneVideoPanel({ mode, batteryLevel, isConnected }: Dro
           </div>
         </div>
 
-        <div className="aspect-video bg-gray-700 flex items-center justify-center text-gray-500">
-          <div className="text-center">
-            <div className="text-6xl mb-3">🚁</div>
-            <div className="text-xl font-medium">Drone Camera</div>
-            <div className="text-sm text-gray-600 mt-2">Live Aerial Feed</div>
-          </div>
+        <div className="aspect-video bg-gray-900 relative flex items-center justify-center overflow-hidden">
+          {isConnected ? (
+            <img 
+              src="http://localhost:8000/video_feed" 
+              alt="Drone Camera Feed" 
+              className="w-full h-full object-contain"
+            />
+          ) : (
+             <div className="text-center text-gray-500">
+              <div className="text-6xl mb-3">🚁</div>
+              <div className="text-xl font-medium">Drone Offline</div>
+              <div className="text-sm text-gray-600 mt-2">Waiting for connection...</div>
+            </div>
+          )}
         </div>
       </div>
     </div>

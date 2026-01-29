@@ -79,11 +79,6 @@ class GotoRequest(BaseModel):
     y: float  # East (meters)
     z: Optional[float] = -10.0  # Down (meters, negative = above ground)
 
-class MoveRequest(BaseModel):
-    vx: float = 0.0  # North velocity (m/s)
-    vy: float = 0.0  # East velocity (m/s)
-    vz: float = 0.0  # Down velocity (m/s, negative = up)
-
 # ============================================================================
 # SHARED STATE (Thread-Safe)
 # ============================================================================
@@ -110,7 +105,6 @@ class DroneState:
         self.idle_hover_sent = False      # prevents issuing hover repeatedly when auto-mode has no target
         self.should_stop = False          # signals the control loop to land and exit
         self.current_frame = None         # latest camera frame (numpy array), served by /video_feed
-        self.api_velocity = (0.0, 0.0, 0.0)  # (vx, vy, vz) from /move API
 
     def set_mode(self, mode: str):
         """Switch mode. Switching to manual cancels any in-flight navigation."""
@@ -210,16 +204,6 @@ class DroneState:
         with self.lock:
             return self.home_position
 
-    def set_velocity(self, vx: float, vy: float, vz: float):
-        """Set velocity from API for manual control."""
-        with self.lock:
-            self.api_velocity = (vx, vy, vz)
-
-    def get_velocity(self) -> Tuple[float, float, float]:
-        """Get current API velocity. Velocity persists until UI sends new value."""
-        with self.lock:
-            return self.api_velocity
-
 # Global state instance
 drone_state = DroneState()
 
@@ -254,10 +238,10 @@ def check_safety(target_pos: Tuple[float, float, float]) -> Tuple[bool, str]:
 
 app = FastAPI(title="Drone Control API")
 
-# Enable CORS for web UI
+# Enable CORS for frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=["*"],  # Allow all origins for development
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -337,31 +321,6 @@ async def get_status():
         "target_position": target
     }
 
-@app.post("/move")
-async def move_drone(request: MoveRequest):
-    """
-    Send velocity command for manual control (Manual mode only).
-    Velocities are in m/s using NED coordinates.
-    """
-    current_mode = drone_state.get_mode()
-
-    if current_mode != "manual":
-        raise HTTPException(
-            status_code=400,
-            detail=f"Cannot send move commands in {current_mode} mode. Switch to manual first."
-        )
-
-    # Clamp velocities for safety
-    max_horizontal = 5.0  # m/s
-    max_vertical = 3.0    # m/s
-    vx = max(-max_horizontal, min(max_horizontal, request.vx))
-    vy = max(-max_horizontal, min(max_horizontal, request.vy))
-    vz = max(-max_vertical, min(max_vertical, request.vz))
-
-    drone_state.set_velocity(vx, vy, vz)
-
-    return {"status": "success", "velocity": {"vx": vx, "vy": vy, "vz": vz}}
-
 def generate_frames():
     """Yields MJPEG frames for the /video_feed endpoint.
 
@@ -437,12 +396,12 @@ def drone_control_loop():
             # ----- Camera feed (runs every iteration regardless of mode) -----
             # Request an uncompressed RGB scene image from camera "0"
             response = client.simGetImages([airsim.ImageRequest("0", airsim.ImageType.Scene, False, False)])[0]
-            if response:
+            if response and len(response.image_data_uint8) > 0:
                 img1d = np.frombuffer(response.image_data_uint8, dtype=np.uint8)
                 img = img1d.reshape(response.height, response.width, 3)
                 img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
 
-                if img is not None:
+                if img is not None and img.size > 0:
                     # Publish a clean copy for the /video_feed MJPEG stream
                     drone_state.set_frame(img.copy())
 
@@ -451,6 +410,8 @@ def drone_control_loop():
                     cv2.putText(img, mode_text, (10, 30),
                                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
                     cv2.imshow("Drone Camera", img)
+            else:
+                print("[WARNING] No image data received from AirSim camera")
 
             cv2.waitKey(1)  # required by OpenCV to refresh the window
             
@@ -510,46 +471,39 @@ def drone_control_loop():
                         drone_state.mark_idle_hover_sent()
                     
             else:
-                # --- Manual mode: API or keyboard → velocity commands ---
-                # Priority: API commands first, then local keyboard fallback.
+                # --- Manual mode: keyboard → velocity commands ---
+                # Each key maps to a fixed velocity (m/s) along one NED axis.
                 # The short duration (0.1 s) means the drone stops quickly when
-                # controls are released.
+                # the key is released, since the next loop iteration will send
+                # zero velocity.
 
                 if keyboard.is_pressed('q'):
                     drone_state.request_stop()
                     break
 
-                # Check for API velocity commands first
-                api_vx, api_vy, api_vz = drone_state.get_velocity()
-
-                if api_vx != 0 or api_vy != 0 or api_vz != 0:
-                    # Use API velocity
-                    vx, vy, vz = api_vx, api_vy, api_vz
+                # North / South (x-axis)
+                if keyboard.is_pressed('w'):
+                    vx = 3
+                elif keyboard.is_pressed('s'):
+                    vx = -3
                 else:
-                    # Fall back to local keyboard input
-                    # North / South (x-axis)
-                    if keyboard.is_pressed('w'):
-                        vx = 3
-                    elif keyboard.is_pressed('s'):
-                        vx = -3
-                    else:
-                        vx = 0
+                    vx = 0
 
-                    # East / West (y-axis)
-                    if keyboard.is_pressed('d'):
-                        vy = 3
-                    elif keyboard.is_pressed('a'):
-                        vy = -3
-                    else:
-                        vy = 0
+                # East / West (y-axis)
+                if keyboard.is_pressed('d'):
+                    vy = 3
+                elif keyboard.is_pressed('a'):
+                    vy = -3
+                else:
+                    vy = 0
 
-                    # Up / Down (z-axis, NED: negative = up)
-                    if keyboard.is_pressed('z'):
-                        vz = -2
-                    elif keyboard.is_pressed('x'):
-                        vz = 2
-                    else:
-                        vz = 0
+                # Up / Down (z-axis, NED: negative = up)
+                if keyboard.is_pressed('z'):
+                    vz = -2
+                elif keyboard.is_pressed('x'):
+                    vz = 2
+                else:
+                    vz = 0
 
                 client.moveByVelocityAsync(
                     vx, vy, vz,

@@ -1,5 +1,5 @@
 # --- Core Image Processing ---
-opencv-python-headless>=4.9.0.80
+opencv-python>=4.9.0.80
 numpy>=1.26.4,<2
 setuptools>=69.0.0
 Pillow==10.3.0
