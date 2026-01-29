@@ -394,8 +394,8 @@ def drone_control_loop():
     try:
         while not drone_state.get_should_stop():
             # ----- Camera feed (runs every iteration regardless of mode) -----
-            # Request an uncompressed RGB scene image from camera "0"
-            response = client.simGetImages([airsim.ImageRequest("0", airsim.ImageType.Scene, False, False)])[0]
+            # Request an uncompressed RGB scene image from camera "3"
+            response = client.simGetImages([airsim.ImageRequest("3", airsim.ImageType.Scene, False, False)])[0]
             if response and len(response.image_data_uint8) > 0:
                 img1d = np.frombuffer(response.image_data_uint8, dtype=np.uint8)
                 img = img1d.reshape(response.height, response.width, 3)

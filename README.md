@@ -1,18 +1,33 @@
 # AI Safety Monitoring
 
-A safety monitoring system with drone control capabilities, featuring a web-based control panel and AirSim simulation integration.
+A dual-drone safety monitoring system with real-time CCTV feeds and flight control capabilities, featuring a web-based Command Center and AirSim simulation integration.
 
 ## Quick Start
 
 ```bash
-# Install Python dependencies
+# 1. Install Python dependencies
+python -m pip install -U pip setuptools wheel
 pip install -r requirements.txt
 
-# Install UI dependencies
-cd src/ui && npm install
+# 2. Configure AirSim (see AirSim Setup section below)
+# Edit C:\Users\<YourUsername>\Documents\AirSim\settings.json
 
-# Run tests
-pytest
+# 3. Start AirSim simulation environment (Unreal Engine)
+
+# 4. Start the observer camera backend (Terminal 1)
+cd src/drone-control
+python observer.py
+
+# 5. Start the drone control backend (Terminal 2)
+cd src/drone-control
+python drone.py
+
+# 6. Start the web UI (Terminal 3)
+cd src/ui
+npm install  # First time only
+npm run dev
+
+# 7. Open http://localhost:5173
 ```
 
 ## Project Structure
@@ -20,16 +35,58 @@ pytest
 ```
 ai-safety-monitoring/
 ├── src/
-│   ├── drone-control/     # FastAPI backend + AirSim integration
-│   │   ├── drone.py       # Main control system
-│   │   └── config.yaml    # Safety & navigation parameters
-│   └── ui/                # React frontend
+│   ├── drone-control/       # FastAPI backends + AirSim integration
+│   │   ├── drone.py         # Controllable drone system (port 8000)
+│   │   ├── observer.py      # Static CCTV observer feed (port 8001)
+│   │   └── config.yaml      # Safety & navigation parameters
+│   └── ui/                  # React frontend (port 5173)
 │       └── src/
 │           └── components/
-│               ├── CommandPanel.tsx       # CCTV feed monitoring
-│               └── DroneControlPanel.tsx  # Drone flight controls
-├── requirements.txt       # Python dependencies
+│               ├── CommandPanel.tsx       # CCTV feed grid (2x2)
+│               ├── DroneControlPanel.tsx  # Drone flight controls
+│               └── FeedCard.tsx           # Individual camera tile
+├── requirements.txt         # Python dependencies (opencv-python, airsim, fastapi)
 └── README.md
+```
+
+## System Architecture
+
+This system uses **two drones** in AirSim:
+- **Drone1**: Controllable search drone with manual/automatic flight modes
+- **Drone2**: Static observer drone providing fixed CCTV-style aerial coverage
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    AirSim Simulation                         │
+│  ┌──────────────┐              ┌──────────────┐            │
+│  │   Drone1     │              │   Drone2     │            │
+│  │ (Controllable)│             │ (Observer)    │            │
+│  │  Camera 0    │              │  Camera 0    │            │
+│  └──────┬───────┘              └──────┬───────┘            │
+└─────────┼──────────────────────────────┼──────────────────-┘
+          │                              │
+          │ AirSim API                   │ AirSim API
+          ▼                              ▼
+┌─────────────────────┐        ┌─────────────────────┐
+│   drone.py          │        │   observer.py       │
+│   Port 8000         │        │   Port 8001         │
+│                     │        │                     │
+│ - Manual controls   │        │ - Camera capture    │
+│ - Auto navigation   │        │ - MJPEG stream      │
+│ - Camera feed       │        │ - Hovering at 3m    │
+└──────────┬──────────┘        └──────────┬──────────┘
+           │                              │
+           │ HTTP/CORS                    │ HTTP/CORS
+           └──────────────┬───────────────┘
+                          ▼
+              ┌───────────────────────┐
+              │   React Web UI        │
+              │   Port 5173           │
+              │                       │
+              │ - Command Center      │
+              │   (CCTV Grid)         │
+              │ - Drone Control Panel │
+              └───────────────────────┘
 ```
 
 ## Running Tests
@@ -47,21 +104,93 @@ pytest tests/test_example.py
 
 ---
 
-## Drone Control System
-
-The drone control module (`src/drone-control/drone.py`) provides manual and automatic flight modes for a simulated drone via AirSim, exposed through a FastAPI server.
+## AirSim Setup
 
 ### Prerequisites
 
-1. **AirSim** running on your PC desktop with a simulation environment loaded (e.g., AirSim Neighbourhood, Blocks).
-2. **Python 3.10+** with dependencies installed:
+1. **AirSim** installed and running with an Unreal Engine environment (e.g., Neighbourhood, Blocks, LandscapeMountains)
+2. **Python 3.10+** with dependencies installed
 3. **Node.js 18+** for the web UI
 
 ```bash
 pip install -r requirements.txt
 ```
 
-> Note: The `keyboard` library requires **administrator/root privileges** on Linux. On Windows, it works without elevation.
+### AirSim Configuration
+
+Create or edit `C:\Users\<YourUsername>\Documents\AirSim\settings.json`:
+
+```j1. Observer Camera System (`observer.py`)
+
+Provides a static CCTV-style feed from Drone2 positioned above the scene.
+
+**Running:**
+```bash
+cd src/drone-control
+python observer.py
+```
+
+**What it does:**
+- Connects to Drone2 in AirSim
+- Enables API control and arms the drone
+- Takes off to 3m altitude and holds position
+- Streams live MJPEG video from camera 0 on port 8001
+
+**Endpoints:**
+- `GET /status` - Observer camera status
+- `GET /video_feed/0` - MJPEG video stream (camera 0)
+
+### 2. Controllable Drone System (`drone.py`)
+
+Provides manual and automatic flight modes for Drone1.
+
+**Configuration:**
+
+Edit `src/drone-control/config.yaml` before running:
+
+```yaml
+safety:
+  max_altitude: 50       # Maximum flight altitude in meters
+  geofence_radius: 200   # Maximum distance from origin in meters
+
+navigation:
+  speed: 5.0             # Automatic navigation speed in m/s
+  position_tolerance: 1.0 # Distance in meters to consider "arrived"
+```
+
+**Running:**      "Y": -9.76,
+      "Z": -2,
+      "Pitch": -50,
+      "Yaw": 90,
+      "AllowAPIAlways": true,
+      "AutoFlyOnSpawn": false
+    }
+  },
+  "CameraDefaults": {
+    "CaptureSettings": [
+      {
+        "ImageType": 0,
+        "Width": 1280,
+        "Height": 720,
+        "FOV_Degrees": 90
+      }
+    ]
+  }
+}
+```
+
+**Important**: 
+- **Drone2** is positioned ~20m away from Drone1 as a static observer
+- **Pitch: -50** tilts Drone2's body downward for ground coverage
+- **Yaw: 90** rotates Drone2 90° clockwise for side viewing angle
+- **AllowAPIAlways: true** enables programmatic hovering
+- You must **restart AirSim** after editing settings.json
+
+---
+
+## Drone Control System
+
+The system consists of two backend servers that control separate drones in AirSim.
 
 ### Configuration
 
@@ -145,41 +274,28 @@ After the demo completes, you can test the API directly:
 # Check status
 curl http://localhost:8000/status
 
-# Switch to automatic
-curl -X POST http://localhost:8000/mode -H "Content-Type: application/json" -d '{"mode": "automatic"}'
+#  Troubleshooting
 
-# Fly to a NED coordinate (11m north, 8m east, 10m above ground)
-curl -X POST http://localhost:8000/goto -H "Content-Type: application/json" -d '{"x": 11.0, "y": 8.0, "z": -10.0}'
+### Observer camera shows static/frozen image
+- Check terminal output for frame capture errors
+- Verify AirSim is running and Drone2 is visible
+- Restart observer.py: it should print "Captured X frames" periodically
+- Confirm settings.json has correct Drone2 configuration
 
-# Override back to manual
-curl -X POST http://localhost:8000/mode -H "Content-Type: application/json" -d '{"mode": "manual"}'
+### Drone2 not appearing at correct position/angle
+- Verify settings.json has Pitch and Yaw values set
+- **Restart AirSim** completely (close Unreal Engine window)
+- Settings are only read on AirSim startup, not during runtime
 
-# Send velocity command (manual mode) - move forward at 3 m/s
-curl -X POST http://localhost:8000/move -H "Content-Type: application/json" -d '{"vx": 3.0, "vy": 0, "vz": 0}'
+### CORS errors in browser console
+- Verify both drone.py and observer.py are running
+- Check that CORSMiddleware is enabled in both files
+- Clear browser cache and reload
 
-# Stop movement
-curl -X POST http://localhost:8000/move -H "Content-Type: application/json" -d '{"vx": 0, "vy": 0, "vz": 0}'
-
-# Return home
-curl -X POST http://localhost:8000/mode -H "Content-Type: application/json" -d '{"mode": "automatic"}'
-curl -X POST http://localhost:8000/return_home
-```
-
-### Architecture
-
-```
-┌─────────────────────────────────────────────┐
-│                  Main Thread                 │
-│                                              │
-│  drone_control_loop()                        │
-│  ├── Camera capture (both modes)             │
-│  ├── Automatic: dispatch nav / check distance│
-│  └── Manual: API velocity or keyboard input  │
-└──────────────────┬──────────────────────────-┘
-                   │ reads/writes
-            ┌──────┴──────┐
-            │ DroneState  │  (thread-safe, lock-protected)
-            └──────┬──────┘
+### Camera shows propellers/incorrect view
+- Adjust Pitch angle in settings.json (range: -90 to 90)
+- Negative pitch tilts the drone forward/down
+- Restart AirSim after editing settings.json         └──────┬──────┘
                    │ reads/writes
 ┌──────────────────┴──────────────────────────-┐
 │              FastAPI Thread                   │
@@ -190,19 +306,36 @@ curl -X POST http://localhost:8000/return_home
                    │
                    │ HTTP (CORS enabled)
                    ▼
-┌───────────────────────────────────────────────┐
-│              Web UI (React)                   │
-│                                               │
-│  DroneControlPanel.tsx                        │
-│  ├── Video feed display                       │
-│  ├── Manual controls (WASD + ZX)              │
-│  ├── Mode toggle (Manual/Automatic)           │
-│  └── Return Home button                       │
-└───────────────────────────────────────────────┘
+┌───────────────────observer camera
+cd src/drone-control
+python observer.py
+
+# Terminal 2: Start drone control
+cd src/drone-control
+python drone.py
+
+# Terminal 3: Start web UI
+cd src/ui
+npm install   # First time only
+npm run dev
 ```
+#### Command Center (Main View)
+| Feature | Description |
+|---------|-------------|
+| **CCTV Grid** | 2x2 grid of camera feeds |
+| **Observer Feed** | Live aerial view from static Drone2 (top-left) |
+| **Feed Controls** | Expand/zoom individual feeds |
+| **Annotations** | Edit polygon zones on feeds |
 
----
-
+#### Drone Control Panel
+| Feature | Description |
+|---------|-------------|
+| **Video Feed** | Live MJPEG stream from Drone1 camera |
+| **Connection Status** | Shows CONNECTED/DISCONNECTED state |
+| **Mode Toggle** | Switch between Manual and Automatic flight |
+| **Movement Controls** | WASD keys or on-screen buttons (Manual mode) |
+| **Altitude Controls** | Z/X keys or on-screen buttons (Manual mode) |
+| **Return Home** | One-click return to takeoff position
 ## Web UI
 
 The React-based web interface provides a visual control panel for drone operations.
