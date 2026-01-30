@@ -50,13 +50,11 @@ import human_detection.config as config
 
 # --- CONFIGURATION ---
 # AirSim camera and drone names
-CCTV_NAME = "0"                 # Camera 1 - spectator camera (separate from drone)
-CCTV_VEHICLE = ""               # Empty = not attached to any vehicle
-DRONE_NAME = "Drone1"           # Drone vehicle name (for deployment)
+CCTV_NAME = "0"                      # Camera on Drone2 ("0" = default front camera)
+CCTV_VEHICLE = "Drone2"              # Static drone acting as CCTV
 
 # Drone deployment settings
 SAFE_Z_ALTITUDE = -10.0  # meters above ground (NED: negative = up)
-NAVIGATION_SPEED = 5.0   # m/s
 
 # Camera height (adjust based on your environment)
 CCTV_HEIGHT = 15.0  # meters above ground/water
@@ -311,7 +309,8 @@ def run_security_system():
     frame_count = 0
     drone_is_navigating = False  # Track if drone is currently on a mission
     target_position = None       # Store the target position
-    drone_armed = False          # Track if drone is armed and ready
+    threat_cleared_logged = False  # Prevent spam logging when threat cleared but drone navigating
+    last_status_check_time = 0  # Rate limit drone status API calls
 
     try:
         while True:
@@ -364,20 +363,6 @@ def run_security_system():
                     log_event("Initiating drone deployment...", "DEPLOY")
 
                     try:
-                        # --- ARM AND TAKEOFF (if first deployment) ---
-                        if not drone_armed:
-                            log_event("Arming drone...", "DEPLOY")
-                            try:
-                                client.armDisarm(True, vehicle_name=DRONE_NAME)
-                                log_event("Taking off...", "DEPLOY")
-                                client.takeoffAsync(vehicle_name=DRONE_NAME).join()
-                                drone_armed = True
-                                log_event("Drone is now airborne and ready", "SUCCESS")
-                                time.sleep(1)  # Brief pause after takeoff
-                            except Exception as e:
-                                log_event(f"Failed to arm/takeoff drone: {e}", "ERROR")
-                                continue
-
                         # --- RUN DEPTH INFERENCE ---
                         log_event("Running depth estimation...", "DEPLOY")
                         ai_depth_map = depth_estimation_utils.run_lite_mono_inference(depth_model, img_rgb)
@@ -428,7 +413,8 @@ def run_security_system():
                             last_deployment_time = current_time
                             drone_is_navigating = True
                             target_position = (target_pos.x_val, target_pos.y_val, SAFE_Z_ALTITUDE)
-                            log_event(f"Drone locked onto target. Will complete mission even if person leaves zone.", "INFO")
+                            threat_cleared_logged = False  # Reset for new mission
+                            log_event("Drone locked onto target. Will complete mission even if person leaves zone.", "INFO")
                         else:
                             log_event("Failed to send drone command", "ERROR")
 
@@ -442,12 +428,16 @@ def run_security_system():
                 if alarm_active and not drone_is_navigating:
                     log_event("Threat cleared - zone safe", "INFO")
                     alarm_active = False
-                elif alarm_active and drone_is_navigating:
+                    threat_cleared_logged = False
+                elif alarm_active and drone_is_navigating and not threat_cleared_logged:
                     log_event("Threat cleared but drone still completing mission...", "INFO")
+                    threat_cleared_logged = True
 
             # --- CHECK DRONE STATUS ---
-            # Check if drone has reached target
-            if drone_is_navigating and target_position:
+            # Check if drone has reached target (rate limited to once per second)
+            current_time = time.time()
+            if drone_is_navigating and target_position and (current_time - last_status_check_time) >= 1.0:
+                last_status_check_time = current_time
                 try:
                     status = drone_api.get_status()
                     if status and not status.get("is_navigating", True):
@@ -479,7 +469,7 @@ def run_security_system():
                     )
 
                     # Add camera label at top
-                    camera_label = f"CCTV CAMERA: {CCTV_NAME} (External View)"
+                    camera_label = f"CCTV: {CCTV_VEHICLE} Camera {CCTV_NAME}"
                     cv2.putText(
                         display_frame, camera_label, (10, 30),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2
@@ -500,7 +490,7 @@ def run_security_system():
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2
                         )
 
-                    cv2.imshow("CCTV Security Monitor - External Camera View", display_frame)
+                    cv2.imshow(f"CCTV Security Monitor - {CCTV_VEHICLE}", display_frame)
 
                     # Check for quit key
                     if cv2.waitKey(1) & 0xFF == ord('q'):

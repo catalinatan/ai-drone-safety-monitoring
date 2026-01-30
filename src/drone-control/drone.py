@@ -536,80 +536,6 @@ def run_api_server():
 # MAIN ENTRY POINT
 # ============================================================================
 
-def run_demo_sequence():
-    """
-    Demo thread that exercises automatic and manual modes via the API.
-    Runs after the server and control loop have started.
-    """
-    import requests
-
-    BASE_URL = "http://localhost:8000"
-
-    def api(method, path, **kwargs):
-        resp = getattr(requests, method)(f"{BASE_URL}{path}", **kwargs)
-        print(f"[DEMO] {method.upper()} {path} -> {resp.status_code}: {resp.json()}")
-        return resp
-
-    # Wait for server + control loop to be ready
-    time.sleep(4)
-
-    print("\n" + "="*60)
-    print("[DEMO] Starting demo sequence")
-    print("="*60)
-
-    # 1. Check initial status (should be manual)
-    api("get", "/status")
-
-    # 2. Switch to automatic mode
-    print("\n[DEMO] --- Switching to AUTOMATIC mode ---")
-    api("post", "/mode", json={"mode": "automatic"})
-
-    # 3. Send a goto command (small offset from origin so it stays in geofence)
-    print("\n[DEMO] --- Sending goto command ---")
-    api("post", "/goto", json={
-        "x": 11.0,   # 11m north
-        "y": 8.0,    # 8m east
-        "z": -10.0   # 10m above ground (NED)
-    })
-
-    # 4. Monitor status while navigating
-    for _ in range(10):
-        time.sleep(2)
-        resp = api("get", "/status")
-        if not resp.json().get("is_navigating"):
-            print("[DEMO] Navigation complete")
-            break
-
-    # 5. Override: switch back to manual mid-flight (or after arrival)
-    print("\n[DEMO] --- Overriding to MANUAL mode ---")
-    api("post", "/mode", json={"mode": "manual"})
-    api("get", "/status")
-
-    # 6. Let manual mode run for a few seconds (keyboard controls active)
-    print("\n[DEMO] Manual mode active — use w/a/s/d/z/x to fly, q to quit")
-    time.sleep(5)
-
-    # 7. Switch back to automatic and return home
-    print("\n[DEMO] --- Switching to AUTOMATIC and returning home ---")
-    api("post", "/mode", json={"mode": "automatic"})
-    api("post", "/return_home")
-
-    for _ in range(10):
-        time.sleep(2)
-        resp = api("get", "/status")
-        if not resp.json().get("is_navigating"):
-            print("[DEMO] Returned home")
-            break
-
-    # 8. Back to manual for continued operation
-    print("\n[DEMO] --- Back to MANUAL mode ---")
-    api("post", "/mode", json={"mode": "manual"})
-
-    print("\n" + "="*60)
-    print("[DEMO] Demo sequence complete. Manual control active.")
-    print("="*60 + "\n")
-
-
 if __name__ == "__main__":
     print("="*60)
     print("DRONE CONTROL SYSTEM - Manual & Automatic Modes")
@@ -621,10 +547,6 @@ if __name__ == "__main__":
     # Thread 1 — REST API (daemon: exits when main thread exits)
     api_thread = threading.Thread(target=run_api_server, daemon=True)
     api_thread.start()
-
-    # Thread 2 — automated demo that hits the API endpoints (daemon)
-    demo_thread = threading.Thread(target=run_demo_sequence, daemon=True)
-    demo_thread.start()
 
     # Give uvicorn time to bind port 8000 before the control loop starts
     time.sleep(2)
