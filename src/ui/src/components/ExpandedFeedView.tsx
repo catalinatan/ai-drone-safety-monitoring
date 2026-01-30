@@ -1,7 +1,11 @@
-import { useState } from 'react';
-import { ArrowLeft, Pencil, Navigation, Loader2, CheckCircle, AlertCircle } from 'lucide-react';
+import { useState, useEffect, useCallback } from 'react';
+import { ArrowLeft, Pencil, Navigation, Loader2, CheckCircle, AlertCircle, AlertTriangle, Users } from 'lucide-react';
 import { PolygonCanvas } from './PolygonCanvas';
-import type { Feed, NEDCoordinate } from '../types';
+import type { Feed, NEDCoordinate, DetectionStatus } from '../types';
+import { BACKEND_URL } from '../data/mockFeeds';
+
+// Drone control API URL
+const DRONE_API_URL = 'http://localhost:8000';
 
 interface ExpandedFeedViewProps {
   feed: Feed;
@@ -12,45 +16,80 @@ interface ExpandedFeedViewProps {
 type DeployStatus = 'idle' | 'deploying' | 'success' | 'error';
 
 export function ExpandedFeedView({ feed, onBack, onEdit }: ExpandedFeedViewProps) {
-  const [coordinates, setCoordinates] = useState<NEDCoordinate>({
-    x: 0,
-    y: 0,
-    z: -10,
-  });
+  const [detectionStatus, setDetectionStatus] = useState<DetectionStatus | null>(null);
   const [deployStatus, setDeployStatus] = useState<DeployStatus>('idle');
   const [errorMessage, setErrorMessage] = useState<string>('');
 
-  const handleDeploy = async () => {
+  // Poll for detection status
+  useEffect(() => {
+    if (!feed.isLive) return;
+
+    const fetchStatus = async () => {
+      try {
+        const response = await fetch(`${BACKEND_URL}/feeds/${feed.id}/status`);
+        if (response.ok) {
+          const status = await response.json();
+          setDetectionStatus(status);
+        }
+      } catch (error) {
+        console.error('[STATUS] Failed to fetch detection status:', error);
+      }
+    };
+
+    // Fetch immediately
+    fetchStatus();
+
+    // Then poll every second
+    const interval = setInterval(fetchStatus, 1000);
+
+    return () => clearInterval(interval);
+  }, [feed.id, feed.isLive]);
+
+  // Get target coordinates from detection status (only for RED zone alarms)
+  const targetCoordinates: NEDCoordinate | null = detectionStatus?.target_coordinates || null;
+
+  const handleDeploy = useCallback(async () => {
+    if (!targetCoordinates) {
+      setErrorMessage('No target coordinates available');
+      setDeployStatus('error');
+      setTimeout(() => setDeployStatus('idle'), 3000);
+      return;
+    }
+
     setDeployStatus('deploying');
     setErrorMessage('');
 
     try {
-      // Stubbed API call - will integrate with drone.py later
-      // POST to http://localhost:8000/goto
-      // First need to set mode to automatic, then send goto
-      console.log('[DEPLOY] Sending drone to:', coordinates);
+      console.log('[DEPLOY] Setting drone to automatic mode...');
 
-      // Simulate API call
-      await new Promise((resolve) => setTimeout(resolve, 1500));
+      // Step 1: Set mode to automatic
+      const modeResponse = await fetch(`${DRONE_API_URL}/mode`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'automatic' }),
+      });
 
-      // Uncomment when integrating:
-      // await fetch('http://localhost:8000/mode', {
-      //   method: 'POST',
-      //   headers: { 'Content-Type': 'application/json' },
-      //   body: JSON.stringify({ mode: 'automatic' }),
-      // });
-      //
-      // const response = await fetch('http://localhost:8000/goto', {
-      //   method: 'POST',
-      //   headers: { 'Content-Type': 'application/json' },
-      //   body: JSON.stringify({
-      //     x: coordinates.x,
-      //     y: coordinates.y,
-      //     z: coordinates.z,
-      //   }),
-      // });
-      //
-      // if (!response.ok) throw new Error('Failed to deploy drone');
+      if (!modeResponse.ok) {
+        throw new Error('Failed to set automatic mode');
+      }
+
+      console.log('[DEPLOY] Sending drone to:', targetCoordinates);
+
+      // Step 2: Send goto command
+      const gotoResponse = await fetch(`${DRONE_API_URL}/goto`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          x: targetCoordinates.x,
+          y: targetCoordinates.y,
+          z: targetCoordinates.z,
+        }),
+      });
+
+      if (!gotoResponse.ok) {
+        const errorData = await gotoResponse.json().catch(() => ({}));
+        throw new Error(errorData.detail || 'Failed to deploy drone');
+      }
 
       setDeployStatus('success');
       setTimeout(() => setDeployStatus('idle'), 3000);
@@ -60,11 +99,35 @@ export function ExpandedFeedView({ feed, onBack, onEdit }: ExpandedFeedViewProps
       setErrorMessage(error instanceof Error ? error.message : 'Deployment failed');
       setTimeout(() => setDeployStatus('idle'), 5000);
     }
+  }, [targetCoordinates]);
+
+  const isAlarmActive = detectionStatus?.alarm_active || false;
+  const isCautionActive = detectionStatus?.caution_active || false;
+  const hasTarget = targetCoordinates !== null;
+
+  // Determine colors based on state (Alarm takes priority over Caution)
+  const getBorderColor = () => {
+    if (isAlarmActive) return 'border-[var(--zone-red)]';
+    if (isCautionActive) return 'border-[var(--zone-yellow)]';
+    return 'border-[var(--border-dim)]';
   };
 
-  const handleInputChange = (axis: keyof NEDCoordinate, value: string) => {
-    const numValue = parseFloat(value) || 0;
-    setCoordinates((prev) => ({ ...prev, [axis]: numValue }));
+  const getStatusText = () => {
+    if (isAlarmActive) return 'ALARM ACTIVE';
+    if (isCautionActive) return 'CAUTION';
+    return 'LIVE FEED';
+  };
+
+  const getStatusColor = () => {
+    if (isAlarmActive) return 'text-[var(--zone-red)]';
+    if (isCautionActive) return 'text-[var(--zone-yellow)]';
+    return 'text-[var(--text-secondary)]';
+  };
+
+  const getIndicatorColor = () => {
+    if (isAlarmActive) return 'bg-[var(--zone-red)]';
+    if (isCautionActive) return 'bg-[var(--zone-yellow)]';
+    return 'bg-[var(--accent-cyan)]';
   };
 
   return (
@@ -88,19 +151,49 @@ export function ExpandedFeedView({ feed, onBack, onEdit }: ExpandedFeedViewProps
           </div>
         </div>
 
-        <button
-          onClick={onEdit}
-          className="flex items-center gap-2 px-3 py-2 rounded border border-[var(--border-dim)] bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:text-[var(--accent-cyan)] hover:border-[var(--accent-cyan-dim)] transition-all"
-        >
-          <Pencil size={14} />
-          <span className="text-sm font-medium">Edit Zones</span>
-        </button>
+        <div className="flex items-center gap-4">
+          {/* Detection Stats */}
+          {detectionStatus && (
+            <div className="flex items-center gap-4 px-3 py-1.5 rounded border border-[var(--border-dim)] bg-[var(--bg-tertiary)]">
+              <div className="flex items-center gap-2">
+                <Users size={14} className="text-[var(--accent-cyan)]" />
+                <span className="text-xs font-mono text-[var(--text-secondary)]">
+                  {detectionStatus.people_count}
+                </span>
+              </div>
+              {isAlarmActive && (
+                <div className="flex items-center gap-2">
+                  <AlertTriangle size={14} className="text-[var(--zone-red)]" />
+                  <span className="text-xs font-mono text-[var(--zone-red)]">
+                    {detectionStatus.danger_count} IN RED ZONE
+                  </span>
+                </div>
+              )}
+              {isCautionActive && !isAlarmActive && (
+                <div className="flex items-center gap-2">
+                  <AlertCircle size={14} className="text-[var(--zone-yellow)]" />
+                  <span className="text-xs font-mono text-[var(--zone-yellow)]">
+                    {detectionStatus.caution_count} IN YELLOW ZONE
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
+
+          <button
+            onClick={onEdit}
+            className="flex items-center gap-2 px-3 py-2 rounded border border-[var(--border-dim)] bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:text-[var(--accent-cyan)] hover:border-[var(--accent-cyan-dim)] transition-all"
+          >
+            <Pencil size={14} />
+            <span className="text-sm font-medium">Edit Zones</span>
+          </button>
+        </div>
       </header>
 
       {/* Main Content */}
       <main className="flex-1 p-6 flex flex-col gap-4 overflow-hidden">
         {/* Feed Canvas - Takes most of the space */}
-        <div className="flex-1 relative rounded-lg overflow-hidden border border-[var(--border-dim)] corner-brackets min-h-0">
+        <div className={`flex-1 relative rounded-lg overflow-hidden border ${getBorderColor()} corner-brackets min-h-0`}>
           <div className="absolute inset-0 flex items-center justify-center bg-[var(--bg-card)]">
             <PolygonCanvas
               imageSrc={feed.imageSrc}
@@ -111,11 +204,21 @@ export function ExpandedFeedView({ feed, onBack, onEdit }: ExpandedFeedViewProps
             />
           </div>
 
+          {/* Alarm overlay (RED) */}
+          {isAlarmActive && (
+            <div className="absolute inset-0 pointer-events-none border-4 border-[var(--zone-red)] animate-pulse" />
+          )}
+
+          {/* Caution overlay (YELLOW) */}
+          {isCautionActive && !isAlarmActive && (
+            <div className="absolute inset-0 pointer-events-none border-4 border-[var(--zone-yellow)]" />
+          )}
+
           {/* Live indicator */}
-          <div className="absolute top-3 left-3 flex items-center gap-2 px-2 py-1 rounded bg-[var(--bg-primary)]/80 border border-[var(--border-dim)]">
-            <div className="w-2 h-2 rounded-full bg-[var(--zone-red)] status-live" />
-            <span className="text-[10px] font-mono text-[var(--text-secondary)] tracking-wider">
-              LIVE FEED
+          <div className={`absolute top-3 left-3 flex items-center gap-2 px-2 py-1 rounded bg-[var(--bg-primary)]/80 border ${getBorderColor()}`}>
+            <div className={`w-2 h-2 rounded-full ${getIndicatorColor()} ${isAlarmActive ? 'animate-pulse' : 'status-live'}`} />
+            <span className={`text-[10px] font-mono tracking-wider ${getStatusColor()}`}>
+              {getStatusText()}
             </span>
           </div>
 
@@ -128,59 +231,89 @@ export function ExpandedFeedView({ feed, onBack, onEdit }: ExpandedFeedViewProps
               </span>
             </div>
           )}
+
+          {/* Target indicator (only for RED zone alarms) */}
+          {hasTarget && (
+            <div className="absolute bottom-3 left-3 px-3 py-2 rounded bg-[var(--bg-primary)]/90 border border-[var(--zone-red)]">
+              <div className="flex items-center gap-2">
+                <Navigation size={14} className="text-[var(--zone-red)]" />
+                <span className="text-xs font-mono text-[var(--zone-red)]">
+                  TARGET: ({targetCoordinates!.x.toFixed(1)}, {targetCoordinates!.y.toFixed(1)}, {targetCoordinates!.z.toFixed(1)})
+                </span>
+              </div>
+            </div>
+          )}
+
+          {/* Caution notice (yellow zone - no drone) */}
+          {isCautionActive && !isAlarmActive && (
+            <div className="absolute bottom-3 left-3 px-3 py-2 rounded bg-[var(--bg-primary)]/90 border border-[var(--zone-yellow)]">
+              <div className="flex items-center gap-2">
+                <AlertCircle size={14} className="text-[var(--zone-yellow)]" />
+                <span className="text-xs font-mono text-[var(--zone-yellow)]">
+                  CAUTION ZONE - Monitor only (no drone deployment)
+                </span>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Deploy Control Bar */}
-        <div className="flex items-center justify-between px-4 py-3 rounded-lg border border-[var(--border-dim)] bg-[var(--bg-secondary)]">
+        <div className={`flex items-center justify-between px-4 py-3 rounded-lg border ${getBorderColor()} bg-[var(--bg-secondary)]`}>
           <div className="flex items-center gap-6">
             <div className="flex items-center gap-2">
-              <Navigation size={18} className="text-[var(--accent-cyan)]" />
+              <Navigation size={18} className={isAlarmActive ? 'text-[var(--zone-red)]' : isCautionActive ? 'text-[var(--zone-yellow)]' : 'text-[var(--accent-cyan)]'} />
               <span className="text-sm font-semibold text-[var(--text-secondary)] uppercase tracking-wider">
                 Deploy Drone
               </span>
             </div>
 
-            {/* Coordinate Inputs */}
+            {/* Auto-calculated Coordinates Display (only for RED zone alarms) */}
             <div className="flex items-center gap-4">
-              <div className="flex items-center gap-2">
-                <label className="text-xs font-mono text-[var(--text-muted)]">X (North)</label>
-                <input
-                  type="number"
-                  value={coordinates.x}
-                  onChange={(e) => handleInputChange('x', e.target.value)}
-                  className="input-tactical w-20 text-center"
-                  step="0.5"
-                />
-                <span className="text-xs text-[var(--text-muted)]">m</span>
-              </div>
+              {hasTarget ? (
+                <>
+                  <div className="flex items-center gap-2">
+                    <label className="text-xs font-mono text-[var(--text-muted)]">X (North)</label>
+                    <div className="px-2 py-1 rounded bg-[var(--bg-tertiary)] border border-[var(--border-dim)]">
+                      <span className="text-sm font-mono text-[var(--zone-red)]">
+                        {targetCoordinates!.x.toFixed(2)}
+                      </span>
+                    </div>
+                    <span className="text-xs text-[var(--text-muted)]">m</span>
+                  </div>
 
-              <div className="flex items-center gap-2">
-                <label className="text-xs font-mono text-[var(--text-muted)]">Y (East)</label>
-                <input
-                  type="number"
-                  value={coordinates.y}
-                  onChange={(e) => handleInputChange('y', e.target.value)}
-                  className="input-tactical w-20 text-center"
-                  step="0.5"
-                />
-                <span className="text-xs text-[var(--text-muted)]">m</span>
-              </div>
+                  <div className="flex items-center gap-2">
+                    <label className="text-xs font-mono text-[var(--text-muted)]">Y (East)</label>
+                    <div className="px-2 py-1 rounded bg-[var(--bg-tertiary)] border border-[var(--border-dim)]">
+                      <span className="text-sm font-mono text-[var(--zone-red)]">
+                        {targetCoordinates!.y.toFixed(2)}
+                      </span>
+                    </div>
+                    <span className="text-xs text-[var(--text-muted)]">m</span>
+                  </div>
 
-              <div className="flex items-center gap-2">
-                <label className="text-xs font-mono text-[var(--text-muted)]">Z (Down)</label>
-                <input
-                  type="number"
-                  value={coordinates.z}
-                  onChange={(e) => handleInputChange('z', e.target.value)}
-                  className="input-tactical w-20 text-center"
-                  step="0.5"
-                />
-                <span className="text-xs text-[var(--text-muted)]">m</span>
-              </div>
+                  <div className="flex items-center gap-2">
+                    <label className="text-xs font-mono text-[var(--text-muted)]">Z (Alt)</label>
+                    <div className="px-2 py-1 rounded bg-[var(--bg-tertiary)] border border-[var(--border-dim)]">
+                      <span className="text-sm font-mono text-[var(--zone-red)]">
+                        {targetCoordinates!.z.toFixed(2)}
+                      </span>
+                    </div>
+                    <span className="text-xs text-[var(--text-muted)]">m</span>
+                  </div>
+                </>
+              ) : isCautionActive ? (
+                <span className="text-xs font-mono text-[var(--zone-yellow)]">
+                  Yellow zone - drone deployment not available
+                </span>
+              ) : (
+                <span className="text-xs font-mono text-[var(--text-muted)]">
+                  {isAlarmActive ? 'Calculating target...' : 'No target detected'}
+                </span>
+              )}
             </div>
 
             <span className="text-[10px] font-mono text-[var(--text-muted)]">
-              NED: negative Z = above ground
+              {hasTarget ? 'Auto-calculated from RED zone detection' : 'Deploy only for RED zones'}
             </span>
           </div>
 
@@ -202,8 +335,10 @@ export function ExpandedFeedView({ feed, onBack, onEdit }: ExpandedFeedViewProps
 
             <button
               onClick={handleDeploy}
-              disabled={deployStatus === 'deploying'}
-              className="btn-tactical-filled flex items-center gap-2"
+              disabled={deployStatus === 'deploying' || !hasTarget}
+              className={`btn-tactical-filled flex items-center gap-2 ${
+                !hasTarget ? 'opacity-50 cursor-not-allowed' : ''
+              } ${isAlarmActive && hasTarget ? 'bg-[var(--zone-red)] border-[var(--zone-red)] animate-pulse' : ''}`}
             >
               {deployStatus === 'deploying' ? (
                 <>

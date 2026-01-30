@@ -1,10 +1,10 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { AppNav, type AppView } from './components/AppNav';
 import { CommandPanel } from './components/CommandPanel';
 import { EditFeedPage } from './components/EditFeedPage';
 import { ExpandedFeedView } from './components/ExpandedFeedView';
 import { DroneControlPanel } from './components/DroneControlPanel';
-import { mockFeeds } from './data/mockFeeds';
+import { mockFeeds, BACKEND_URL } from './data/mockFeeds';
 import type { Feed, ViewState, Zone } from './types';
 
 function App() {
@@ -14,6 +14,33 @@ function App() {
   // Command Center specific state
   const [feeds, setFeeds] = useState<Feed[]>(mockFeeds);
   const [commandViewState, setCommandViewState] = useState<ViewState>({ type: 'command' });
+
+  // Load saved zones from backend on startup
+  useEffect(() => {
+    const loadZones = async () => {
+      try {
+        const response = await fetch(`${BACKEND_URL}/feeds`);
+        if (response.ok) {
+          const data = await response.json();
+          // Merge backend zones with local feed config
+          setFeeds((prevFeeds) =>
+            prevFeeds.map((feed) => {
+              const backendFeed = data.feeds?.find((f: Feed) => f.id === feed.id);
+              if (backendFeed && backendFeed.zones?.length > 0) {
+                console.log(`[INIT] Loaded ${backendFeed.zones.length} zones for ${feed.id}`);
+                return { ...feed, zones: backendFeed.zones };
+              }
+              return feed;
+            })
+          );
+        }
+      } catch (error) {
+        console.log('[INIT] Backend not available, using default feeds');
+      }
+    };
+
+    loadZones();
+  }, []);
 
   const getCurrentFeed = useCallback(
     (feedId: string): Feed | undefined => {
@@ -34,14 +61,28 @@ function App() {
     setCommandViewState({ type: 'command' });
   }, []);
 
-  const handleSaveZones = useCallback((feedId: string, zones: Zone[]) => {
+  const handleSaveZones = useCallback(async (feedId: string, zones: Zone[]) => {
+    // Update local state
     setFeeds((prev) =>
       prev.map((feed) => (feed.id === feedId ? { ...feed, zones } : feed))
     );
 
-    // TODO: Integrate with backend API
-    // POST /feeds/{feedId}/zones with zones data
-    console.log(`[API STUB] Saving zones for ${feedId}:`, zones);
+    // Save to backend API
+    try {
+      const response = await fetch(`${BACKEND_URL}/feeds/${feedId}/zones`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ zones }),
+      });
+
+      if (response.ok) {
+        console.log(`[API] Zones saved for ${feedId}:`, zones.length, 'zones');
+      } else {
+        console.error(`[API] Failed to save zones for ${feedId}`);
+      }
+    } catch (error) {
+      console.error(`[API] Error saving zones for ${feedId}:`, error);
+    }
 
     setCommandViewState({ type: 'command' });
   }, []);

@@ -11,6 +11,23 @@ export interface Zone {
   points: Point[];
 }
 
+export interface NEDCoordinate {
+  x: number; // North (meters)
+  y: number; // East (meters)
+  z: number; // Down (meters, negative = above ground)
+}
+
+export interface DetectionStatus {
+  feed_id: string;
+  alarm_active: boolean;      // RED zone intrusion - drone deployment
+  caution_active: boolean;    // YELLOW zone intrusion - highlight only
+  people_count: number;
+  danger_count: number;       // People in RED zones
+  caution_count: number;      // People in YELLOW zones
+  target_coordinates: NEDCoordinate | null;
+  last_detection_time: string | null;
+}
+
 export interface Feed {
   id: string;
   name: string;
@@ -18,12 +35,7 @@ export interface Feed {
   imageSrc: string;
   zones: Zone[];
   isLive?: boolean;
-}
-
-export interface NEDCoordinate {
-  x: number; // North (meters)
-  y: number; // East (meters)
-  z: number; // Down (meters, negative = above ground)
+  status?: DetectionStatus;
 }
 
 export type ViewState =
