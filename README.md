@@ -113,6 +113,7 @@ pytest tests/test_example.py
 3. **Node.js 18+** for the web UI
 
 ```bash
+python -m pip install -U pip setuptools wheel
 pip install -r requirements.txt
 ```
 
