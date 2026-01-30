@@ -51,6 +51,9 @@ Clone the repository and install dependencies:
 git clone <repository-url>
 cd ai-safety-monitoring
 
+# Install numpy first (required by airsim's build process)
+pip install numpy
+
 # Python dependencies (creates editable install)
 pip install -e ".[dev]"
 

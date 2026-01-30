@@ -18,6 +18,9 @@ WORKDIR /app
 # Upgrade pip and install build tools first (required for some packages)
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 
+# Install numpy first - required by airsim's broken setup.py which imports it during build
+RUN pip install --no-cache-dir numpy
+
 # Copy dependency files first for better layer caching
 COPY pyproject.toml .
 COPY src/ src/
