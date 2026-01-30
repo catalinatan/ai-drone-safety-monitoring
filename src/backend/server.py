@@ -29,83 +29,41 @@ import airsim
 import cv2
 import json
 import numpy as np
+import os
+import requests
 import threading
 import time
-import os
-import sys
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
-import requests
 import uvicorn
 
-# --- PATH SETUP ---
-current_file_path = os.path.abspath(__file__)
-backend_dir = os.path.dirname(current_file_path)
-src_dir = os.path.dirname(backend_dir)
+# --- CENTRALIZED CONFIGURATION ---
+from src.backend.config import (
+    FEED_CONFIG, FEED_METADATA,
+    ENCODER_PATH, DECODER_PATH,
+    CCTV_HEIGHT, SAFE_Z_ALTITUDE,
+    DETECTION_INTERVAL, ALARM_COOLDOWN,
+    DRONE_API_URL, DRONE_API_TIMEOUT,
+    DATA_DIR, ZONES_FILE,
+    BACKEND_PORT,
+)
 
-if src_dir not in sys.path:
-    sys.path.insert(0, src_dir)
-
-cctv_monitoring_dir = os.path.join(src_dir, "cctv_monitoring")
-if cctv_monitoring_dir not in sys.path:
-    sys.path.insert(0, cctv_monitoring_dir)
-
-# --- IMPORTS ---
+# --- DETECTION MODULES (optional — graceful fallback) ---
 try:
-    import depth_estimation_utils
-    import coord_utils
-    from human_detection.detector import HumanDetector
-    from human_detection.check_overlap import check_danger_zone_overlap
-    import human_detection.config as config
+    from src.cctv_monitoring import depth_estimation_utils, coord_utils
+    from src.human_detection.detector import HumanDetector
+    from src.human_detection.check_overlap import check_danger_zone_overlap
+    import src.human_detection.config as config
     DETECTION_AVAILABLE = True
 except ImportError as e:
     print(f"[WARNING] Detection modules not available: {e}")
     DETECTION_AVAILABLE = False
-
-# ============================================================================
-# CONFIGURATION
-# ============================================================================
-
-# AirSim camera configuration
-# Format: {feed_id: (camera_name, vehicle_name)}
-FEED_CONFIG = {
-    "cctv-1": ("0", "Drone2"),      # Front camera on Drone2 (static CCTV)
-    "drone-cam": ("3", ""),          # Drone1's camera (empty string = default vehicle)
-}
-
-# Feed metadata
-FEED_METADATA = {
-    "cctv-1": {"name": "CCTV CAM 1", "location": "Aerial Overview"},
-    "drone-cam": {"name": "DRONE CAM", "location": "Mobile Unit"},
-}
-
-# Depth model paths
-LITE_MONO_DIR = os.path.join(cctv_monitoring_dir, "lite_mono_weights", "lite-mono-small_640x192")
-ENCODER_PATH = os.path.join(LITE_MONO_DIR, "encoder.pth")
-DECODER_PATH = os.path.join(LITE_MONO_DIR, "depth.pth")
-
-# Camera height for coordinate calculation
-CCTV_HEIGHT = 15.0  # meters
-
-# Safe altitude for drone deployment
-SAFE_Z_ALTITUDE = -10.0  # NED: negative = above ground
-
-# Detection settings
-DETECTION_INTERVAL = 0.1  # seconds between detection runs
-
-# Drone API settings
-DRONE_API_URL = "http://localhost:8000"
-DRONE_API_TIMEOUT = 5  # seconds
-ALARM_COOLDOWN = 5.0   # seconds between drone deployments
-
-# Persistence settings
-DATA_DIR = os.path.join(backend_dir, "data")
-ZONES_FILE = os.path.join(DATA_DIR, "zones.json")
 
 # ============================================================================
 # PERSISTENCE FUNCTIONS
@@ -480,7 +438,7 @@ class FeedManager:
                 feed.yellow_zone_mask = None
 
         # Persist to file
-        zones_data = [z.dict() for z in zones]
+        zones_data = [z.model_dump() for z in zones]
         save_zones_to_file(feed_id, zones_data)
 
     def run_detection(self, feed_id: str) -> DetectionStatus:
@@ -663,7 +621,26 @@ def detection_loop():
 # FASTAPI APPLICATION
 # ============================================================================
 
-app = FastAPI(title="CCTV Monitoring Backend", version="1.0.0")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan context manager for startup and shutdown events."""
+    # Startup
+    if feed_manager.initialize():
+        feed_manager.running = True
+        detection_thread = threading.Thread(target=detection_loop, daemon=True)
+        detection_thread.start()
+        print("[SERVER] Backend server started successfully")
+    else:
+        print("[SERVER] Backend started in limited mode (no AirSim connection)")
+
+    yield
+
+    # Shutdown
+    feed_manager.running = False
+    print("[SERVER] Backend server shutting down")
+
+
+app = FastAPI(title="CCTV Monitoring Backend", version="1.0.0", lifespan=lifespan)
 
 # Enable CORS for the React frontend
 app.add_middleware(
@@ -673,23 +650,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-@app.on_event("startup")
-async def startup_event():
-    """Initialize on startup."""
-    if feed_manager.initialize():
-        feed_manager.running = True
-        detection_thread = threading.Thread(target=detection_loop, daemon=True)
-        detection_thread.start()
-        print("[SERVER] Backend server started successfully")
-    else:
-        print("[SERVER] Backend started in limited mode (no AirSim connection)")
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Cleanup on shutdown."""
-    feed_manager.running = False
-    print("[SERVER] Backend server shutting down")
 
 @app.get("/health")
 async def health_check():
@@ -714,10 +674,10 @@ async def list_feeds():
             "id": feed_id,
             "name": feed.name,
             "location": feed.location,
-            "imageSrc": f"http://localhost:8001/video_feed/{feed_id}",
-            "zones": [z.dict() for z in feed.zones],
+            "imageSrc": f"http://localhost:{BACKEND_PORT}/video_feed/{feed_id}",
+            "zones": [z.model_dump() for z in feed.zones],
             "isLive": True,
-            "status": status.dict()
+            "status": status.model_dump()
         })
     return {"feeds": feeds}
 
@@ -800,7 +760,7 @@ async def get_feed_status(feed_id: str):
         raise HTTPException(status_code=404, detail=f"Feed {feed_id} not found")
 
     feed = feed_manager.feeds[feed_id]
-    return feed_manager._get_status(feed).dict()
+    return feed_manager._get_status(feed).model_dump()
 
 @app.post("/feeds/{feed_id}/zones")
 async def update_zones(feed_id: str, request: ZonesUpdateRequest):
@@ -829,12 +789,12 @@ if __name__ == "__main__":
     print("=" * 60)
     print("CCTV MONITORING BACKEND SERVER")
     print("=" * 60)
-    print("Starting on http://localhost:8001")
-    print("API Docs: http://localhost:8001/docs")
+    print(f"Starting on http://localhost:{BACKEND_PORT}")
+    print(f"API Docs: http://localhost:{BACKEND_PORT}/docs")
     print("Press Ctrl+C to stop")
     print("=" * 60)
 
     # Ensure Ctrl+C kills the process on Windows
     signal.signal(signal.SIGINT, lambda *_: os._exit(0))
 
-    uvicorn.run(app, host="0.0.0.0", port=8001, log_level="info")
+    uvicorn.run(app, host="0.0.0.0", port=BACKEND_PORT, log_level="info")

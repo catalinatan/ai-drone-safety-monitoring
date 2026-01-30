@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
-from human_detection import config
-from human_detection.detector import HumanDetector
+from src.human_detection import config
+from src.human_detection.detector import HumanDetector
 
 
 # --- FUNCTION 1: THE LOGIC ---
