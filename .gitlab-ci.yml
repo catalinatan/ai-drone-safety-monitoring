@@ -1,17 +1,128 @@
-# This is a test GitLab CI/CD configuration file to check Python code and build a Docker image.
+# GitLab CI/CD Pipeline for AI Safety Monitoring
+#
+# Stages:
+#   1. lint    - Code quality checks (ruff)
+#   2. test    - Unit and integration tests (pytest)
+#   3. build   - Docker image build and push
+
 stages:
+  - lint
   - test
   - build
 
-test_project:
-  stage: test
-  image: python:3.12-slim
-  script:
-    - apt-get update && apt-get install -y libgl1 libglib2.0-0
-    - pip install -r requirements.txt
-    - python -m compileall .
+variables:
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.pip-cache"
+  PYTHON_VERSION: "3.11"
 
-build_docker_image:
+# Reusable Python setup
+.python-setup: &python-setup
+  image: python:${PYTHON_VERSION}-slim
+  before_script:
+    - apt-get update && apt-get install -y --no-install-recommends
+        libgl1
+        libglib2.0-0
+        git
+    - pip install --upgrade pip
+    - pip install -e ".[dev]"
+  cache:
+    key: "${CI_JOB_NAME}-${PYTHON_VERSION}"
+    paths:
+      - .pip-cache/
+      - .venv/
+
+# ------------------------------------------------------------------------------
+# LINT STAGE
+# ------------------------------------------------------------------------------
+
+lint:
+  stage: lint
+  <<: *python-setup
+  script:
+    - echo "Running ruff linter..."
+    - ruff check src/ --output-format=gitlab > ruff-report.json || true
+    - ruff check src/
+  artifacts:
+    reports:
+      codequality: ruff-report.json
+    when: always
+  allow_failure: false
+
+lint:format:
+  stage: lint
+  <<: *python-setup
+  script:
+    - echo "Checking code formatting..."
+    - ruff format --check src/
+  allow_failure: true
+
+# ------------------------------------------------------------------------------
+# TEST STAGE
+# ------------------------------------------------------------------------------
+
+test:unit:
+  stage: test
+  <<: *python-setup
+  script:
+    - echo "Running unit tests..."
+    - pytest tests/ -v -m "not integration" --tb=short
+        --junitxml=junit-report.xml
+        --cov=src
+        --cov-report=xml:coverage.xml
+        --cov-report=term-missing
+  coverage: '/TOTAL.*\s+(\d+%)/'
+  artifacts:
+    reports:
+      junit: junit-report.xml
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage.xml
+    when: always
+    expire_in: 1 week
+
+test:integration:
+  stage: test
+  <<: *python-setup
+  script:
+    - echo "Running integration tests..."
+    - pytest tests/ -v -m "integration" --tb=short
+        --junitxml=junit-integration.xml
+  artifacts:
+    reports:
+      junit: junit-integration.xml
+    when: always
+    expire_in: 1 week
+
+test:all:
+  stage: test
+  <<: *python-setup
+  script:
+    - echo "Running full test suite..."
+    - pytest tests/ -v --tb=short
+        --junitxml=junit-all.xml
+        --cov=src
+        --cov-report=xml:coverage.xml
+        --cov-report=html:htmlcov
+        --cov-fail-under=50
+  coverage: '/TOTAL.*\s+(\d+%)/'
+  artifacts:
+    reports:
+      junit: junit-all.xml
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage.xml
+    paths:
+      - htmlcov/
+    when: always
+    expire_in: 1 week
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+# ------------------------------------------------------------------------------
+# BUILD STAGE
+# ------------------------------------------------------------------------------
+
+build:docker:
   stage: build
   image: docker:28
   services:
@@ -19,22 +130,28 @@ build_docker_image:
       alias: docker
   variables:
     DOCKER_TLS_CERTDIR: "/certs"
-    IMAGE_NAME: "$CI_REGISTRY/$CI_PROJECT_PATH"
+    IMAGE_NAME: "$CI_REGISTRY_IMAGE"
     IMAGE_TAG: "$CI_COMMIT_SHA"
   before_script:
-    - echo "$REGISTRY_PASSWORD" | docker login "$CI_REGISTRY" -u "$REGISTRY_USER" --password-stdin
+    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
   script:
-    - test -n "$IMAGE_NAME"
-    - test -n "$CI_REGISTRY"
+    - echo "Building Docker image..."
     - docker pull "$IMAGE_NAME:latest" || true
     - docker build
         --cache-from "$IMAGE_NAME:latest"
-        -t "$IMAGE_NAME:$IMAGE_TAG" .
+        --tag "$IMAGE_NAME:$IMAGE_TAG"
+        --tag "$IMAGE_NAME:$CI_COMMIT_REF_SLUG"
+        .
     - docker push "$IMAGE_NAME:$IMAGE_TAG"
+    - docker push "$IMAGE_NAME:$CI_COMMIT_REF_SLUG"
     - |
-        if [ "$CI_COMMIT_BRANCH" = "$CI_DEFAULT_BRANCH" ]; then
-          docker tag "$IMAGE_NAME:$IMAGE_TAG" "$IMAGE_NAME:latest"
-          docker push "$IMAGE_NAME:latest"
-        fi
+      if [ "$CI_COMMIT_BRANCH" = "$CI_DEFAULT_BRANCH" ]; then
+        docker tag "$IMAGE_NAME:$IMAGE_TAG" "$IMAGE_NAME:latest"
+        docker push "$IMAGE_NAME:latest"
+      fi
   rules:
     - if: $CI_COMMIT_BRANCH
+      when: on_success
+  needs:
+    - job: lint
+    - job: test:unit
