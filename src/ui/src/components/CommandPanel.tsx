@@ -39,7 +39,7 @@ export function CommandPanel({ feeds, onEditFeed, onExpandFeed }: CommandPanelPr
           <div className="flex items-center gap-2 px-3 py-1.5 rounded border border-[var(--border-dim)] bg-[var(--bg-tertiary)]">
             <span className="text-xs text-[var(--text-muted)]">FEEDS:</span>
             <span className="text-sm font-mono text-[var(--accent-cyan)]">
-              {feeds.length}/4
+              {feeds.filter(f => f.isLive).length}/4
             </span>
           </div>
         </div>

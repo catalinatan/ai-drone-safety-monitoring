@@ -350,15 +350,16 @@ export function DroneControlPanel() {
         </button>
       </header>
 
-      {/* Video Feed - Centered */}
-      <main className="flex-1 flex items-center justify-center p-20">
-        <div className="relative w-full max-w-5xl aspect-video rounded-lg overflow-hidden border-2 border-[var(--border-dim)] corner-brackets">
+      {/* Dual Video Feeds - Side by Side (Equal Size) */}
+      <main className="flex-1 flex items-center justify-center p-20 gap-6">
+        {/* Down Camera (Camera 0) - Ground surveillance */}
+        <div className="relative flex-1 max-w-2xl aspect-video rounded-lg overflow-hidden border-2 border-[var(--border-dim)] corner-brackets">
           {/* Video Feed */}
           {isConnected ? (
             <img
               ref={videoRef}
-              src={`${DRONE_API_BASE}/video_feed`}
-              alt="Drone Camera Feed"
+              src={`${DRONE_API_BASE}/video_feed/down`}
+              alt="Drone Down Camera"
               className="w-full h-full object-cover"
             />
           ) : (
@@ -380,13 +381,59 @@ export function DroneControlPanel() {
             <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-8 h-8 border border-[var(--accent-cyan)]/50 rounded-full" />
           </div>
 
-          {/* Mode indicator on video */}
+          {/* Camera label */}
           <div className="absolute top-4 left-4 flex items-center gap-2 px-2 py-1 rounded bg-[var(--bg-primary)]/80 border border-[var(--border-dim)]">
             <div
               className={`w-2 h-2 rounded-full ${isAutomatic ? 'bg-[var(--zone-yellow)]' : 'bg-[var(--zone-green)]'} status-live`}
             />
             <span className="text-[10px] font-mono text-[var(--text-secondary)] tracking-wider">
-              {isAutomatic ? 'AUTO' : 'MANUAL'}
+              FORWARD CAM
+            </span>
+          </div>
+
+          {/* Timestamp */}
+          <div className="absolute bottom-4 right-4 px-2 py-1 rounded bg-[var(--bg-primary)]/80 border border-[var(--border-dim)]">
+            <span className="text-[10px] font-mono text-[var(--text-muted)] tracking-wider">
+              {new Date().toLocaleTimeString('en-US', { hour12: false })} UTC
+            </span>
+          </div>
+        </div>
+
+        {/* Forward Camera (Camera 3) - Navigation view */}
+        <div className="relative flex-1 max-w-2xl aspect-video rounded-lg overflow-hidden border-2 border-[var(--border-dim)] corner-brackets">
+          {/* Video Feed */}
+          {isConnected ? (
+            <img
+              src={`${DRONE_API_BASE}/video_feed/forward`}
+              alt="Drone Forward Camera"
+              className="w-full h-full object-cover"
+            />
+          ) : (
+            <div className="w-full h-full bg-[var(--bg-card)] flex flex-col items-center justify-center gap-4">
+              <AlertTriangle size={48} className="text-[var(--zone-yellow)]" />
+              <span className="text-lg font-mono text-[var(--text-secondary)]">NO VIDEO SIGNAL</span>
+              <span className="text-sm text-[var(--text-muted)]">Waiting for drone connection...</span>
+            </div>
+          )}
+
+          {/* Scanline overlay */}
+          <div className="absolute inset-0 scanlines pointer-events-none" />
+
+          {/* Crosshair overlay */}
+          <div className="absolute inset-0 pointer-events-none">
+            <div className="absolute top-1/2 left-0 right-0 h-px bg-[var(--accent-cyan)]/20" />
+            <div className="absolute left-1/2 top-0 bottom-0 w-px bg-[var(--accent-cyan)]/20" />
+            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-16 h-16 border border-[var(--accent-cyan)]/30 rounded-full" />
+            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-8 h-8 border border-[var(--accent-cyan)]/50 rounded-full" />
+          </div>
+
+          {/* Camera label */}
+          <div className="absolute top-4 left-4 flex items-center gap-2 px-2 py-1 rounded bg-[var(--bg-primary)]/80 border border-[var(--border-dim)]">
+            <div
+              className={`w-2 h-2 rounded-full ${isConnected ? 'bg-[var(--zone-green)]' : 'bg-[var(--zone-red)]'} status-live`}
+            />
+            <span className="text-[10px] font-mono text-[var(--text-secondary)] tracking-wider">
+              DOWN CAM
             </span>
           </div>
 

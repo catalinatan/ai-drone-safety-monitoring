@@ -15,13 +15,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
+# Upgrade pip and install build tools first (required for some packages)
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel
+
 # Copy dependency files first for better layer caching
 COPY pyproject.toml .
 COPY src/ src/
 
 # Install Python dependencies (production only, no dev dependencies)
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -e .
+RUN pip install --no-cache-dir -e .
 
 # Copy remaining application files
 COPY main.py .

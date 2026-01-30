@@ -33,7 +33,7 @@ Key capabilities:
 The backend runs three concurrent threads:
 
 - **Frame capture thread** (30 FPS) - Grabs frames from AirSim cameras
-- **Detection thread** (10 FPS) - Runs YOLO segmentation + depth estimation
+- **Detection thread** (30 FPS) - Runs YOLO segmentation + depth estimation
 - **MJPEG streaming** (30 FPS) - Serves video feeds to the UI
 
 ## Requirements
@@ -110,7 +110,7 @@ All settings are centralized in `src/backend/config.py` and can be overridden vi
 | `FRONTEND_PORT` | 5173 | React UI port |
 | `FRAME_CAPTURE_FPS` | 30 | Frame capture rate from AirSim |
 | `STREAM_FPS` | 30 | MJPEG streaming rate to UI |
-| `DETECTION_FPS` | 10 | Human detection rate |
+| `DETECTION_FPS` | 30 | Human detection rate |
 | `ALARM_COOLDOWN` | 5.0 | Seconds between drone deployments |
 | `CCTV_HEIGHT` | 15.0 | Camera height in meters |
 | `SAFE_Z_ALTITUDE` | -10.0 | Drone flight altitude (NED, negative = above ground) |

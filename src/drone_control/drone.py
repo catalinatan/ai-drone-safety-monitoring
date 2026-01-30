@@ -104,7 +104,9 @@ class DroneState:
         self.nav_task = None              # AirSim future returned by moveToPositionAsync
         self.idle_hover_sent = False      # prevents issuing hover repeatedly when auto-mode has no target
         self.should_stop = False          # signals the control loop to land and exit
-        self.current_frame = None         # latest camera frame (numpy array), served by /video_feed
+        # Camera frames for dual-view streaming
+        self.frame_forward = None         # Camera 3: forward-looking view
+        self.frame_down = None            # Camera 0: downward-looking view
 
     def set_mode(self, mode: str):
         """Switch mode. Switching to manual cancels any in-flight navigation."""
@@ -188,13 +190,25 @@ class DroneState:
         with self.lock:
             return self.should_stop
 
-    def set_frame(self, frame):
+    def set_frame_forward(self, frame):
+        """Set the forward-looking camera frame (camera 3)."""
         with self.lock:
-            self.current_frame = frame
+            self.frame_forward = frame
 
-    def get_frame(self):
+    def get_frame_forward(self):
+        """Get the forward-looking camera frame (camera 3)."""
         with self.lock:
-            return self.current_frame
+            return self.frame_forward
+
+    def set_frame_down(self, frame):
+        """Set the downward-looking camera frame (camera 0)."""
+        with self.lock:
+            self.frame_down = frame
+
+    def get_frame_down(self):
+        """Get the downward-looking camera frame (camera 0)."""
+        with self.lock:
+            return self.frame_down
 
     def set_home(self, position: Tuple[float, float, float]):
         with self.lock:
@@ -321,15 +335,14 @@ async def get_status():
         "target_position": target
     }
 
-def generate_frames():
-    """Yields MJPEG frames for the /video_feed endpoint.
+def generate_frames_forward():
+    """Yields MJPEG frames for the forward-looking camera (camera 3).
 
     Reads the latest frame from DroneState (written by the control loop)
-    and encodes it as JPEG.  The sleep keeps the stream at ~30 FPS and
-    avoids busy-waiting when no frame is available yet.
+    and encodes it as JPEG. The sleep keeps the stream at ~30 FPS.
     """
     while True:
-        frame = drone_state.get_frame()
+        frame = drone_state.get_frame_forward()
         if frame is not None:
             ret, buffer = cv2.imencode('.jpg', frame)
             if ret:
@@ -338,11 +351,47 @@ def generate_frames():
                        b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
         time.sleep(0.033)
 
+
+def generate_frames_down():
+    """Yields MJPEG frames for the downward-looking camera (camera 0).
+
+    Reads the latest frame from DroneState (written by the control loop)
+    and encodes it as JPEG. The sleep keeps the stream at ~30 FPS.
+    """
+    while True:
+        frame = drone_state.get_frame_down()
+        if frame is not None:
+            ret, buffer = cv2.imencode('.jpg', frame)
+            if ret:
+                frame_bytes = buffer.tobytes()
+                yield (b'--frame\r\n'
+                       b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+        time.sleep(0.033)
+
+
 @app.get("/video_feed")
 async def video_feed():
-    """Stream video feed from drone camera."""
+    """Stream forward-looking camera (camera 3) - default view."""
     return StreamingResponse(
-        generate_frames(),
+        generate_frames_forward(),
+        media_type="multipart/x-mixed-replace; boundary=frame"
+    )
+
+
+@app.get("/video_feed/forward")
+async def video_feed_forward():
+    """Stream forward-looking camera (camera 3)."""
+    return StreamingResponse(
+        generate_frames_forward(),
+        media_type="multipart/x-mixed-replace; boundary=frame"
+    )
+
+
+@app.get("/video_feed/down")
+async def video_feed_down():
+    """Stream downward-looking camera (camera 0)."""
+    return StreamingResponse(
+        generate_frames_down(),
         media_type="multipart/x-mixed-replace; boundary=frame"
     )
 
@@ -393,25 +442,36 @@ def drone_control_loop():
     
     try:
         while not drone_state.get_should_stop():
-            # ----- Camera feed (runs every iteration regardless of mode) -----
-            # Request an uncompressed RGB scene image from camera "3"
-            response = client.simGetImages([airsim.ImageRequest("3", airsim.ImageType.Scene, False, False)])[0]
-            if response and len(response.image_data_uint8) > 0:
-                img1d = np.frombuffer(response.image_data_uint8, dtype=np.uint8)
-                img = img1d.reshape(response.height, response.width, 3)
-                img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+            # ----- Camera feeds (runs every iteration regardless of mode) -----
+            # Request uncompressed RGB scene images from both cameras:
+            #   Camera 0: downward-looking (for ground surveillance)
+            #   Camera 3: forward-looking (for navigation/obstacle avoidance)
+            responses = client.simGetImages([
+                airsim.ImageRequest("0", airsim.ImageType.Scene, False, False),  # Down
+                airsim.ImageRequest("3", airsim.ImageType.Scene, False, False),  # Forward
+            ])
 
-                if img is not None and img.size > 0:
-                    # Publish a clean copy for the /video_feed MJPEG stream
-                    drone_state.set_frame(img.copy())
+            # Process downward camera (camera 0)
+            if responses[0] and len(responses[0].image_data_uint8) > 0:
+                img1d = np.frombuffer(responses[0].image_data_uint8, dtype=np.uint8)
+                img_down = img1d.reshape(responses[0].height, responses[0].width, 3)
+                img_down = cv2.cvtColor(img_down, cv2.COLOR_RGB2BGR)
+                if img_down is not None and img_down.size > 0:
+                    drone_state.set_frame_down(img_down.copy())
 
-                    # Overlay mode text on a second copy for the local OpenCV window only
+            # Process forward camera (camera 3)
+            if responses[1] and len(responses[1].image_data_uint8) > 0:
+                img1d = np.frombuffer(responses[1].image_data_uint8, dtype=np.uint8)
+                img_forward = img1d.reshape(responses[1].height, responses[1].width, 3)
+                img_forward = cv2.cvtColor(img_forward, cv2.COLOR_RGB2BGR)
+                if img_forward is not None and img_forward.size > 0:
+                    drone_state.set_frame_forward(img_forward.copy())
+
+                    # Overlay mode text on a copy for the local OpenCV window only
                     mode_text = f"Mode: {drone_state.get_mode().upper()}"
-                    cv2.putText(img, mode_text, (10, 30),
+                    cv2.putText(img_forward, mode_text, (10, 30),
                                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-                    cv2.imshow("Drone Camera", img)
-            else:
-                print("[WARNING] No image data received from AirSim camera")
+                    cv2.imshow("Drone Camera", img_forward)
 
             cv2.waitKey(1)  # required by OpenCV to refresh the window
             

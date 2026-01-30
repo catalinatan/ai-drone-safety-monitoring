@@ -23,29 +23,30 @@ export function PolygonCanvas({
   readOnly = false,
 }: PolygonCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const imageRef = useRef<HTMLImageElement>(null);
   const [currentPoints, setCurrentPoints] = useState<Point[]>([]);
   const [selectedZoneId, setSelectedZoneId] = useState<string | null>(null);
-  const [imageSize, setImageSize] = useState({ width: 0, height: 0 });
+  const [imageLoaded, setImageLoaded] = useState(false);
 
-  // Handle image load to get dimensions
-  const handleImageLoad = useCallback((e: React.SyntheticEvent<HTMLImageElement>) => {
-    const img = e.currentTarget;
-    setImageSize({ width: img.clientWidth, height: img.clientHeight });
+  // Handle image load to trigger re-render
+  const handleImageLoad = useCallback(() => {
+    setImageLoaded(true);
   }, []);
 
-  // Get relative coordinates from mouse event
+  // Get relative coordinates from mouse event using the image's bounding rect
   const getRelativeCoords = useCallback(
     (e: React.MouseEvent): Point | null => {
-      const container = containerRef.current;
-      if (!container || imageSize.width === 0) return null;
+      const img = imageRef.current;
+      if (!img || !imageLoaded) return null;
 
-      const rect = container.getBoundingClientRect();
-      const x = ((e.clientX - rect.left) / imageSize.width) * 100;
-      const y = ((e.clientY - rect.top) / imageSize.height) * 100;
+      // Use the image's bounding rect directly for accurate coordinates
+      const rect = img.getBoundingClientRect();
+      const x = ((e.clientX - rect.left) / rect.width) * 100;
+      const y = ((e.clientY - rect.top) / rect.height) * 100;
 
       return { x: Math.max(0, Math.min(100, x)), y: Math.max(0, Math.min(100, y)) };
     },
-    [imageSize]
+    [imageLoaded]
   );
 
   // Handle canvas click
@@ -149,6 +150,7 @@ export function PolygonCanvas({
     >
       {/* Background Image */}
       <img
+        ref={imageRef}
         src={imageSrc}
         alt="Feed"
         className="w-full h-auto block"
@@ -157,7 +159,7 @@ export function PolygonCanvas({
       />
 
       {/* SVG Overlay for zones */}
-      {imageSize.width > 0 && (
+      {imageLoaded && (
         <svg
           className="absolute inset-0 w-full h-full pointer-events-none"
           viewBox="0 0 100 100"

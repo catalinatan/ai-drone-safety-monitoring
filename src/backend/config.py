@@ -48,8 +48,8 @@ STREAM_INTERVAL = 1.0 / STREAM_FPS
 # DETECTION
 # ============================================================================
 
-# How often to run human detection (can be slower than frame capture)
-DETECTION_FPS = int(os.getenv("DETECTION_FPS", "10"))
+# How often to run human detection
+DETECTION_FPS = int(os.getenv("DETECTION_FPS", "30"))
 DETECTION_INTERVAL = 1.0 / DETECTION_FPS
 ALARM_COOLDOWN = float(os.getenv("ALARM_COOLDOWN", "5.0"))
 
@@ -81,13 +81,12 @@ DECODER_PATH = os.path.join(LITE_MONO_DIR, "depth.pth")
 # FEED CONFIGURATION
 # ============================================================================
 
-# AirSim camera configuration: {feed_id: (camera_name, vehicle_name)}
+# AirSim camera configuration for CCTV: {feed_id: (camera_name, vehicle_name)}
+# Note: Search drone cameras are served directly from the drone API (port 8000)
 FEED_CONFIG = {
     "cctv-1": ("0", "Drone2"),
-    "drone-cam": ("3", ""),
 }
 
 FEED_METADATA = {
     "cctv-1": {"name": "CCTV CAM 1", "location": "Aerial Overview"},
-    "drone-cam": {"name": "DRONE CAM", "location": "Mobile Unit"},
 }
