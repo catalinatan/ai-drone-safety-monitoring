@@ -48,6 +48,7 @@ from src.backend.config import (
     FEED_CONFIG, FEED_METADATA,
     ENCODER_PATH, DECODER_PATH,
     CCTV_HEIGHT, SAFE_Z_ALTITUDE,
+    FRAME_CAPTURE_INTERVAL, STREAM_INTERVAL,
     DETECTION_INTERVAL, ALARM_COOLDOWN,
     DRONE_API_URL, DRONE_API_TIMEOUT,
     DATA_DIR, ZONES_FILE,
@@ -556,6 +557,120 @@ class FeedManager:
 
         return self._get_status(feed)
 
+    def run_detection_only(self, feed_id: str) -> DetectionStatus:
+        """Run detection on cached frame (doesn't fetch new frame from AirSim).
+
+        Use this when frame capture runs on a separate thread.
+        """
+        if feed_id not in self.feeds:
+            raise ValueError(f"Feed {feed_id} not found")
+
+        feed = self.feeds[feed_id]
+
+        # Use cached frame instead of fetching new one
+        with feed.lock:
+            frame = feed.last_frame.copy() if feed.last_frame is not None else None
+
+        if frame is None:
+            return self._get_status(feed)
+
+        # Regenerate masks if needed (e.g., after server restart)
+        self._regenerate_masks_if_needed(feed_id, frame.shape[1], frame.shape[0])
+
+        if self.detector is None:
+            return self._get_status(feed)
+
+        try:
+            # Run human detection
+            person_masks = self.detector.get_masks(frame)
+
+            with feed.lock:
+                feed.people_count = len(person_masks)
+                feed.last_detection_time = datetime.now()
+
+                # Reset counts
+                feed.alarm_active = False
+                feed.caution_active = False
+                feed.danger_count = 0
+                feed.caution_count = 0
+
+                if len(person_masks) > 0:
+                    # Check RED zone overlap (alarm + drone deployment)
+                    if feed.red_zone_mask is not None:
+                        red_mask = feed.red_zone_mask
+                        if red_mask.shape != frame.shape[:2]:
+                            red_mask = cv2.resize(
+                                red_mask,
+                                (frame.shape[1], frame.shape[0]),
+                                interpolation=cv2.INTER_NEAREST
+                            )
+                            feed.red_zone_mask = red_mask
+
+                        is_alarm, danger_masks = check_danger_zone_overlap(person_masks, red_mask)
+                        feed.alarm_active = is_alarm
+                        feed.danger_count = len(danger_masks)
+
+                        # Calculate coordinates ONLY for RED zone intrusions
+                        if is_alarm and len(danger_masks) > 0 and self.depth_model is not None:
+                            target_mask = danger_masks[0]
+                            feet_pixel = coord_utils.get_feet_from_mask(target_mask)
+
+                            if feet_pixel is not None:
+                                cx, cy = feet_pixel
+                                ai_depth_map = depth_estimation_utils.run_lite_mono_inference(
+                                    self.depth_model, frame
+                                )
+                                rel_depth = ai_depth_map[cy, cx]
+                                target_pos = coord_utils.get_coords_from_lite_mono(
+                                    self.client, feed.camera_name, cx, cy,
+                                    frame.shape[1], frame.shape[0],
+                                    rel_depth, CCTV_HEIGHT, feed.vehicle_name
+                                )
+                                feed.target_coordinates = (
+                                    target_pos.x_val,
+                                    target_pos.y_val,
+                                    SAFE_Z_ALTITUDE
+                                )
+
+                        # Deploy drone for RED zone intrusion
+                        if feed.alarm_active and feed.target_coordinates and self.drone_api is not None:
+                            current_time = time.time()
+                            if current_time - self.last_deployment_time > ALARM_COOLDOWN and not self.drone_is_navigating:
+                                tx, ty, tz = feed.target_coordinates
+                                print(f"[DRONE] Deploying to ({tx:.2f}, {ty:.2f}, {tz:.2f}) for {feed_id}")
+                                if self.drone_api.goto_position(tx, ty, tz):
+                                    self.last_deployment_time = current_time
+                                    self.drone_is_navigating = True
+                                    print(f"[DRONE] Deployment command sent successfully")
+                                else:
+                                    print(f"[DRONE] Deployment command failed")
+
+                    # Check YELLOW zone overlap (caution alert only - NO drone)
+                    if feed.yellow_zone_mask is not None:
+                        yellow_mask = feed.yellow_zone_mask
+                        if yellow_mask.shape != frame.shape[:2]:
+                            yellow_mask = cv2.resize(
+                                yellow_mask,
+                                (frame.shape[1], frame.shape[0]),
+                                interpolation=cv2.INTER_NEAREST
+                            )
+                            feed.yellow_zone_mask = yellow_mask
+
+                        is_caution, caution_masks = check_danger_zone_overlap(person_masks, yellow_mask)
+                        feed.caution_active = is_caution
+                        feed.caution_count = len(caution_masks)
+
+                # Clear target coordinates if no RED zone alarm
+                if not feed.alarm_active:
+                    feed.target_coordinates = None
+
+        except Exception as e:
+            print(f"[ERROR] Detection failed for {feed_id}: {e}")
+            import traceback
+            traceback.print_exc()
+
+        return self._get_status(feed)
+
     def _get_status(self, feed: FeedState) -> DetectionStatus:
         """Get detection status for a feed."""
         with feed.lock:
@@ -582,12 +697,39 @@ class FeedManager:
 feed_manager = FeedManager()
 
 # ============================================================================
-# BACKGROUND DETECTION THREAD
+# BACKGROUND THREADS: FRAME CAPTURE + DETECTION
 # ============================================================================
 
+def frame_capture_loop():
+    """High-FPS frame capture thread — grabs frames from AirSim without detection.
+
+    This runs at FRAME_CAPTURE_FPS (default 30) to ensure smooth video streaming.
+    Detection runs separately at a lower rate.
+    """
+    print(f"[CAPTURE] Starting frame capture loop ({1/FRAME_CAPTURE_INTERVAL:.0f} FPS)...")
+
+    while feed_manager.running:
+        for feed_id in feed_manager.feeds:
+            if not feed_manager.running:
+                break
+            try:
+                # Just grab the frame, don't run detection
+                feed_manager.get_frame(feed_id)
+            except Exception as e:
+                print(f"[CAPTURE] Error capturing {feed_id}: {e}")
+
+        time.sleep(FRAME_CAPTURE_INTERVAL)
+
+    print("[CAPTURE] Frame capture loop stopped")
+
+
 def detection_loop():
-    """Background thread that continuously runs detection on all feeds."""
-    print("[DETECTION] Starting detection loop...")
+    """Detection thread — runs human detection at lower FPS.
+
+    This runs at DETECTION_FPS (default 10) since detection is CPU/GPU intensive.
+    Reads from cached frames populated by the capture thread.
+    """
+    print(f"[DETECTION] Starting detection loop ({1/DETECTION_INTERVAL:.0f} FPS)...")
     last_drone_status_check = 0.0
 
     while feed_manager.running:
@@ -595,7 +737,7 @@ def detection_loop():
             if not feed_manager.running:
                 break
             try:
-                feed_manager.run_detection(feed_id)
+                feed_manager.run_detection_only(feed_id)
             except Exception as e:
                 print(f"[DETECTION] Error processing {feed_id}: {e}")
 
@@ -627,8 +769,15 @@ async def lifespan(app: FastAPI):
     # Startup
     if feed_manager.initialize():
         feed_manager.running = True
+
+        # Start frame capture thread (high FPS for smooth video)
+        capture_thread = threading.Thread(target=frame_capture_loop, daemon=True)
+        capture_thread.start()
+
+        # Start detection thread (lower FPS, CPU/GPU intensive)
         detection_thread = threading.Thread(target=detection_loop, daemon=True)
         detection_thread.start()
+
         print("[SERVER] Backend server started successfully")
     else:
         print("[SERVER] Backend started in limited mode (no AirSim connection)")
@@ -740,7 +889,7 @@ def generate_mjpeg_frames(feed_id: str):
             yield (b'--frame\r\n'
                    b'Content-Type: image/jpeg\r\n\r\n' + _NO_SIGNAL_JPEG + b'\r\n')
 
-        time.sleep(0.033)  # ~30 FPS
+        time.sleep(STREAM_INTERVAL)
 
 @app.get("/video_feed/{feed_id}")
 async def video_feed(feed_id: str):

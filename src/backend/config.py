@@ -33,10 +33,24 @@ DRONE_API_URL = os.getenv("DRONE_API_URL", f"http://localhost:{DRONE_API_PORT}")
 DRONE_API_TIMEOUT = int(os.getenv("DRONE_API_TIMEOUT", "5"))
 
 # ============================================================================
+# FRAME CAPTURE & STREAMING
+# ============================================================================
+
+# Frame capture rate (how often we grab frames from AirSim)
+FRAME_CAPTURE_FPS = int(os.getenv("FRAME_CAPTURE_FPS", "30"))
+FRAME_CAPTURE_INTERVAL = 1.0 / FRAME_CAPTURE_FPS
+
+# MJPEG streaming rate to UI
+STREAM_FPS = int(os.getenv("STREAM_FPS", "30"))
+STREAM_INTERVAL = 1.0 / STREAM_FPS
+
+# ============================================================================
 # DETECTION
 # ============================================================================
 
-DETECTION_INTERVAL = float(os.getenv("DETECTION_INTERVAL", "0.1"))
+# How often to run human detection (can be slower than frame capture)
+DETECTION_FPS = int(os.getenv("DETECTION_FPS", "10"))
+DETECTION_INTERVAL = 1.0 / DETECTION_FPS
 ALARM_COOLDOWN = float(os.getenv("ALARM_COOLDOWN", "5.0"))
 
 # ============================================================================
