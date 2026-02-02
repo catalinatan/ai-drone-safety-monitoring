@@ -125,7 +125,9 @@ The system expects specific camera and vehicle names. Default configuration in `
 ```python
 FEED_CONFIG = {
     "cctv-1": ("0", "Drone2"),      # Camera 0 on vehicle Drone2
-    "drone-cam": ("3", ""),          # Camera 3 on default vehicle
+    "cctv-2": ("0", "Drone3"),      # Camera 0 on vehicle Drone3
+    "cctv-3": ("0", "Drone4"),      # Camera 0 on vehicle Drone4
+    "cctv-4": ("0", "Drone5"),      # Camera 0 on vehicle Drone5
 }
 ```
 
@@ -143,6 +145,24 @@ Sample AirSim `settings.json`:
     "Drone2": {
       "VehicleType": "SimpleFlight",
       "X": 0, "Y": -10, "Z": -15,
+      "Pitch": -45,
+      "AllowAPIAlways": true
+    },
+    "Drone3": {
+      "VehicleType": "SimpleFlight",
+      "X": 10, "Y": -10, "Z": -15,
+      "Pitch": -45,
+      "AllowAPIAlways": true
+    },
+    "Drone4": {
+      "VehicleType": "SimpleFlight",
+      "X": 10, "Y": 10, "Z": -15,
+      "Pitch": -45,
+      "AllowAPIAlways": true
+    },
+    "Drone5": {
+      "VehicleType": "SimpleFlight",
+      "X": 0, "Y": 10, "Z": -15,
       "Pitch": -45,
       "AllowAPIAlways": true
     }
@@ -172,7 +192,8 @@ API documentation available at http://localhost:8001/docs
 | `/mode` | POST | Set control mode (`manual` or `automatic`) |
 | `/goto` | POST | Navigate to NED coordinates (automatic mode) |
 | `/return_home` | POST | Return to takeoff position |
-| `/video_feed` | GET | Drone camera MJPEG stream |
+| `/video_feed/down` | GET | Drone downward camera MJPEG stream |
+| `/video_feed/forward` | GET | Drone forward camera MJPEG stream |
 
 API documentation available at http://localhost:8000/docs
 
@@ -240,11 +261,11 @@ Configured in `src/drone_control/config.yaml`:
 ```yaml
 safety:
   max_altitude: 50        # Maximum altitude in meters
-  geofence_radius: 500    # Maximum distance from origin
+  geofence_radius: 200    # Maximum distance from origin
 
 navigation:
   speed: 5.0              # Navigation speed in m/s
-  position_tolerance: 2.0 # Arrival threshold in meters
+  position_tolerance: 1.0 # Arrival threshold in meters
 ```
 
 ## Testing
