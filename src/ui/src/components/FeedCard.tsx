@@ -71,7 +71,7 @@ export function FeedCard({ feed, onEdit, onExpand }: FeedCardProps) {
   };
 
   return (
-    <div className={`feed-card corner-brackets rounded-lg group ${getBorderClass()}`}>
+    <div className={`feed-card corner-brackets rounded-lg group flex flex-col h-full ${getBorderClass()}`}>
       {/* Header */}
       <div className={`flex items-center justify-between px-3 py-2 border-b ${getHeaderClass()}`}>
         <div className="flex items-center gap-2">
@@ -128,7 +128,7 @@ export function FeedCard({ feed, onEdit, onExpand }: FeedCardProps) {
       </div>
 
       {/* Feed Image */}
-      <div className={`relative aspect-video overflow-hidden bg-gray-900 ${isAlarmActive ? 'border-2 border-[var(--zone-red)]' : isCautionActive ? 'border-2 border-[var(--zone-yellow)]' : ''}`}>
+      <div className={`relative flex-1 min-h-0 overflow-hidden bg-gray-900 ${isAlarmActive ? 'border-2 border-[var(--zone-red)]' : isCautionActive ? 'border-2 border-[var(--zone-yellow)]' : ''}`}>
         {isPlaceholder ? (
           // Placeholder for disconnected feeds
           <div className="w-full h-full flex flex-col items-center justify-center bg-[var(--bg-tertiary)]">
@@ -145,7 +145,7 @@ export function FeedCard({ feed, onEdit, onExpand }: FeedCardProps) {
           <img
             src={feed.imageSrc}
             alt={`${feed.name} feed`}
-            className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+            className="w-full h-full object-contain transition-transform duration-500 group-hover:scale-105"
           />
         )}
 

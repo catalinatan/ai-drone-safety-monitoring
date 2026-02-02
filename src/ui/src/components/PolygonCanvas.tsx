@@ -144,27 +144,29 @@ export function PolygonCanvas({
   return (
     <div
       ref={containerRef}
-      className="relative overflow-hidden cursor-crosshair"
+      className="relative overflow-hidden cursor-crosshair w-full h-full flex items-center justify-center bg-[var(--bg-primary)]"
       onClick={handleClick}
       onDoubleClick={handleDoubleClick}
     >
-      {/* Background Image */}
-      <img
-        ref={imageRef}
-        src={imageSrc}
-        alt="Feed"
-        className="w-full h-auto block"
-        onLoad={handleImageLoad}
-        draggable={false}
-      />
+      {/* Inner wrapper sizes to the image so SVG overlay aligns exactly */}
+      <div className="relative max-w-full max-h-full inline-block">
+        {/* Background Image */}
+        <img
+          ref={imageRef}
+          src={imageSrc}
+          alt="Feed"
+          className="block max-w-full max-h-full"
+          onLoad={handleImageLoad}
+          draggable={false}
+        />
 
-      {/* SVG Overlay for zones */}
-      {imageLoaded && (
-        <svg
-          className="absolute inset-0 w-full h-full pointer-events-none"
-          viewBox="0 0 100 100"
-          preserveAspectRatio="none"
-        >
+        {/* SVG Overlay for zones */}
+        {imageLoaded && (
+          <svg
+            className="absolute inset-0 w-full h-full pointer-events-none"
+            viewBox="0 0 100 100"
+            preserveAspectRatio="none"
+          >
           {/* Completed zones */}
           {zones.map((zone) => {
             const colors = ZONE_COLORS[zone.level];
@@ -240,21 +242,22 @@ export function PolygonCanvas({
         </svg>
       )}
 
-      {/* Scanline overlay */}
-      <div className="absolute inset-0 scanlines pointer-events-none" />
+        {/* Scanline overlay */}
+        <div className="absolute inset-0 scanlines pointer-events-none" />
 
-      {/* Drawing instructions */}
-      {!readOnly && activeTool && activeTool !== 'delete' && currentPoints.length === 0 && (
-        <div className="absolute bottom-3 left-3 px-2 py-1 rounded text-xs font-mono bg-[var(--bg-primary)]/80 border border-[var(--border-dim)] text-[var(--text-secondary)]">
-          Click to place points • Double-click or click first point to close
-        </div>
-      )}
+        {/* Drawing instructions */}
+        {!readOnly && activeTool && activeTool !== 'delete' && currentPoints.length === 0 && (
+          <div className="absolute bottom-3 left-3 px-2 py-1 rounded text-xs font-mono bg-[var(--bg-primary)]/80 border border-[var(--border-dim)] text-[var(--text-secondary)]">
+            Click to place points • Double-click or click first point to close
+          </div>
+        )}
 
-      {currentPoints.length > 0 && (
-        <div className="absolute bottom-3 left-3 px-2 py-1 rounded text-xs font-mono bg-[var(--bg-primary)]/80 border border-[var(--border-dim)] text-[var(--accent-cyan)]">
-          Points: {currentPoints.length} • ESC to cancel
-        </div>
-      )}
+        {currentPoints.length > 0 && (
+          <div className="absolute bottom-3 left-3 px-2 py-1 rounded text-xs font-mono bg-[var(--bg-primary)]/80 border border-[var(--border-dim)] text-[var(--accent-cyan)]">
+            Points: {currentPoints.length} • ESC to cancel
+          </div>
+        )}
+      </div>
     </div>
   );
 }

@@ -6,7 +6,7 @@ export const BACKEND_URL = 'http://localhost:8001';
 // Drone API URL for the search drone's dual cameras
 export const DRONE_API_URL = 'http://localhost:8000';
 
-// Live CCTV feed from the backend (static aerial camera on Drone2)
+// Live CCTV feeds from the backend (static aerial cameras on Drone2–Drone5)
 export const liveFeeds: Feed[] = [
   {
     id: 'cctv-1',
@@ -16,35 +16,31 @@ export const liveFeeds: Feed[] = [
     zones: [],
     isLive: true,
   },
-];
-
-// Placeholder feeds (shown when there are fewer than 4 live feeds)
-export const placeholderFeeds: Feed[] = [
   {
-    id: 'placeholder-1',
-    name: 'CAM 2',
-    location: 'Not Connected',
-    imageSrc: '',
+    id: 'cctv-2',
+    name: 'CCTV CAM 2',
+    location: 'Aerial Overview',
+    imageSrc: `${BACKEND_URL}/video_feed/cctv-2`,
     zones: [],
-    isLive: false,
+    isLive: true,
   },
   {
-    id: 'placeholder-2',
-    name: 'CAM 3',
-    location: 'Not Connected',
-    imageSrc: '',
+    id: 'cctv-3',
+    name: 'CCTV CAM 3',
+    location: 'Aerial Overview',
+    imageSrc: `${BACKEND_URL}/video_feed/cctv-3`,
     zones: [],
-    isLive: false,
+    isLive: true,
   },
   {
-    id: 'placeholder-3',
-    name: 'CAM 4',
-    location: 'Not Connected',
-    imageSrc: '',
+    id: 'cctv-4',
+    name: 'CCTV CAM 4',
+    location: 'Aerial Overview',
+    imageSrc: `${BACKEND_URL}/video_feed/cctv-4`,
     zones: [],
-    isLive: false,
+    isLive: true,
   },
 ];
 
-// Combined feeds for the command panel (always 4 feeds: 1 live + 3 placeholders)
-export const mockFeeds: Feed[] = [...liveFeeds, ...placeholderFeeds];
+// Combined feeds for the command panel (all 4 live feeds)
+export const mockFeeds: Feed[] = [...liveFeeds];

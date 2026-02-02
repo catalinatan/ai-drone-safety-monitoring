@@ -250,9 +250,9 @@ export function DroneControlPanel() {
   const isAutomatic = status.mode === 'automatic';
 
   return (
-    <div className="h-full flex flex-col bg-[var(--bg-primary)] tactical-grid relative overflow-hidden pt-14">
-      {/* Top Bar */}
-      <header className="absolute top-0 left-0 right-0 z-20 flex items-center justify-between px-6 py-4">
+    <div className="h-full flex flex-col bg-[var(--bg-primary)] tactical-grid relative overflow-hidden pt-28">
+      {/* Top Bar - pushed below AppNav */}
+      <header className="absolute top-14 left-0 right-0 z-20 flex items-center justify-between px-6 py-4">
         {/* Left: Home Button */}
         <button
           onClick={handleReturnHome}
@@ -350,7 +350,7 @@ export function DroneControlPanel() {
         </button>
       </header>
 
-      {/* Dual Video Feeds - Side by Side (Equal Size) */}
+      {/* Dual Video Feeds - Side by Side */}
       <main className="flex-1 flex items-center justify-center p-20 gap-6">
         {/* Down Camera (Camera 0) - Ground surveillance */}
         <div className="relative flex-1 max-w-2xl aspect-video rounded-lg overflow-hidden border-2 border-[var(--border-dim)] corner-brackets">
@@ -448,7 +448,7 @@ export function DroneControlPanel() {
 
       {/* Bottom Controls Bar */}
       <footer className="absolute bottom-0 left-0 right-0 z-20 px-6 py-6">
-        <div className="flex items-end justify-between">
+        <div className="relative flex items-end justify-between">
           {/* Left: Movement Controls (WASD) */}
           <div className="flex flex-col items-center gap-2">
             <span className="text-[10px] font-mono text-[var(--text-muted)] uppercase tracking-wider mb-2">
@@ -494,8 +494,8 @@ export function DroneControlPanel() {
             </div>
           </div>
 
-          {/* Center: Manual Override Switch */}
-          <div className="flex flex-col items-center gap-3">
+          {/* Center: Manual Override Switch - absolutely centered between feeds */}
+          <div className="absolute left-1/2 -translate-x-1/2 bottom-0 flex flex-col items-center gap-3">
             <span className="text-[10px] font-mono text-[var(--text-muted)] uppercase tracking-wider">
               Flight Mode
             </span>
@@ -527,12 +527,12 @@ export function DroneControlPanel() {
 
               {/* Labels */}
               <span
-                className={`absolute left-3 top-1/2 -translate-y-1/2 text-[10px] font-bold uppercase ${isManual ? 'opacity-0' : 'text-[var(--zone-yellow)]'}`}
+                className={`absolute left-3 top-1/2 -translate-y-1/2 text-[10px] font-bold uppercase ${isManual ? 'text-[var(--accent-cyan)]' : 'opacity-0'}`}
               >
                 MAN
               </span>
               <span
-                className={`absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-bold uppercase ${isManual ? 'text-[var(--accent-cyan)]' : 'opacity-0'}`}
+                className={`absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-bold uppercase ${isManual ? 'opacity-0' : 'text-[var(--zone-yellow)]'}`}
               >
                 AUTO
               </span>
@@ -574,9 +574,9 @@ export function DroneControlPanel() {
         </div>
       </footer>
 
-      {/* Automatic Flight Warning Overlay */}
+      {/* Automatic Flight Warning Overlay - positioned just above the flight mode toggle */}
       {isAutomatic && (
-        <div className="absolute bottom-32 left-1/2 -translate-x-1/2 flex items-center gap-2 px-4 py-2 rounded-lg border border-[var(--zone-yellow)] bg-[var(--zone-yellow-fill)] backdrop-blur-sm animate-pulse">
+        <div className="absolute bottom-36 left-1/2 -translate-x-1/2 flex items-center gap-2 px-4 py-2 rounded-lg border border-[var(--zone-yellow)] bg-[var(--zone-yellow-fill)] backdrop-blur-sm animate-pulse z-20">
           <AlertTriangle size={16} className="text-[var(--zone-yellow)]" />
           <span className="text-sm font-mono text-[var(--zone-yellow)]">
             Manual controls disabled during automatic flight

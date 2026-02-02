@@ -74,7 +74,7 @@ export function EditFeedPage({ feed, onSave, onCancel }: EditFeedPageProps) {
       {/* Main Content */}
       <main className="flex-1 p-6 flex flex-col gap-4 overflow-hidden">
         {/* Canvas Container */}
-        <div className="flex-1 relative rounded-lg overflow-hidden border border-[var(--border-dim)] corner-brackets">
+        <div className="flex-1 min-h-0 relative rounded-lg overflow-hidden border border-[var(--border-dim)] corner-brackets">
           <PolygonCanvas
             imageSrc={feed.imageSrc}
             zones={zones}

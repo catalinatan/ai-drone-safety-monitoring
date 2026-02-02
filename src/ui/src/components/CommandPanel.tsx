@@ -46,7 +46,7 @@ export function CommandPanel({ feeds, onEditFeed, onExpandFeed }: CommandPanelPr
       </header>
 
       {/* Main Content - 4 Corner Grid */}
-      <main className="flex-1 p-6 relative overflow-hidden">
+      <main className="flex-1 min-h-0 p-6 relative overflow-hidden">
         {/* Grid container */}
         <div className="h-full grid grid-cols-2 grid-rows-2 gap-6">
           {feeds.slice(0, 4).map((feed) => (

@@ -85,8 +85,14 @@ DECODER_PATH = os.path.join(LITE_MONO_DIR, "depth.pth")
 # Note: Search drone cameras are served directly from the drone API (port 8000)
 FEED_CONFIG = {
     "cctv-1": ("0", "Drone2"),
+    "cctv-2": ("0", "Drone3"),
+    "cctv-3": ("0", "Drone4"),
+    "cctv-4": ("0", "Drone5"),
 }
 
 FEED_METADATA = {
     "cctv-1": {"name": "CCTV CAM 1", "location": "Aerial Overview"},
+    "cctv-2": {"name": "CCTV CAM 2", "location": "Aerial Overview"},
+    "cctv-3": {"name": "CCTV CAM 3", "location": "Aerial Overview"},
+    "cctv-4": {"name": "CCTV CAM 4", "location": "Aerial Overview"},
 }

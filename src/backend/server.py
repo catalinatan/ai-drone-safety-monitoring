@@ -238,6 +238,7 @@ class FeedManager:
         self.last_deployment_time = 0.0
         self.running = False
         self._init_lock = threading.Lock()
+        self._airsim_lock = threading.Lock()
 
     def initialize(self):
         """Initialize AirSim connection and models."""
@@ -373,9 +374,10 @@ class FeedManager:
             return None
 
         try:
-            responses = self.client.simGetImages([
-                airsim.ImageRequest(feed.camera_name, airsim.ImageType.Scene, False, False)
-            ], vehicle_name=feed.vehicle_name)
+            with self._airsim_lock:
+                responses = self.client.simGetImages([
+                    airsim.ImageRequest(feed.camera_name, airsim.ImageType.Scene, False, False)
+                ], vehicle_name=feed.vehicle_name)
 
             if not responses or len(responses) == 0:
                 return None
@@ -505,12 +507,13 @@ class FeedManager:
                                 )
                                 rel_depth = ai_depth_map[cy, cx]
 
-                                # Convert to world coordinates
-                                target_pos = coord_utils.get_coords_from_lite_mono(
-                                    self.client, feed.camera_name, cx, cy,
-                                    frame.shape[1], frame.shape[0],
-                                    rel_depth, CCTV_HEIGHT, feed.vehicle_name
-                                )
+                                # Convert to world coordinates (AirSim call needs lock)
+                                with self._airsim_lock:
+                                    target_pos = coord_utils.get_coords_from_lite_mono(
+                                        self.client, feed.camera_name, cx, cy,
+                                        frame.shape[1], frame.shape[0],
+                                        rel_depth, CCTV_HEIGHT, feed.vehicle_name
+                                    )
 
                                 feed.target_coordinates = (
                                     target_pos.x_val,
@@ -542,7 +545,12 @@ class FeedManager:
                             )
                             feed.yellow_zone_mask = yellow_mask
 
-                        is_caution, caution_masks = check_danger_zone_overlap(person_masks, yellow_mask)
+                        # Subtract red zone so red always takes priority over yellow
+                        effective_yellow = yellow_mask
+                        if feed.red_zone_mask is not None and feed.red_zone_mask.shape == yellow_mask.shape:
+                            effective_yellow = yellow_mask & (~feed.red_zone_mask)
+
+                        is_caution, caution_masks = check_danger_zone_overlap(person_masks, effective_yellow)
                         feed.caution_active = is_caution
                         feed.caution_count = len(caution_masks)
 
@@ -621,11 +629,13 @@ class FeedManager:
                                     self.depth_model, frame
                                 )
                                 rel_depth = ai_depth_map[cy, cx]
-                                target_pos = coord_utils.get_coords_from_lite_mono(
-                                    self.client, feed.camera_name, cx, cy,
-                                    frame.shape[1], frame.shape[0],
-                                    rel_depth, CCTV_HEIGHT, feed.vehicle_name
-                                )
+                                # AirSim call needs lock to avoid IOLoop conflict
+                                with self._airsim_lock:
+                                    target_pos = coord_utils.get_coords_from_lite_mono(
+                                        self.client, feed.camera_name, cx, cy,
+                                        frame.shape[1], frame.shape[0],
+                                        rel_depth, CCTV_HEIGHT, feed.vehicle_name
+                                    )
                                 feed.target_coordinates = (
                                     target_pos.x_val,
                                     target_pos.y_val,
@@ -656,7 +666,12 @@ class FeedManager:
                             )
                             feed.yellow_zone_mask = yellow_mask
 
-                        is_caution, caution_masks = check_danger_zone_overlap(person_masks, yellow_mask)
+                        # Subtract red zone so red always takes priority over yellow
+                        effective_yellow = yellow_mask
+                        if feed.red_zone_mask is not None and feed.red_zone_mask.shape == yellow_mask.shape:
+                            effective_yellow = yellow_mask & (~feed.red_zone_mask)
+
+                        is_caution, caution_masks = check_danger_zone_overlap(person_masks, effective_yellow)
                         feed.caution_active = is_caution
                         feed.caution_count = len(caution_masks)
 
@@ -917,13 +932,23 @@ async def update_zones(feed_id: str, request: ZonesUpdateRequest):
     if feed_id not in feed_manager.feeds:
         raise HTTPException(status_code=404, detail=f"Feed {feed_id} not found")
 
-    # Get current frame dimensions
-    frame = feed_manager.get_frame(feed_id)
-    if frame is None:
-        raise HTTPException(status_code=503, detail="Cannot get frame dimensions")
-
     try:
-        feed_manager.update_zones(feed_id, request.zones, frame.shape[1], frame.shape[0])
+        # Try to get frame dimensions for immediate mask generation
+        frame = feed_manager.get_frame(feed_id)
+        if frame is not None:
+            feed_manager.update_zones(feed_id, request.zones, frame.shape[1], frame.shape[0])
+        else:
+            # No frame yet — save zones and defer mask generation
+            feed = feed_manager.feeds[feed_id]
+            with feed.lock:
+                feed.zones = request.zones
+                feed.red_zone_mask = None
+                feed.yellow_zone_mask = None
+                feed._needs_mask_regen = True
+            zones_data = [z.model_dump() for z in request.zones]
+            save_zones_to_file(feed_id, zones_data)
+            print(f"[ZONES] {feed_id}: Saved {len(request.zones)} zone(s), masks deferred until frame available")
+
         return {"status": "success", "zones_count": len(request.zones)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
