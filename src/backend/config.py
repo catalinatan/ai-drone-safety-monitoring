@@ -78,6 +78,31 @@ ENCODER_PATH = os.path.join(LITE_MONO_DIR, "encoder.pth")
 DECODER_PATH = os.path.join(LITE_MONO_DIR, "depth.pth")
 
 # ============================================================================
+# CCTV FOLLOW MODE (for moving environments like ship)
+# ============================================================================
+
+# Friendly label → AirSim object name mapping
+FOLLOW_TARGETS = {
+    "ship": "Target_Boat",
+}
+
+# Set via --follow <label> in main.py, empty string = stationary mode
+_follow_label = os.getenv("CCTV_FOLLOW_TARGET", "")
+CCTV_FOLLOW_TARGET = FOLLOW_TARGETS.get(_follow_label, "")
+
+# Camera Actor guides: drone → Camera Actor name in UE World Outliner.
+# The follow loop reads each Camera Actor's pose and teleports the drone
+# to that exact position + orientation. Position cameras in UE to adjust views.
+CCTV_FOLLOW_CAMERAS = {
+    "Drone2": "CCTV1",
+    "Drone3": "CCTV2",
+    "Drone4": "CCTV3",
+    "Drone5": "CCTV4",
+}
+
+CCTV_FOLLOW_INTERVAL = 0.01    # seconds (100 Hz — minimizes jitter)
+
+# ============================================================================
 # FEED CONFIGURATION
 # ============================================================================
 

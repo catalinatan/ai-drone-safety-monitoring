@@ -2,8 +2,9 @@
 Development entrypoint — launches all services with one command.
 
 Usage:
-    python main.py          # backend (8001) + drone API (8000) + React UI (5173)
-    python main.py --no-ui  # backend + drone API only
+    python main.py                   # backend (8001) + drone API (8000) + React UI (5173)
+    python main.py --no-ui           # backend + drone API only
+    python main.py --follow ship     # CCTV drones follow the ship object
 
 Ctrl+C shuts down all processes cleanly.
 """
@@ -25,6 +26,17 @@ SERVICES = {
 
 def main():
     no_ui = "--no-ui" in sys.argv
+
+    # Parse --follow <label> (e.g., --follow ship)
+    follow_target = ""
+    if "--follow" in sys.argv:
+        idx = sys.argv.index("--follow")
+        if idx + 1 < len(sys.argv):
+            follow_target = sys.argv[idx + 1]
+        else:
+            print("[ERROR] --follow requires a target label (e.g., --follow ship)")
+            sys.exit(1)
+
     procs: dict[str, subprocess.Popen] = {}
 
     def shutdown(*_):
@@ -47,9 +59,14 @@ def main():
     print("  AI SAFETY MONITORING — Development Server")
     print("=" * 60)
 
+    # Build env for subprocesses (pass follow target to backend)
+    env = os.environ.copy()
+    if follow_target:
+        env["CCTV_FOLLOW_TARGET"] = follow_target
+
     # Launch Python services
     for name, svc in SERVICES.items():
-        procs[name] = subprocess.Popen(svc["cmd"], cwd=REPO_ROOT)
+        procs[name] = subprocess.Popen(svc["cmd"], cwd=REPO_ROOT, env=env)
         print(f"  [{name:8s}]  http://localhost:{svc['port']}")
 
     # Launch React UI
@@ -58,6 +75,8 @@ def main():
         procs["ui"] = subprocess.Popen([npm, "run", "dev"], cwd=UI_DIR)
         print(f"  [{'ui':8s}]  http://localhost:5173")
 
+    if follow_target:
+        print(f"  [{'follow':8s}]  CCTV drones following '{follow_target}'")
     print("=" * 60)
     print("  Press Ctrl+C to stop all services")
     print("=" * 60)
