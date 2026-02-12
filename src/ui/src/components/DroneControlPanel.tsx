@@ -407,6 +407,17 @@ export function DroneControlPanel() {
           <div className="absolute -top-3 left-6 px-4 py-1 rounded-md bg-[var(--bg-primary)] border border-[var(--accent-cyan)]/40 shadow-[0_0_8px_var(--accent-cyan-glow)]">
             <span className="text-xs font-bold font-mono text-[var(--accent-cyan)] uppercase tracking-widest">Drone Control</span>
           </div>
+
+          {/* Auto-flight warning - inside the control container */}
+          {isAutomatic && (
+            <div className="absolute -top-3 right-6 flex items-center gap-2 px-3 py-1 rounded-md bg-[var(--bg-primary)] border border-[var(--zone-yellow)] animate-pulse">
+              <AlertTriangle size={12} className="text-[var(--zone-yellow)]" />
+              <span className="text-xs font-bold font-mono text-[var(--zone-yellow)]">
+                Manual controls disabled during auto flight
+              </span>
+            </div>
+          )}
+
           {/* Left: Return Home + Movement Controls (WASD) */}
           <div className="flex items-end gap-4">
             <button
@@ -577,15 +588,6 @@ export function DroneControlPanel() {
         </div>
       </footer>
 
-      {/* Automatic Flight Warning Overlay - positioned above the flight mode tabs */}
-      {isAutomatic && (
-        <div className="absolute bottom-52 left-1/2 -translate-x-1/2 flex items-center gap-2 px-4 py-2 rounded-lg border border-[var(--zone-yellow)] bg-[var(--zone-yellow-fill)] backdrop-blur-sm animate-pulse z-20">
-          <AlertTriangle size={16} className="text-[var(--zone-yellow)]" />
-          <span className="text-sm font-mono text-[var(--zone-yellow)]">
-            Manual controls disabled during automatic flight
-          </span>
-        </div>
-      )}
 
       {/* Error Notification */}
       {errorMessage && (

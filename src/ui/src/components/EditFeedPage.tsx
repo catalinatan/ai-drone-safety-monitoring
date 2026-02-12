@@ -107,12 +107,14 @@ export function EditFeedPage({ feed, onSave, onCancel, onAutoSegment }: EditFeed
 
         {/* Canvas Container */}
         <div className="flex-1 min-h-0 relative rounded-lg overflow-hidden border border-[var(--border-dim)] corner-brackets">
-          <PolygonCanvas
-            imageSrc={feed.imageSrc}
-            zones={zones}
-            onZonesChange={setZones}
-            activeTool={activeTool}
-          />
+          <div className="absolute inset-0 flex items-center justify-center bg-[var(--bg-card)]">
+            <PolygonCanvas
+              imageSrc={feed.imageSrc}
+              zones={zones}
+              onZonesChange={setZones}
+              activeTool={activeTool}
+            />
+          </div>
         </div>
 
         {/* Tools Bar */}
