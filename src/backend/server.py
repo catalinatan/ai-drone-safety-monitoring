@@ -55,6 +55,8 @@ from src.backend.config import (
     BACKEND_PORT,
     FEED_SCENE_TYPE, SEG_MODEL_PATHS,
     AUTO_SEG_INTERVAL, AUTO_SEG_CONFIDENCE,
+    CCTV_FOLLOW_TARGET, CCTV_FOLLOW_CAMERAS,
+    CCTV_FOLLOW_INTERVAL,
 )
 
 # --- DETECTION MODULES (optional — graceful fallback) ---
@@ -894,6 +896,71 @@ def auto_segmentation_loop():
 
     print("[AUTO-SEG] Auto-segmentation loop stopped")
 
+
+def cctv_follow_loop():
+    """Follow loop — teleports CCTV drones to match Camera Actor positions.
+
+    Uses its own AirSim client to avoid lock contention with the frame
+    capture and detection threads. Each tick, reads the pose of the
+    Camera Actor guide (placed in UE) and teleports the drone to that
+    exact position and orientation.
+    Only runs when CCTV_FOLLOW_TARGET is set via --follow flag.
+    """
+    import math
+
+    # Create a dedicated AirSim client for the follow loop to avoid
+    # lock contention with the frame capture / detection threads.
+    try:
+        print("[FOLLOW] Connecting dedicated AirSim client...")
+        client = airsim.MultirotorClient()
+        client.confirmConnection()
+    except Exception as e:
+        print(f"[FOLLOW] Failed to connect AirSim client: {e}")
+        return
+
+    # Arm and take off each CCTV drone, collecting futures
+    takeoff_futures = []
+    for vehicle_name in CCTV_FOLLOW_CAMERAS:
+        print(f"[FOLLOW] Arming and taking off {vehicle_name}...")
+        client.enableApiControl(True, vehicle_name=vehicle_name)
+        client.armDisarm(True, vehicle_name=vehicle_name)
+        future = client.takeoffAsync(vehicle_name=vehicle_name)
+        takeoff_futures.append((vehicle_name, future))
+
+    # Wait for all takeoffs to actually complete
+    for vehicle_name, future in takeoff_futures:
+        try:
+            future.join()
+            print(f"[FOLLOW] {vehicle_name} takeoff complete")
+        except Exception as e:
+            print(f"[FOLLOW] {vehicle_name} takeoff issue (may already be airborne): {e}")
+
+    # Log camera guide mappings
+    for vehicle_name, cam_name in CCTV_FOLLOW_CAMERAS.items():
+        print(f"[FOLLOW] {vehicle_name} → Camera Actor '{cam_name}'")
+
+    while feed_manager.running:
+        try:
+            for vehicle_name, cam_actor_name in CCTV_FOLLOW_CAMERAS.items():
+                cam_pose = client.simGetObjectPose(cam_actor_name)
+
+                if math.isnan(cam_pose.position.x_val):
+                    continue
+
+                # Teleport drone to the Camera Actor's exact pose
+                client.simSetVehiclePose(cam_pose, True, vehicle_name=vehicle_name)
+
+                # Zero out velocity so the flight controller doesn't fight back
+                client.moveByVelocityAsync(0, 0, 0, 0.1, vehicle_name=vehicle_name)
+
+        except Exception as e:
+            print(f"[FOLLOW] Error: {e}")
+
+        time.sleep(CCTV_FOLLOW_INTERVAL)
+
+    print("[FOLLOW] Follow loop stopped")
+
+
 # ============================================================================
 # FASTAPI APPLICATION
 # ============================================================================
@@ -918,6 +985,12 @@ async def lifespan(app: FastAPI):
             auto_seg_thread = threading.Thread(target=auto_segmentation_loop, daemon=True)
             auto_seg_thread.start()
             print("[SERVER] Auto-segmentation thread started")
+
+        # Start CCTV follow thread if a follow target is configured
+        if CCTV_FOLLOW_TARGET:
+            follow_thread = threading.Thread(target=cctv_follow_loop, daemon=True)
+            follow_thread.start()
+            print(f"[SERVER] CCTV follow mode active — tracking '{CCTV_FOLLOW_TARGET}'")
 
         print("[SERVER] Backend server started successfully")
     else:
