@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ArrowLeft, Circle, Trash2 } from 'lucide-react';
+import { ArrowLeft, Circle, Trash2, Scan, Loader2 } from 'lucide-react';
 import { PolygonCanvas } from './PolygonCanvas';
 import type { Feed, Zone, ZoneLevel } from '../types';
 
@@ -7,13 +7,28 @@ interface EditFeedPageProps {
   feed: Feed;
   onSave: (zones: Zone[]) => void;
   onCancel: () => void;
+  onAutoSegment?: () => Promise<Zone[] | null>;
 }
 
 type ToolType = ZoneLevel | 'delete' | null;
 
-export function EditFeedPage({ feed, onSave, onCancel }: EditFeedPageProps) {
+export function EditFeedPage({ feed, onSave, onCancel, onAutoSegment }: EditFeedPageProps) {
   const [zones, setZones] = useState<Zone[]>(feed.zones);
   const [activeTool, setActiveTool] = useState<ToolType>(null);
+  const [isAutoSegmenting, setIsAutoSegmenting] = useState(false);
+
+  const handleAutoSegment = async () => {
+    if (!onAutoSegment) return;
+    setIsAutoSegmenting(true);
+    try {
+      const newZones = await onAutoSegment();
+      if (newZones) {
+        setZones(newZones);
+      }
+    } finally {
+      setIsAutoSegmenting(false);
+    }
+  };
 
   const handleToolClick = (tool: ToolType) => {
     setActiveTool((current) => (current === tool ? null : tool));
@@ -73,6 +88,23 @@ export function EditFeedPage({ feed, onSave, onCancel }: EditFeedPageProps) {
 
       {/* Main Content */}
       <main className="flex-1 p-6 flex flex-col gap-4 overflow-hidden">
+        {/* Auto-segmentation info banner */}
+        {feed.sceneType === 'ship' && (
+          <div className="flex items-center gap-2 px-4 py-2 rounded border border-[var(--accent-cyan-dim)] bg-[var(--accent-cyan-glow)]">
+            <div className="w-1.5 h-1.5 rounded-full bg-[var(--accent-cyan)] animate-pulse" />
+            <span className="text-xs font-mono text-[var(--accent-cyan)]">
+              Ship feed — Zones auto-update every 60s. Manual edits will be overwritten.
+            </span>
+          </div>
+        )}
+        {(feed.sceneType === 'railway' || feed.sceneType === 'bridge') && (
+          <div className="flex items-center gap-2 px-4 py-2 rounded border border-[var(--border-dim)] bg-[var(--bg-tertiary)]">
+            <span className="text-xs font-mono text-[var(--text-secondary)]">
+              {feed.sceneType.charAt(0).toUpperCase() + feed.sceneType.slice(1)} feed — Auto-segmented on startup. Manual edits will persist.
+            </span>
+          </div>
+        )}
+
         {/* Canvas Container */}
         <div className="flex-1 min-h-0 relative rounded-lg overflow-hidden border border-[var(--border-dim)] corner-brackets">
           <PolygonCanvas
@@ -130,6 +162,31 @@ export function EditFeedPage({ feed, onSave, onCancel }: EditFeedPageProps) {
               >
                 <Trash2 size={18} />
               </button>
+
+              {/* Auto Segment Button */}
+              {feed.sceneType && onAutoSegment && (
+                <>
+                  <div className="h-6 w-px bg-[var(--border-dim)] mx-2" />
+                  <button
+                    onClick={handleAutoSegment}
+                    disabled={isAutoSegmenting}
+                    className="flex items-center gap-2 px-3 py-1.5 rounded border border-[var(--accent-cyan-dim)] text-[var(--accent-cyan)] hover:bg-[var(--accent-cyan-glow)] transition-all disabled:opacity-50"
+                    title={`Auto-detect ${feed.sceneType} hazard zones`}
+                  >
+                    {isAutoSegmenting ? (
+                      <>
+                        <Loader2 size={16} className="animate-spin" />
+                        <span className="text-xs font-mono">Segmenting...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Scan size={16} />
+                        <span className="text-xs font-mono">Auto Segment</span>
+                      </>
+                    )}
+                  </button>
+                </>
+              )}
             </div>
 
             {/* Tool descriptions */}

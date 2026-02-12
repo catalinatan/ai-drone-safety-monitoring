@@ -53,6 +53,8 @@ from src.backend.config import (
     DRONE_API_URL, DRONE_API_TIMEOUT,
     DATA_DIR, ZONES_FILE,
     BACKEND_PORT,
+    FEED_SCENE_TYPE, SEG_MODEL_PATHS,
+    AUTO_SEG_INTERVAL, AUTO_SEG_CONFIDENCE,
 )
 
 # --- DETECTION MODULES (optional — graceful fallback) ---
@@ -65,6 +67,14 @@ try:
 except ImportError as e:
     print(f"[WARNING] Detection modules not available: {e}")
     DETECTION_AVAILABLE = False
+
+# --- AUTO-SEGMENTATION MODULE (optional) ---
+try:
+    from src.backend.auto_segmentation import SceneSegmenter
+    AUTO_SEG_AVAILABLE = True
+except ImportError as e:
+    print(f"[WARNING] Auto-segmentation module not available: {e}")
+    AUTO_SEG_AVAILABLE = False
 
 # ============================================================================
 # PERSISTENCE FUNCTIONS
@@ -224,6 +234,11 @@ class FeedState:
     last_frame: Optional[np.ndarray] = None
     last_detection_time: Optional[datetime] = None
     lock: threading.Lock = field(default_factory=threading.Lock)
+    # Auto-segmentation fields
+    scene_type: Optional[str] = None          # "ship", "railway", "bridge", or None
+    auto_seg_active: bool = False             # Whether auto-seg is running for this feed
+    manual_zones_set: bool = False            # True if user has manually edited zones (for railway/bridge)
+    last_auto_seg_time: float = 0.0           # Timestamp of last auto-seg run
 
 class FeedManager:
     """Manages all feed states."""
@@ -239,6 +254,7 @@ class FeedManager:
         self.running = False
         self._init_lock = threading.Lock()
         self._airsim_lock = threading.Lock()
+        self.segmenter: Optional[SceneSegmenter] = None if AUTO_SEG_AVAILABLE else None
 
     def initialize(self):
         """Initialize AirSim connection and models."""
@@ -264,8 +280,23 @@ class FeedManager:
                         location=metadata["location"]
                     )
 
+                # Set scene type per feed from config
+                for feed_id_key in self.feeds:
+                    self.feeds[feed_id_key].scene_type = FEED_SCENE_TYPE.get(feed_id_key)
+
                 # Load persisted zones
                 self._load_persisted_zones()
+
+                # Load auto-segmentation models if available
+                if AUTO_SEG_AVAILABLE:
+                    needed_types = set(t for t in FEED_SCENE_TYPE.values() if t)
+                    needed_paths = {t: SEG_MODEL_PATHS[t] for t in needed_types if t in SEG_MODEL_PATHS}
+                    if needed_paths:
+                        print("[INIT] Loading scene segmentation models...")
+                        self.segmenter = SceneSegmenter(needed_paths, confidence=AUTO_SEG_CONFIDENCE)
+                        print(f"[INIT] Loaded {len(self.segmenter.models)} segmentation model(s)")
+                    else:
+                        print("[INIT] No segmentation model paths configured")
 
                 # Load detection models if available
                 if DETECTION_AVAILABLE:
@@ -708,6 +739,43 @@ class FeedManager:
                 last_detection_time=feed.last_detection_time.isoformat() if feed.last_detection_time else None
             )
 
+    def run_auto_segmentation(self, feed_id: str) -> List[Zone]:
+        """Run auto-segmentation on a feed's current frame and update zones.
+
+        Returns the list of auto-generated Zone objects (empty if no detections).
+        """
+        if feed_id not in self.feeds:
+            return []
+
+        feed = self.feeds[feed_id]
+
+        if not feed.scene_type or self.segmenter is None:
+            return []
+
+        # Get current cached frame
+        with feed.lock:
+            frame = feed.last_frame.copy() if feed.last_frame is not None else None
+
+        if frame is None:
+            return []
+
+        # Run segmentation
+        zone_dicts = self.segmenter.segment_frame(frame, feed.scene_type)
+
+        if not zone_dicts:
+            print(f"[AUTO-SEG] No hazard zones detected in {feed_id}")
+            return []
+
+        # Convert dicts to Zone objects
+        zones = [Zone(**z) for z in zone_dicts]
+
+        # Apply zones (generates binary masks and persists to file)
+        self.update_zones(feed_id, zones, frame.shape[1], frame.shape[0])
+        feed.last_auto_seg_time = time.time()
+
+        print(f"[AUTO-SEG] {feed_id} ({feed.scene_type}): Generated {len(zones)} zone(s)")
+        return zones
+
 # Global feed manager
 feed_manager = FeedManager()
 
@@ -774,6 +842,58 @@ def detection_loop():
 
     print("[DETECTION] Detection loop stopped")
 
+
+def auto_segmentation_loop():
+    """Background thread for periodic auto-segmentation.
+
+    - Ship feeds: Re-segment every AUTO_SEG_INTERVAL seconds, overwriting all zones.
+    - Railway/Bridge feeds: Segment once on first frame, respect manual edits after that.
+    """
+    print(f"[AUTO-SEG] Starting auto-segmentation loop (ship interval: {AUTO_SEG_INTERVAL}s)...")
+
+    # Wait for initial frames to be captured
+    time.sleep(5.0)
+
+    # Track which railway/bridge feeds have had their initial segmentation
+    initial_seg_done: set = set()
+
+    while feed_manager.running:
+        if feed_manager.segmenter is None:
+            time.sleep(5.0)
+            continue
+
+        for feed_id, feed in feed_manager.feeds.items():
+            if not feed_manager.running:
+                break
+
+            if not feed.scene_type:
+                continue
+
+            try:
+                if feed.scene_type == "ship":
+                    # Ship: re-segment every AUTO_SEG_INTERVAL, always overwrite
+                    current_time = time.time()
+                    if current_time - feed.last_auto_seg_time >= AUTO_SEG_INTERVAL:
+                        feed.auto_seg_active = True
+                        feed_manager.run_auto_segmentation(feed_id)
+
+                elif feed.scene_type in ("railway", "bridge"):
+                    # Railway/Bridge: segment once initially, skip if user has set manual zones
+                    if feed_id not in initial_seg_done and not feed.manual_zones_set:
+                        with feed.lock:
+                            has_frame = feed.last_frame is not None
+                        if has_frame:
+                            feed_manager.run_auto_segmentation(feed_id)
+                            initial_seg_done.add(feed_id)
+                            print(f"[AUTO-SEG] Initial segmentation done for {feed_id} ({feed.scene_type})")
+
+            except Exception as e:
+                print(f"[AUTO-SEG] Error processing {feed_id}: {e}")
+
+        time.sleep(5.0)  # Poll interval (actual auto-seg interval enforced per-feed)
+
+    print("[AUTO-SEG] Auto-segmentation loop stopped")
+
 # ============================================================================
 # FASTAPI APPLICATION
 # ============================================================================
@@ -792,6 +912,12 @@ async def lifespan(app: FastAPI):
         # Start detection thread (lower FPS, CPU/GPU intensive)
         detection_thread = threading.Thread(target=detection_loop, daemon=True)
         detection_thread.start()
+
+        # Start auto-segmentation thread (periodic scene segmentation)
+        if feed_manager.segmenter is not None:
+            auto_seg_thread = threading.Thread(target=auto_segmentation_loop, daemon=True)
+            auto_seg_thread.start()
+            print("[SERVER] Auto-segmentation thread started")
 
         print("[SERVER] Backend server started successfully")
     else:
@@ -841,7 +967,9 @@ async def list_feeds():
             "imageSrc": f"http://localhost:{BACKEND_PORT}/video_feed/{feed_id}",
             "zones": [z.model_dump() for z in feed.zones],
             "isLive": True,
-            "status": status.model_dump()
+            "status": status.model_dump(),
+            "sceneType": feed.scene_type,
+            "autoSegActive": feed.auto_seg_active,
         })
     return {"feeds": feeds}
 
@@ -933,6 +1061,13 @@ async def update_zones(feed_id: str, request: ZonesUpdateRequest):
         raise HTTPException(status_code=404, detail=f"Feed {feed_id} not found")
 
     try:
+        feed = feed_manager.feeds[feed_id]
+
+        # Track manual edits: for railway/bridge this prevents auto-seg from overwriting
+        # For ship feeds, manual_zones_set stays False (ship always auto-overwrites)
+        if feed.scene_type not in ("ship",):
+            feed.manual_zones_set = True
+
         # Try to get frame dimensions for immediate mask generation
         frame = feed_manager.get_frame(feed_id)
         if frame is not None:
@@ -952,6 +1087,38 @@ async def update_zones(feed_id: str, request: ZonesUpdateRequest):
         return {"status": "success", "zones_count": len(request.zones)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/feeds/{feed_id}/auto-segment")
+async def trigger_auto_segment(feed_id: str):
+    """Trigger on-demand auto-segmentation for a feed."""
+    if feed_id not in feed_manager.feeds:
+        raise HTTPException(status_code=404, detail=f"Feed {feed_id} not found")
+
+    feed = feed_manager.feeds[feed_id]
+
+    if not feed.scene_type:
+        raise HTTPException(status_code=400, detail=f"No scene type configured for {feed_id}")
+
+    if feed_manager.segmenter is None:
+        raise HTTPException(status_code=503, detail="Segmentation models not loaded")
+
+    try:
+        zones = feed_manager.run_auto_segmentation(feed_id)
+
+        # For railway/bridge, reset manual flag since user explicitly requested auto-seg
+        if feed.scene_type in ("railway", "bridge"):
+            feed.manual_zones_set = False
+
+        return {
+            "status": "success",
+            "zones_count": len(zones),
+            "scene_type": feed.scene_type,
+            "zones": [z.model_dump() for z in zones],
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 # ============================================================================
 # MAIN ENTRY POINT

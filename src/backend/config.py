@@ -96,3 +96,35 @@ FEED_METADATA = {
     "cctv-3": {"name": "CCTV CAM 3", "location": "Aerial Overview"},
     "cctv-4": {"name": "CCTV CAM 4", "location": "Aerial Overview"},
 }
+
+# ============================================================================
+# SCENE TYPE PER FEED
+# ============================================================================
+
+# Maps each feed to a scene type for auto-segmentation: "ship", "railway", "bridge", or None
+FEED_SCENE_TYPE = {
+    "cctv-1": "ship",
+    "cctv-2": "ship",
+    "cctv-3": "ship",
+    "cctv-4": "ship",
+}
+
+# ============================================================================
+# AUTO-SEGMENTATION
+# ============================================================================
+
+# YOLO segmentation model paths (per scene type)
+SEG_MODEL_PATHS = {
+    "railway": os.path.join(_REPO_ROOT, "runs", "segment", "runs", "segment", "railway_hazard", "weights", "best.pt"),
+    "ship": os.path.join(_REPO_ROOT, "runs", "segment", "runs", "segment", "ship_hazard", "weights", "best.pt"),
+    "bridge": os.path.join(_REPO_ROOT, "runs", "segment", "runs", "segment", "bridge_hazard", "weights", "best.pt"),
+}
+
+# How often to re-run auto-segmentation for ship feeds (seconds)
+AUTO_SEG_INTERVAL = float(os.getenv("AUTO_SEG_INTERVAL", "60.0"))
+
+# YOLO segmentation confidence threshold
+AUTO_SEG_CONFIDENCE = float(os.getenv("AUTO_SEG_CONFIDENCE", "0.5"))
+
+# Polygon simplification epsilon for cv2.approxPolyDP (higher = fewer points)
+AUTO_SEG_SIMPLIFY_EPSILON = float(os.getenv("AUTO_SEG_SIMPLIFY_EPSILON", "2.0"))

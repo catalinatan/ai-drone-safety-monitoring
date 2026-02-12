@@ -36,6 +36,8 @@ export interface Feed {
   zones: Zone[];
   isLive?: boolean;
   status?: DetectionStatus;
+  sceneType?: 'ship' | 'railway' | 'bridge' | null;
+  autoSegActive?: boolean;
 }
 
 export type ViewState =

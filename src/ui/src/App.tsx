@@ -26,9 +26,15 @@ function App() {
           setFeeds((prevFeeds) =>
             prevFeeds.map((feed) => {
               const backendFeed = data.feeds?.find((f: Feed) => f.id === feed.id);
-              if (backendFeed && backendFeed.zones?.length > 0) {
-                console.log(`[INIT] Loaded ${backendFeed.zones.length} zones for ${feed.id}`);
-                return { ...feed, zones: backendFeed.zones };
+              if (backendFeed) {
+                const updated = { ...feed };
+                if (backendFeed.zones?.length > 0) {
+                  console.log(`[INIT] Loaded ${backendFeed.zones.length} zones for ${feed.id}`);
+                  updated.zones = backendFeed.zones;
+                }
+                if (backendFeed.sceneType) updated.sceneType = backendFeed.sceneType;
+                if (backendFeed.autoSegActive != null) updated.autoSegActive = backendFeed.autoSegActive;
+                return updated;
               }
               return feed;
             })
@@ -87,6 +93,31 @@ function App() {
     setCommandViewState({ type: 'command' });
   }, []);
 
+  const handleAutoSegment = useCallback(async (feedId: string): Promise<Zone[] | null> => {
+    try {
+      const response = await fetch(`${BACKEND_URL}/feeds/${feedId}/auto-segment`, {
+        method: 'POST',
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        console.log(`[AUTO-SEG] Generated ${data.zones_count} zones for ${feedId}`);
+
+        if (data.zones) {
+          setFeeds((prev) =>
+            prev.map((feed) => (feed.id === feedId ? { ...feed, zones: data.zones } : feed))
+          );
+          return data.zones;
+        }
+      } else {
+        console.error(`[AUTO-SEG] Failed for ${feedId}`);
+      }
+    } catch (error) {
+      console.error(`[AUTO-SEG] Error for ${feedId}:`, error);
+    }
+    return null;
+  }, []);
+
   // Render Command Center views
   const renderCommandCenter = () => {
     switch (commandViewState.type) {
@@ -101,6 +132,7 @@ function App() {
             feed={feed}
             onSave={(zones) => handleSaveZones(feed.id, zones)}
             onCancel={handleBackToCommand}
+            onAutoSegment={() => handleAutoSegment(feed.id)}
           />
         );
       }
