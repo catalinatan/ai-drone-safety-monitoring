@@ -60,15 +60,23 @@ from src.backend.config import (
 )
 
 # --- DETECTION MODULES (optional — graceful fallback) ---
+# Human detection (YOLO) and depth estimation are imported separately so that
+# a failure in one does not disable the other.
 try:
-    from src.cctv_monitoring import depth_estimation_utils, coord_utils
     from src.human_detection.detector import HumanDetector
     from src.human_detection.check_overlap import check_danger_zone_overlap
     import src.human_detection.config as config
     DETECTION_AVAILABLE = True
 except ImportError as e:
-    print(f"[WARNING] Detection modules not available: {e}")
+    print(f"[WARNING] Human detection modules not available: {e}")
     DETECTION_AVAILABLE = False
+
+try:
+    from src.cctv_monitoring import depth_estimation_utils, coord_utils
+    DEPTH_AVAILABLE = True
+except ImportError as e:
+    print(f"[WARNING] Depth estimation modules not available: {e}")
+    DEPTH_AVAILABLE = False
 
 # --- AUTO-SEGMENTATION MODULE (optional) ---
 try:
@@ -300,11 +308,15 @@ class FeedManager:
                     else:
                         print("[INIT] No segmentation model paths configured")
 
-                # Load detection models if available
+                # Load human detection model if available
                 if DETECTION_AVAILABLE:
                     print("[INIT] Loading YOLO model...")
                     self.detector = HumanDetector()
+                else:
+                    print("[INIT] Human detection not available (import failed)")
 
+                # Load depth model if available (independent of human detection)
+                if DEPTH_AVAILABLE:
                     if os.path.exists(ENCODER_PATH) and os.path.exists(DECODER_PATH):
                         print("[INIT] Loading depth model...")
                         self.depth_model = depth_estimation_utils.load_lite_mono_model(
@@ -312,6 +324,8 @@ class FeedManager:
                         )
                     else:
                         print("[INIT] Depth model weights not found, coordinate estimation disabled")
+                else:
+                    print("[INIT] Depth estimation not available (import failed)")
 
                 # Connect to drone API
                 print("[INIT] Connecting to drone API...")
@@ -1021,7 +1035,7 @@ async def health_check():
         "status": "healthy",
         "airsim_connected": feed_manager.client is not None,
         "detection_available": DETECTION_AVAILABLE and feed_manager.detector is not None,
-        "depth_available": feed_manager.depth_model is not None,
+        "depth_available": DEPTH_AVAILABLE and feed_manager.depth_model is not None,
         "drone_api_connected": feed_manager.drone_api is not None,
         "drone_navigating": feed_manager.drone_is_navigating,
         "feeds_count": len(feed_manager.feeds)

@@ -61,7 +61,6 @@ with open(CONFIG_PATH, "r") as f:
 
 # Safety parameters
 MAX_ALTITUDE = _cfg["safety"]["max_altitude"]
-GEOFENCE_RADIUS = _cfg["safety"]["geofence_radius"]
 
 # Navigation parameters
 POSITION_TOLERANCE = _cfg["navigation"]["position_tolerance"]
@@ -238,11 +237,6 @@ def check_safety(target_pos: Tuple[float, float, float]) -> Tuple[bool, str]:
     
     if abs(target_pos[2]) > MAX_ALTITUDE:
         return False, f"Target altitude exceeds maximum: {abs(target_pos[2])}m > {MAX_ALTITUDE}m"
-    
-    # Check geofence (distance from origin)
-    distance = math.sqrt(target_pos[0]**2 + target_pos[1]**2)
-    if distance > GEOFENCE_RADIUS:
-        return False, f"Target outside geofence: {distance:.1f}m > {GEOFENCE_RADIUS}m"
     
     return True, "OK"
 

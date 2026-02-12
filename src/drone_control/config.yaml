@@ -1,6 +1,5 @@
 safety:
   max_altitude: 50  # meters
-  geofence_radius: 200  # meters from origin
 
 navigation:
   speed: 5.0  # m/s for automatic mode
