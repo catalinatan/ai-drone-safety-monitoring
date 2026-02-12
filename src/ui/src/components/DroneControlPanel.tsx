@@ -408,9 +408,9 @@ export function DroneControlPanel() {
             <span className="text-xs font-bold font-mono text-[var(--accent-cyan)] uppercase tracking-widest">Drone Control</span>
           </div>
 
-          {/* Auto-flight warning - inside the control container */}
+          {/* Auto-flight warning - centered above Flight Mode */}
           {isAutomatic && (
-            <div className="absolute -top-3 right-6 flex items-center gap-2 px-3 py-1 rounded-md bg-[var(--bg-primary)] border border-[var(--zone-yellow)] animate-pulse">
+            <div className="absolute -top-3 left-1/2 -translate-x-1/2 flex items-center gap-2 px-3 py-1 rounded-md bg-[var(--bg-primary)] border border-[var(--zone-yellow)] animate-pulse whitespace-nowrap">
               <AlertTriangle size={12} className="text-[var(--zone-yellow)]" />
               <span className="text-xs font-bold font-mono text-[var(--zone-yellow)]">
                 Manual controls disabled during auto flight
@@ -451,6 +451,7 @@ export function DroneControlPanel() {
                 onPress={() => handleControlPress('forward')}
                 onRelease={() => handleControlRelease('forward')}
                 label="W"
+                labelPosition="above"
               />
 
               <div className="flex gap-2">
@@ -553,6 +554,7 @@ export function DroneControlPanel() {
                 onRelease={() => handleControlRelease('up')}
                 label="Z"
                 variant="altitude"
+                labelPosition="above"
               />
 
               <ControlButton
@@ -611,6 +613,7 @@ interface ControlButtonProps {
   onRelease: () => void;
   label: string;
   variant?: 'movement' | 'altitude';
+  labelPosition?: 'above' | 'below';
 }
 
 function ControlButton({
@@ -621,6 +624,7 @@ function ControlButton({
   onRelease,
   label,
   variant = 'movement',
+  labelPosition = 'below',
 }: ControlButtonProps) {
   const baseColor = variant === 'altitude' ? 'var(--zone-green)' : 'var(--accent-cyan)';
 
@@ -656,7 +660,7 @@ function ControlButton({
       }
     >
       {icon}
-      <span className="absolute -bottom-5 text-[9px] font-mono text-white/60">{label}</span>
+      <span className={`absolute text-[9px] font-mono text-white/60 ${labelPosition === 'above' ? '-top-5' : '-bottom-5'}`}>{label}</span>
     </button>
   );
 }

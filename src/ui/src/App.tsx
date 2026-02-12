@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { AppNav, type AppView } from './components/AppNav';
 import { CommandPanel } from './components/CommandPanel';
 import { EditFeedPage } from './components/EditFeedPage';
@@ -46,6 +46,37 @@ function App() {
     };
 
     loadZones();
+  }, []);
+
+  // Poll for zone updates from backend auto-segmentation (every 30s)
+  // Skip polling while the user is editing zones to avoid overwriting their work
+  const commandViewStateRef = useRef(commandViewState);
+  commandViewStateRef.current = commandViewState;
+
+  useEffect(() => {
+    const pollZones = async () => {
+      // Don't overwrite zones while user is editing
+      if (commandViewStateRef.current.type === 'edit') return;
+      try {
+        const response = await fetch(`${BACKEND_URL}/feeds`);
+        if (!response.ok) return;
+        const data = await response.json();
+        setFeeds((prevFeeds) =>
+          prevFeeds.map((feed) => {
+            const backendFeed = data.feeds?.find((f: Feed) => f.id === feed.id);
+            if (backendFeed?.zones?.length > 0) {
+              return { ...feed, zones: backendFeed.zones };
+            }
+            return feed;
+          })
+        );
+      } catch {
+        // Backend unavailable, skip this poll
+      }
+    };
+
+    const interval = setInterval(pollZones, 30_000);
+    return () => clearInterval(interval);
   }, []);
 
   const getCurrentFeed = useCallback(

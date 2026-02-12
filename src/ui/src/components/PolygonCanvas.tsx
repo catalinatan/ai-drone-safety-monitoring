@@ -9,6 +9,13 @@ interface PolygonCanvasProps {
   readOnly?: boolean;
 }
 
+interface ImgRect {
+  top: number;
+  left: number;
+  width: number;
+  height: number;
+}
+
 const ZONE_COLORS: Record<ZoneLevel, { stroke: string; fill: string }> = {
   red: { stroke: '#ff3b5c', fill: 'rgba(255, 59, 92, 0.25)' },
   yellow: { stroke: '#ffc107', fill: 'rgba(255, 193, 7, 0.25)' },
@@ -27,11 +34,31 @@ export function PolygonCanvas({
   const [currentPoints, setCurrentPoints] = useState<Point[]>([]);
   const [selectedZoneId, setSelectedZoneId] = useState<string | null>(null);
   const [imageLoaded, setImageLoaded] = useState(false);
+  const [imgRect, setImgRect] = useState<ImgRect | null>(null);
 
-  // Handle image load to trigger re-render
-  const handleImageLoad = useCallback(() => {
-    setImageLoaded(true);
+  // Measure the rendered image rect relative to the container
+  const updateImgRect = useCallback(() => {
+    const img = imageRef.current;
+    const container = containerRef.current;
+    if (!img || !container) return;
+
+    const imgBounds = img.getBoundingClientRect();
+    const containerBounds = container.getBoundingClientRect();
+
+    setImgRect({
+      top: imgBounds.top - containerBounds.top,
+      left: imgBounds.left - containerBounds.left,
+      width: imgBounds.width,
+      height: imgBounds.height,
+    });
   }, []);
+
+  // Re-measure on window resize
+  useEffect(() => {
+    if (!imageLoaded) return;
+    window.addEventListener('resize', updateImgRect);
+    return () => window.removeEventListener('resize', updateImgRect);
+  }, [imageLoaded, updateImgRect]);
 
   // Get relative coordinates from mouse event using the image's bounding rect
   const getRelativeCoords = useCallback(
@@ -148,25 +175,32 @@ export function PolygonCanvas({
       onClick={handleClick}
       onDoubleClick={handleDoubleClick}
     >
-      {/* Inner wrapper sizes to the image so SVG overlay aligns exactly */}
-      <div className="relative max-w-full max-h-full inline-block">
-        {/* Background Image */}
-        <img
-          ref={imageRef}
-          src={imageSrc}
-          alt="Feed"
-          className="block max-w-full max-h-full"
-          onLoad={handleImageLoad}
-          draggable={false}
-        />
+      {/* Background Image */}
+      <img
+        ref={imageRef}
+        src={imageSrc}
+        alt="Feed"
+        className="w-full h-full object-contain"
+        onLoad={() => {
+          setImageLoaded(true);
+          updateImgRect();
+        }}
+        draggable={false}
+      />
 
-        {/* SVG Overlay for zones */}
-        {imageLoaded && (
-          <svg
-            className="absolute inset-0 w-full h-full pointer-events-none"
-            viewBox="0 0 100 100"
-            preserveAspectRatio="none"
-          >
+      {/* SVG Overlay for zones — positioned to match the rendered image bounds */}
+      {imageLoaded && imgRect && (
+        <svg
+          className="absolute pointer-events-none"
+          style={{
+            top: imgRect.top,
+            left: imgRect.left,
+            width: imgRect.width,
+            height: imgRect.height,
+          }}
+          viewBox="0 0 100 100"
+          preserveAspectRatio="none"
+        >
           {/* Completed zones */}
           {zones.map((zone) => {
             const colors = ZONE_COLORS[zone.level];
@@ -242,22 +276,21 @@ export function PolygonCanvas({
         </svg>
       )}
 
-        {/* Scanline overlay */}
-        <div className="absolute inset-0 scanlines pointer-events-none" />
+      {/* Scanline overlay */}
+      <div className="absolute inset-0 scanlines pointer-events-none" />
 
-        {/* Drawing instructions */}
-        {!readOnly && activeTool && activeTool !== 'delete' && currentPoints.length === 0 && (
-          <div className="absolute bottom-3 left-3 px-2 py-1 rounded text-xs font-mono bg-[var(--bg-primary)]/80 border border-[var(--border-dim)] text-[var(--text-secondary)]">
-            Click to place points • Double-click or click first point to close
-          </div>
-        )}
+      {/* Drawing instructions */}
+      {!readOnly && activeTool && activeTool !== 'delete' && currentPoints.length === 0 && (
+        <div className="absolute bottom-3 left-3 px-2 py-1 rounded text-xs font-mono bg-[var(--bg-primary)]/80 border border-[var(--border-dim)] text-[var(--text-secondary)]">
+          Click to place points • Double-click or click first point to close
+        </div>
+      )}
 
-        {currentPoints.length > 0 && (
-          <div className="absolute bottom-3 left-3 px-2 py-1 rounded text-xs font-mono bg-[var(--bg-primary)]/80 border border-[var(--border-dim)] text-[var(--accent-cyan)]">
-            Points: {currentPoints.length} • ESC to cancel
-          </div>
-        )}
-      </div>
+      {currentPoints.length > 0 && (
+        <div className="absolute bottom-3 left-3 px-2 py-1 rounded text-xs font-mono bg-[var(--bg-primary)]/80 border border-[var(--border-dim)] text-[var(--accent-cyan)]">
+          Points: {currentPoints.length} • ESC to cancel
+        </div>
+      )}
     </div>
   );
 }

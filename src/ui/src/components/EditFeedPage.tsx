@@ -16,14 +16,19 @@ export function EditFeedPage({ feed, onSave, onCancel, onAutoSegment }: EditFeed
   const [zones, setZones] = useState<Zone[]>(feed.zones);
   const [activeTool, setActiveTool] = useState<ToolType>(null);
   const [isAutoSegmenting, setIsAutoSegmenting] = useState(false);
+  const [autoSegFailed, setAutoSegFailed] = useState(false);
 
   const handleAutoSegment = async () => {
     if (!onAutoSegment) return;
     setIsAutoSegmenting(true);
+    setAutoSegFailed(false);
     try {
       const newZones = await onAutoSegment();
       if (newZones) {
         setZones(newZones);
+      } else {
+        setAutoSegFailed(true);
+        setTimeout(() => setAutoSegFailed(false), 2000);
       }
     } finally {
       setIsAutoSegmenting(false);
@@ -106,15 +111,13 @@ export function EditFeedPage({ feed, onSave, onCancel, onAutoSegment }: EditFeed
         )}
 
         {/* Canvas Container */}
-        <div className="flex-1 min-h-0 relative rounded-lg overflow-hidden border border-[var(--border-dim)] corner-brackets">
-          <div className="absolute inset-0 flex items-center justify-center bg-[var(--bg-card)]">
-            <PolygonCanvas
-              imageSrc={feed.imageSrc}
-              zones={zones}
-              onZonesChange={setZones}
-              activeTool={activeTool}
-            />
-          </div>
+        <div className="flex-1 min-h-0 rounded-lg overflow-hidden border border-[var(--border-dim)] corner-brackets bg-[var(--bg-card)]">
+          <PolygonCanvas
+            imageSrc={feed.imageSrc}
+            zones={zones}
+            onZonesChange={setZones}
+            activeTool={activeTool}
+          />
         </div>
 
         {/* Tools Bar */}
@@ -179,6 +182,11 @@ export function EditFeedPage({ feed, onSave, onCancel, onAutoSegment }: EditFeed
                       <>
                         <Loader2 size={16} className="animate-spin" />
                         <span className="text-xs font-mono">Segmenting...</span>
+                      </>
+                    ) : autoSegFailed ? (
+                      <>
+                        <Scan size={16} />
+                        <span className="text-xs font-mono text-[var(--zone-red)]">Failed</span>
                       </>
                     ) : (
                       <>

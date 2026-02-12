@@ -31,6 +31,7 @@ import json
 import numpy as np
 import os
 import requests
+import queue
 import threading
 import time
 from datetime import datetime
@@ -264,6 +265,7 @@ class FeedManager:
         self.running = False
         self._init_lock = threading.Lock()
         self._airsim_lock = threading.Lock()
+        self._depth_queue: queue.Queue = queue.Queue(maxsize=4)
         self.segmenter: Optional[SceneSegmenter] = None if AUTO_SEG_AVAILABLE else None
 
     def initialize(self):
@@ -506,6 +508,14 @@ class FeedManager:
         # Regenerate masks if needed (e.g., after server restart)
         self._regenerate_masks_if_needed(feed_id, frame.shape[1], frame.shape[0])
 
+        # Snapshot masks under lock so detection uses a stable copy even if
+        # the API thread clears them (TOCTOU race fix).
+        with feed.lock:
+            red_zone_mask = (feed.red_zone_mask.copy()
+                            if feed.red_zone_mask is not None else None)
+            yellow_zone_mask = (feed.yellow_zone_mask.copy()
+                                if feed.yellow_zone_mask is not None else None)
+
         if self.detector is None:
             return self._get_status(feed)
 
@@ -525,77 +535,54 @@ class FeedManager:
 
                 if len(person_masks) > 0:
                     # Check RED zone overlap (alarm + drone deployment)
-                    if feed.red_zone_mask is not None:
+                    # Uses local red_zone_mask snapshot (not feed.red_zone_mask)
+                    if red_zone_mask is not None:
                         # Ensure mask matches frame dimensions
-                        red_mask = feed.red_zone_mask
+                        red_mask = red_zone_mask
                         if red_mask.shape != frame.shape[:2]:
                             red_mask = cv2.resize(
                                 red_mask,
                                 (frame.shape[1], frame.shape[0]),
                                 interpolation=cv2.INTER_NEAREST
                             )
-                            feed.red_zone_mask = red_mask
 
                         is_alarm, danger_masks = check_danger_zone_overlap(person_masks, red_mask)
                         feed.alarm_active = is_alarm
                         feed.danger_count = len(danger_masks)
 
-                        # Calculate coordinates ONLY for RED zone intrusions
+                        # Enqueue depth + drone work (async — doesn't block detection)
                         if is_alarm and len(danger_masks) > 0 and self.depth_model is not None:
                             target_mask = danger_masks[0]
                             feet_pixel = coord_utils.get_feet_from_mask(target_mask)
-
                             if feet_pixel is not None:
-                                cx, cy = feet_pixel
-
-                                # Run depth inference
-                                ai_depth_map = depth_estimation_utils.run_lite_mono_inference(
-                                    self.depth_model, frame
-                                )
-                                rel_depth = ai_depth_map[cy, cx]
-
-                                # Convert to world coordinates (AirSim call needs lock)
-                                with self._airsim_lock:
-                                    target_pos = coord_utils.get_coords_from_lite_mono(
-                                        self.client, feed.camera_name, cx, cy,
-                                        frame.shape[1], frame.shape[0],
-                                        rel_depth, CCTV_HEIGHT, feed.vehicle_name
-                                    )
-
-                                feed.target_coordinates = (
-                                    target_pos.x_val,
-                                    target_pos.y_val,
-                                    SAFE_Z_ALTITUDE
-                                )
-
-                        # Deploy drone for RED zone intrusion
-                        if feed.alarm_active and feed.target_coordinates and self.drone_api is not None:
-                            current_time = time.time()
-                            if current_time - self.last_deployment_time > ALARM_COOLDOWN and not self.drone_is_navigating:
-                                tx, ty, tz = feed.target_coordinates
-                                print(f"[DRONE] Deploying to ({tx:.2f}, {ty:.2f}, {tz:.2f}) for {feed_id}")
-                                if self.drone_api.goto_position(tx, ty, tz):
-                                    self.last_deployment_time = current_time
-                                    self.drone_is_navigating = True
-                                    print(f"[DRONE] Deployment command sent successfully")
-                                else:
-                                    print(f"[DRONE] Deployment command failed")
+                                try:
+                                    job = (feed_id, frame.copy(), feet_pixel)
+                                    self._depth_queue.put_nowait(job)
+                                except queue.Full:
+                                    pass  # drop — next cycle will retry
 
                     # Check YELLOW zone overlap (caution alert only - NO drone)
-                    if feed.yellow_zone_mask is not None:
-                        yellow_mask = feed.yellow_zone_mask
-                        if yellow_mask.shape != frame.shape[:2]:
-                            yellow_mask = cv2.resize(
-                                yellow_mask,
+                    # Uses local yellow_zone_mask snapshot (not feed.yellow_zone_mask)
+                    if yellow_zone_mask is not None:
+                        y_mask = yellow_zone_mask
+                        if y_mask.shape != frame.shape[:2]:
+                            y_mask = cv2.resize(
+                                y_mask,
                                 (frame.shape[1], frame.shape[0]),
                                 interpolation=cv2.INTER_NEAREST
                             )
-                            feed.yellow_zone_mask = yellow_mask
 
                         # Subtract red zone so red always takes priority over yellow
-                        effective_yellow = yellow_mask
-                        if feed.red_zone_mask is not None and feed.red_zone_mask.shape == yellow_mask.shape:
-                            effective_yellow = yellow_mask & (~feed.red_zone_mask)
+                        effective_yellow = y_mask
+                        if red_zone_mask is not None:
+                            red_for_subtract = red_zone_mask
+                            if red_for_subtract.shape != y_mask.shape:
+                                red_for_subtract = cv2.resize(
+                                    red_for_subtract,
+                                    (y_mask.shape[1], y_mask.shape[0]),
+                                    interpolation=cv2.INTER_NEAREST
+                                )
+                            effective_yellow = y_mask & (~red_for_subtract)
 
                         is_caution, caution_masks = check_danger_zone_overlap(person_masks, effective_yellow)
                         feed.caution_active = is_caution
@@ -622,9 +609,15 @@ class FeedManager:
 
         feed = self.feeds[feed_id]
 
-        # Use cached frame instead of fetching new one
+        # Use cached frame instead of fetching new one; snapshot masks too
+        # so the detection thread works on a stable copy even if the API
+        # thread clears them (TOCTOU race fix).
         with feed.lock:
             frame = feed.last_frame.copy() if feed.last_frame is not None else None
+            red_zone_mask = (feed.red_zone_mask.copy()
+                            if feed.red_zone_mask is not None else None)
+            yellow_zone_mask = (feed.yellow_zone_mask.copy()
+                                if feed.yellow_zone_mask is not None else None)
 
         if frame is None:
             return self._get_status(feed)
@@ -651,72 +644,53 @@ class FeedManager:
 
                 if len(person_masks) > 0:
                     # Check RED zone overlap (alarm + drone deployment)
-                    if feed.red_zone_mask is not None:
-                        red_mask = feed.red_zone_mask
+                    # Uses local red_zone_mask snapshot (not feed.red_zone_mask)
+                    if red_zone_mask is not None:
+                        red_mask = red_zone_mask
                         if red_mask.shape != frame.shape[:2]:
                             red_mask = cv2.resize(
                                 red_mask,
                                 (frame.shape[1], frame.shape[0]),
                                 interpolation=cv2.INTER_NEAREST
                             )
-                            feed.red_zone_mask = red_mask
 
                         is_alarm, danger_masks = check_danger_zone_overlap(person_masks, red_mask)
                         feed.alarm_active = is_alarm
                         feed.danger_count = len(danger_masks)
 
-                        # Calculate coordinates ONLY for RED zone intrusions
+                        # Enqueue depth + drone work (async — doesn't block detection)
                         if is_alarm and len(danger_masks) > 0 and self.depth_model is not None:
                             target_mask = danger_masks[0]
                             feet_pixel = coord_utils.get_feet_from_mask(target_mask)
-
                             if feet_pixel is not None:
-                                cx, cy = feet_pixel
-                                ai_depth_map = depth_estimation_utils.run_lite_mono_inference(
-                                    self.depth_model, frame
-                                )
-                                rel_depth = ai_depth_map[cy, cx]
-                                # AirSim call needs lock to avoid IOLoop conflict
-                                with self._airsim_lock:
-                                    target_pos = coord_utils.get_coords_from_lite_mono(
-                                        self.client, feed.camera_name, cx, cy,
-                                        frame.shape[1], frame.shape[0],
-                                        rel_depth, CCTV_HEIGHT, feed.vehicle_name
-                                    )
-                                feed.target_coordinates = (
-                                    target_pos.x_val,
-                                    target_pos.y_val,
-                                    SAFE_Z_ALTITUDE
-                                )
-
-                        # Deploy drone for RED zone intrusion
-                        if feed.alarm_active and feed.target_coordinates and self.drone_api is not None:
-                            current_time = time.time()
-                            if current_time - self.last_deployment_time > ALARM_COOLDOWN and not self.drone_is_navigating:
-                                tx, ty, tz = feed.target_coordinates
-                                print(f"[DRONE] Deploying to ({tx:.2f}, {ty:.2f}, {tz:.2f}) for {feed_id}")
-                                if self.drone_api.goto_position(tx, ty, tz):
-                                    self.last_deployment_time = current_time
-                                    self.drone_is_navigating = True
-                                    print(f"[DRONE] Deployment command sent successfully")
-                                else:
-                                    print(f"[DRONE] Deployment command failed")
+                                try:
+                                    job = (feed_id, frame.copy(), feet_pixel)
+                                    self._depth_queue.put_nowait(job)
+                                except queue.Full:
+                                    pass  # drop — next cycle will retry
 
                     # Check YELLOW zone overlap (caution alert only - NO drone)
-                    if feed.yellow_zone_mask is not None:
-                        yellow_mask = feed.yellow_zone_mask
-                        if yellow_mask.shape != frame.shape[:2]:
-                            yellow_mask = cv2.resize(
-                                yellow_mask,
+                    # Uses local yellow_zone_mask snapshot (not feed.yellow_zone_mask)
+                    if yellow_zone_mask is not None:
+                        y_mask = yellow_zone_mask
+                        if y_mask.shape != frame.shape[:2]:
+                            y_mask = cv2.resize(
+                                y_mask,
                                 (frame.shape[1], frame.shape[0]),
                                 interpolation=cv2.INTER_NEAREST
                             )
-                            feed.yellow_zone_mask = yellow_mask
 
                         # Subtract red zone so red always takes priority over yellow
-                        effective_yellow = yellow_mask
-                        if feed.red_zone_mask is not None and feed.red_zone_mask.shape == yellow_mask.shape:
-                            effective_yellow = yellow_mask & (~feed.red_zone_mask)
+                        effective_yellow = y_mask
+                        if red_zone_mask is not None:
+                            red_for_subtract = red_zone_mask
+                            if red_for_subtract.shape != y_mask.shape:
+                                red_for_subtract = cv2.resize(
+                                    red_for_subtract,
+                                    (y_mask.shape[1], y_mask.shape[0]),
+                                    interpolation=cv2.INTER_NEAREST
+                                )
+                            effective_yellow = y_mask & (~red_for_subtract)
 
                         is_caution, caution_masks = check_danger_zone_overlap(person_masks, effective_yellow)
                         feed.caution_active = is_caution
@@ -778,6 +752,10 @@ class FeedManager:
         # Run segmentation
         zone_dicts = self.segmenter.segment_frame(frame, feed.scene_type)
 
+        # Always update timestamp to maintain the interval (even if no zones found)
+        feed.last_auto_seg_time = time.time()
+        feed.auto_seg_active = False
+
         if not zone_dicts:
             print(f"[AUTO-SEG] No hazard zones detected in {feed_id}")
             return []
@@ -787,7 +765,6 @@ class FeedManager:
 
         # Apply zones (generates binary masks and persists to file)
         self.update_zones(feed_id, zones, frame.shape[1], frame.shape[0])
-        feed.last_auto_seg_time = time.time()
 
         print(f"[AUTO-SEG] {feed_id} ({feed.scene_type}): Generated {len(zones)} zone(s)")
         return zones
@@ -911,6 +888,68 @@ def auto_segmentation_loop():
     print("[AUTO-SEG] Auto-segmentation loop stopped")
 
 
+def depth_worker_loop():
+    """Depth estimation worker — processes depth + drone dispatch off the detection thread."""
+    print("[DEPTH] Starting depth worker thread...")
+
+    while feed_manager.running:
+        try:
+            feed_id, frame, feet_pixel = feed_manager._depth_queue.get(timeout=1.0)
+        except queue.Empty:
+            continue
+
+        try:
+            cx, cy = feet_pixel
+            feed = feed_manager.feeds.get(feed_id)
+            if feed is None:
+                continue
+
+            # Run depth inference (50-200ms — no longer blocking detection)
+            ai_depth_map = depth_estimation_utils.run_lite_mono_inference(
+                feed_manager.depth_model, frame
+            )
+            rel_depth = ai_depth_map[cy, cx]
+
+            # Get camera pose (AirSim lock)
+            with feed_manager._airsim_lock:
+                target_pos = coord_utils.get_coords_from_lite_mono(
+                    feed_manager.client, feed.camera_name, cx, cy,
+                    frame.shape[1], frame.shape[0],
+                    rel_depth, CCTV_HEIGHT, feed.vehicle_name
+                )
+
+            # Update coordinates
+            with feed.lock:
+                feed.target_coordinates = (
+                    target_pos.x_val,
+                    target_pos.y_val,
+                    SAFE_Z_ALTITUDE
+                )
+
+            # Deploy drone (cooldown check)
+            if feed_manager.drone_api is not None:
+                current_time = time.time()
+                cooldown_ok = (current_time - feed_manager.last_deployment_time
+                               > ALARM_COOLDOWN)
+                if cooldown_ok and not feed_manager.drone_is_navigating:
+                    tx, ty, tz = feed.target_coordinates
+                    print(f"[DRONE] Deploying to ({tx:.2f}, {ty:.2f}, {tz:.2f})"
+                          f" for {feed_id}")
+                    if feed_manager.drone_api.goto_position(tx, ty, tz):
+                        feed_manager.last_deployment_time = current_time
+                        feed_manager.drone_is_navigating = True
+                        print("[DRONE] Deployment command sent successfully")
+                    else:
+                        print("[DRONE] Deployment command failed")
+
+        except Exception as e:
+            print(f"[DEPTH] Error processing {feed_id}: {e}")
+            import traceback
+            traceback.print_exc()
+
+    print("[DEPTH] Depth worker thread stopped")
+
+
 def cctv_follow_loop():
     """Follow loop — teleports CCTV drones to match Camera Actor positions.
 
@@ -993,6 +1032,12 @@ async def lifespan(app: FastAPI):
         # Start detection thread (lower FPS, CPU/GPU intensive)
         detection_thread = threading.Thread(target=detection_loop, daemon=True)
         detection_thread.start()
+
+        # Start depth worker thread (async depth estimation + drone dispatch)
+        if DEPTH_AVAILABLE and feed_manager.depth_model is not None:
+            depth_thread = threading.Thread(target=depth_worker_loop, daemon=True)
+            depth_thread.start()
+            print("[SERVER] Depth worker thread started")
 
         # Start auto-segmentation thread (periodic scene segmentation)
         if feed_manager.segmenter is not None:
