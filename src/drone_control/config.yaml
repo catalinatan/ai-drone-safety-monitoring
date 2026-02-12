@@ -4,4 +4,4 @@ safety:
 
 navigation:
   speed: 5.0  # m/s for automatic mode
-  position_tolerance: 1.0  # meters - how close to target before "arrived"
+  position_tolerance: 2.0  # meters - how close to target before "arrived"
