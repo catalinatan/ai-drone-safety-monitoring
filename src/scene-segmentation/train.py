@@ -1,6 +1,5 @@
 import logging
 import sys
-import shutil
 import argparse
 from pathlib import Path
 from ultralytics import YOLO
@@ -134,15 +133,7 @@ def train_model(
         )
         
         logger.info(f"SUCCESS: {dataset_type} training complete.")
-
-        # Copy best weights to models/ directory
-        best_src = Path(project_name) / experiment_name / "weights" / "best.pt"
-        models_dir = Path(__file__).resolve().parents[2] / "models"
-        models_dir.mkdir(exist_ok=True)
-        best_dst = models_dir / f"best_{dataset_type}_seg.pt"
-        shutil.copy2(str(best_src), str(best_dst))
-        logger.info(f"Best weights saved to: {best_dst}")
-
+        logger.info(f"Best Weights: {project_name}/{experiment_name}/weights/best.pt")
         return results
         
     except Exception as e:
