@@ -360,7 +360,7 @@ Examples:
     parser.add_argument(
         "--checkpoint",
         type=str,
-        default="best_scene_model.pth",
+        default="models/best_scene_model.pth",
         help="Path to model checkpoint (.pth file)"
     )
     parser.add_argument(
