@@ -1,7 +1,10 @@
 # Model Settings
 MODEL_PATH = "yolov8m-seg.pt"  # Use 'm' (medium) or 'x' (large) for better mask accuracy
-CONFIDENCE_THRESHOLD = 0.5     # Only detect humans if 50% sure
+CONFIDENCE_THRESHOLD = 0.25    # Lowered from 0.5 for small/distant humans in water
 CLASS_ID_PERSON = 0            # YOLO specific ID for 'person'
+
+# Inference Settings
+INFERENCE_IMGSZ = 1280         # Increased from default 640 for better small object detection
 
 # --- SAFETY ZONE CONFIGURATION ---
 # How much of the PERSON'S body must be inside the zone to trigger an alarm?
