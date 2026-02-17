@@ -1,7 +1,6 @@
 # my settings
 env.py
 tmp/
-data/railway_dataset
 .vscode/
 
 # Byte-compiled / optimized / DLL files
