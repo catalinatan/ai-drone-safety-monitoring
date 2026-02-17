@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader, Dataset, Subset, WeightedRandomSampler
 from torchvision import datasets
 
 from src.utils import find_project_root
-from logger import setup_logger
+from src.logger import setup_logger
 
 # Initialize logger with custom prefix and file output
 logger = setup_logger(__name__, log_prefix="preprocess", file_output=True)

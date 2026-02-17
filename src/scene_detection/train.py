@@ -8,7 +8,7 @@ import torch
 from torch import nn
 import timm
 
-from logger import setup_logger
+from src.logger import setup_logger
 from src.scene_detection.preprocess import DataConfig, SceneDatasetBuilder
 from src.utils import get_device, load_checkpoint
 

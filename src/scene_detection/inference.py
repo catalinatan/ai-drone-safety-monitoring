@@ -10,7 +10,7 @@ from PIL import Image
 from tqdm import tqdm
 
 from src.utils import get_device, load_checkpoint, find_project_root
-from logger import setup_logger
+from src.logger import setup_logger
 
 
 # Default configuration
