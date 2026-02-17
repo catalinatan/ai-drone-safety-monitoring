@@ -1,15 +1,13 @@
-# Using the specific version you requested
-FROM python:3.12-slim
+# Production Dockerfile for AI Safety Monitoring
+FROM python:3.11-slim
 
-# System-level setup
+# Prevent Python from writing bytecode and buffering stdout/stderr
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-# Install system dependencies
-# Added gcc and python3-dev for 3.12 compatibility
+# Install system dependencies required for OpenCV and other packages
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
-    python3-dev \
     libgl1 \
     libglib2.0-0 \
     && apt-get clean \
@@ -17,11 +15,26 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Install dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+# Upgrade pip and install build tools first (required for some packages)
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 
-COPY . .
+# Install numpy first - required by airsim's broken setup.py which imports it during build
+RUN pip install --no-cache-dir numpy
 
-CMD ["python", "main.py"]
+# Copy dependency files first for better layer caching
+COPY pyproject.toml .
+COPY src/ src/
+
+# Install Python dependencies (production only, no dev dependencies)
+RUN pip install --no-cache-dir -e .
+
+# Copy remaining application files
+COPY main.py .
+COPY README.md .
+
+# Expose ports for backend and drone API
+EXPOSE 8000 8001
+
+# Default command runs the backend server
+# For development with all services, override with: python main.py
+CMD ["python", "-m", "src.backend.server"]

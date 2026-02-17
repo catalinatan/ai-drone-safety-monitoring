@@ -1,0 +1,6 @@
+safety:
+  max_altitude: 50  # meters
+
+navigation:
+  speed: 5.0  # m/s for automatic mode
+  position_tolerance: 2.0  # meters - how close to target before "arrived"
