@@ -20,7 +20,7 @@ class TrainingConfig:
     num_classes: int = 4
     
     # Training hyperparameters
-    epochs: int = 20
+    epochs: int = 50
     lr: float = 3e-4
     weight_decay: float = 1e-4
     
@@ -228,7 +228,7 @@ def main():
     parser.add_argument("--num-classes", type=int, default=4)
     
     # Training arguments
-    parser.add_argument("--epochs", type=int, default=20)
+    parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--weight-decay", type=float, default=1e-4)
     parser.add_argument("--seed", type=int, default=42)
