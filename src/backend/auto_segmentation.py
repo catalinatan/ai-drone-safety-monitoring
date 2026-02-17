@@ -15,7 +15,11 @@ import cv2
 import numpy as np
 from typing import Dict, List, Optional
 
-from src.backend.config import AUTO_SEG_CONFIDENCE, AUTO_SEG_SIMPLIFY_EPSILON
+from src.backend.config import (
+    AUTO_SEG_CONFIDENCE,
+    AUTO_SEG_SIMPLIFY_EPSILON,
+    AUTO_SEG_MIN_CONTOUR_AREA,
+)
 
 
 class SceneSegmenter:
@@ -35,12 +39,13 @@ class SceneSegmenter:
             else:
                 print(f"[AUTO-SEG] WARNING: Model not found for {scene_type}: {path}")
 
-    def segment_frame(self, frame: np.ndarray, scene_type: str) -> List[dict]:
+    def segment_frame(self, frame: np.ndarray, scene_type: str, confidence: Optional[float] = None) -> List[dict]:
         """Run segmentation on a frame and return Zone-compatible dicts.
 
         Args:
             frame: BGR or RGB numpy array (H, W, 3)
             scene_type: One of "ship", "railway", "bridge"
+            confidence: Override confidence threshold (uses default if None)
 
         Returns:
             List of zone dicts: [{"id": str, "level": "red", "points": [{"x": float, "y": float}]}]
@@ -50,7 +55,8 @@ class SceneSegmenter:
             return []
 
         model = self.models[scene_type]
-        results = model(frame, conf=self.confidence, verbose=False)[0]
+        conf = confidence if confidence is not None else self.confidence
+        results = model(frame, conf=conf, verbose=False)[0]
 
         if results.masks is None:
             return []
@@ -73,7 +79,7 @@ class SceneSegmenter:
 
             for j, contour in enumerate(contours):
                 # Filter out tiny contours (noise)
-                if cv2.contourArea(contour) < 100:
+                if cv2.contourArea(contour) < AUTO_SEG_MIN_CONTOUR_AREA:
                     continue
 
                 # Simplify polygon to reduce point count

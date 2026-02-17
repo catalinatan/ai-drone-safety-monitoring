@@ -51,11 +51,13 @@ from src.backend.config import (
     CCTV_HEIGHT, SAFE_Z_ALTITUDE,
     FRAME_CAPTURE_INTERVAL, STREAM_INTERVAL,
     DETECTION_INTERVAL, ALARM_COOLDOWN,
+    DETECTION_WARMUP_FRAMES,
     DRONE_API_URL, DRONE_API_TIMEOUT,
     DATA_DIR, ZONES_FILE,
     BACKEND_PORT,
     FEED_SCENE_TYPE, SEG_MODEL_PATHS,
     AUTO_SEG_INTERVAL, AUTO_SEG_CONFIDENCE,
+    AUTO_SEG_MAX_RETRIES, AUTO_SEG_RETRY_DELAY,
     CCTV_FOLLOW_TARGET, CCTV_FOLLOW_CAMERAS,
     CCTV_FOLLOW_INTERVAL,
 )
@@ -220,6 +222,7 @@ class DetectionStatus(BaseModel):
     caution_count: int           # People in YELLOW zones
     target_coordinates: Optional[TargetCoordinate] = None
     last_detection_time: Optional[str] = None
+    position: Optional[TargetCoordinate] = None  # CCTV camera position (NED)
 
 # ============================================================================
 # FEED STATE MANAGEMENT
@@ -244,6 +247,8 @@ class FeedState:
     target_coordinates: Optional[Tuple[float, float, float]] = None
     last_frame: Optional[np.ndarray] = None
     last_detection_time: Optional[datetime] = None
+    position: Optional[Tuple[float, float, float]] = None  # NED coordinates (x, y, z)
+    frame_count: int = 0                                    # Total captured frames
     lock: threading.Lock = field(default_factory=threading.Lock)
     # Auto-segmentation fields
     scene_type: Optional[str] = None          # "ship", "railway", "bridge", or None
@@ -267,6 +272,10 @@ class FeedManager:
         self._airsim_lock = threading.Lock()
         self._depth_queue: queue.Queue = queue.Queue(maxsize=4)
         self.segmenter: Optional[SceneSegmenter] = None if AUTO_SEG_AVAILABLE else None
+        # Trigger snapshot: the CCTV frame that caused drone deployment
+        self.trigger_snapshot: Optional[bytes] = None   # JPEG bytes
+        self.trigger_feed_id: Optional[str] = None
+        self.trigger_timestamp: Optional[str] = None
 
     def initialize(self):
         """Initialize AirSim connection and models."""
@@ -427,6 +436,8 @@ class FeedManager:
                 responses = self.client.simGetImages([
                     airsim.ImageRequest(feed.camera_name, airsim.ImageType.Scene, False, False)
                 ], vehicle_name=feed.vehicle_name)
+                # Also grab the vehicle pose for coordinates
+                pose = self.client.simGetVehiclePose(vehicle_name=feed.vehicle_name)
 
             if not responses or len(responses) == 0:
                 return None
@@ -440,6 +451,13 @@ class FeedManager:
 
             with feed.lock:
                 feed.last_frame = img_rgb
+                feed.frame_count += 1
+                if pose and not (pose.position.x_val != pose.position.x_val):  # NaN check
+                    feed.position = (
+                        round(pose.position.x_val, 2),
+                        round(pose.position.y_val, 2),
+                        round(pose.position.z_val, 2),
+                    )
 
             return img_rgb
 
@@ -515,6 +533,14 @@ class FeedManager:
                             if feed.red_zone_mask is not None else None)
             yellow_zone_mask = (feed.yellow_zone_mask.copy()
                                 if feed.yellow_zone_mask is not None else None)
+
+        if not self._is_feed_warmed_up(feed):
+            with feed.lock:
+                feed.alarm_active = False
+                feed.caution_active = False
+                feed.danger_count = 0
+                feed.caution_count = 0
+            return self._get_status(feed)
 
         if self.detector is None:
             return self._get_status(feed)
@@ -625,6 +651,14 @@ class FeedManager:
         # Regenerate masks if needed (e.g., after server restart)
         self._regenerate_masks_if_needed(feed_id, frame.shape[1], frame.shape[0])
 
+        if not self._is_feed_warmed_up(feed):
+            with feed.lock:
+                feed.alarm_active = False
+                feed.caution_active = False
+                feed.danger_count = 0
+                feed.caution_count = 0
+            return self._get_status(feed)
+
         if self.detector is None:
             return self._get_status(feed)
 
@@ -718,6 +752,14 @@ class FeedManager:
                     z=feed.target_coordinates[2]
                 )
 
+            pos = None
+            if feed.position:
+                pos = TargetCoordinate(
+                    x=feed.position[0],
+                    y=feed.position[1],
+                    z=feed.position[2]
+                )
+
             return DetectionStatus(
                 feed_id=feed.feed_id,
                 alarm_active=feed.alarm_active,
@@ -726,11 +768,21 @@ class FeedManager:
                 danger_count=feed.danger_count,
                 caution_count=feed.caution_count,
                 target_coordinates=target,
-                last_detection_time=feed.last_detection_time.isoformat() if feed.last_detection_time else None
+                last_detection_time=feed.last_detection_time.isoformat() if feed.last_detection_time else None,
+                position=pos,
             )
+
+    def _is_feed_warmed_up(self, feed: FeedState) -> bool:
+        """Return True once enough frames were captured for stable startup detection."""
+        with feed.lock:
+            return feed.frame_count >= DETECTION_WARMUP_FRAMES
 
     def run_auto_segmentation(self, feed_id: str) -> List[Zone]:
         """Run auto-segmentation on a feed's current frame and update zones.
+
+        Uses progressive confidence reduction on retries: starts at the
+        configured threshold and lowers it on each failed attempt so that
+        partially-visible hazards still get detected.
 
         Returns the list of auto-generated Zone objects (empty if no detections).
         """
@@ -742,26 +794,65 @@ class FeedManager:
         if not feed.scene_type or self.segmenter is None:
             return []
 
-        # Get current cached frame
-        with feed.lock:
-            frame = feed.last_frame.copy() if feed.last_frame is not None else None
+        best_zone_dicts: List[dict] = []
+        attempts = max(1, AUTO_SEG_MAX_RETRIES)
 
-        if frame is None:
-            return []
+        for attempt_idx in range(attempts):
+            # Try fresh frame first for manual/on-demand consistency.
+            frame = self.get_frame(feed_id)
 
-        # Run segmentation
-        zone_dicts = self.segmenter.segment_frame(frame, feed.scene_type)
+            # Fallback to cached frame if fresh capture failed.
+            if frame is None:
+                with feed.lock:
+                    frame = feed.last_frame.copy() if feed.last_frame is not None else None
+
+            if frame is None:
+                if attempt_idx == attempts - 1:
+                    print(f"[AUTO-SEG] No frame available for {feed_id}")
+                if attempt_idx < attempts - 1:
+                    time.sleep(max(AUTO_SEG_RETRY_DELAY, 0.5))
+                continue
+
+            # Skip dark/invalid frames (e.g., captured mid-teleport)
+            mean_brightness = float(np.mean(frame))
+            if mean_brightness < 15:
+                print(f"[AUTO-SEG] {feed_id}: Skipping dark frame "
+                      f"(brightness={mean_brightness:.1f}), attempt {attempt_idx + 1}/{attempts}")
+                if attempt_idx < attempts - 1:
+                    time.sleep(max(AUTO_SEG_RETRY_DELAY, 0.5))
+                continue
+
+            # AirSim scene frames are RGB; OpenCV/Ultralytics pipeline expects BGR.
+            frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+
+            # Progressive confidence: lower threshold on later retries so
+            # partially-visible or distant hazards can still be detected.
+            conf = max(AUTO_SEG_CONFIDENCE - attempt_idx * 0.08, 0.2)
+            zone_dicts = self.segmenter.segment_frame(frame_bgr, feed.scene_type, confidence=conf)
+
+            if len(zone_dicts) > len(best_zone_dicts):
+                best_zone_dicts = zone_dicts
+
+            # Stop early once we get a usable segmentation.
+            if zone_dicts:
+                break
+
+            print(f"[AUTO-SEG] {feed_id}: No detections on attempt {attempt_idx + 1}/{attempts} "
+                  f"(conf={conf:.2f}, brightness={mean_brightness:.1f})")
+
+            if attempt_idx < attempts - 1:
+                time.sleep(max(AUTO_SEG_RETRY_DELAY, 0.5))
 
         # Always update timestamp to maintain the interval (even if no zones found)
         feed.last_auto_seg_time = time.time()
         feed.auto_seg_active = False
 
-        if not zone_dicts:
-            print(f"[AUTO-SEG] No hazard zones detected in {feed_id}")
+        if not best_zone_dicts:
+            print(f"[AUTO-SEG] No hazard zones detected in {feed_id} after {attempts} attempt(s)")
             return []
 
         # Convert dicts to Zone objects
-        zones = [Zone(**z) for z in zone_dicts]
+        zones = [Zone(**z) for z in best_zone_dicts]
 
         # Apply zones (generates binary masks and persists to file)
         self.update_zones(feed_id, zones, frame.shape[1], frame.shape[0])
@@ -925,6 +1016,17 @@ def depth_worker_loop():
                     target_pos.y_val,
                     SAFE_Z_ALTITUDE
                 )
+
+            # Capture trigger snapshot (the CCTV frame that caused the alarm)
+            try:
+                frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                _, snap_buf = cv2.imencode('.jpg', frame_bgr, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                feed_manager.trigger_snapshot = snap_buf.tobytes()
+                feed_manager.trigger_feed_id = feed_id
+                feed_manager.trigger_timestamp = datetime.now().isoformat()
+                print(f"[TRIGGER] Captured snapshot from {feed_id}")
+            except Exception as snap_err:
+                print(f"[TRIGGER] Failed to capture snapshot: {snap_err}")
 
             # Deploy drone (cooldown check)
             if feed_manager.drone_api is not None:
@@ -1122,10 +1224,16 @@ _NO_SIGNAL_JPEG = _create_no_signal_frame()
 def generate_mjpeg_frames(feed_id: str):
     """Generate MJPEG frames for video streaming.
 
-    Reads cached frames from feed.last_frame (populated by the detection
+    Reads cached frames from feed.last_frame (populated by the capture
     thread) instead of calling AirSim directly, avoiding concurrent
     client access issues.
+
+    Caches the last successfully encoded JPEG so that transient frame
+    capture failures repeat the previous good frame instead of flashing
+    a NO SIGNAL placeholder.
     """
+    last_jpeg = _NO_SIGNAL_JPEG
+
     while True:
         feed = feed_manager.feeds.get(feed_id)
 
@@ -1139,30 +1247,14 @@ def generate_mjpeg_frames(feed_id: str):
             # Convert RGB to BGR for OpenCV encoding
             frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
 
-            h, w = frame_bgr.shape[:2]
-
-            # Draw YELLOW caution border (if caution active)
-            if feed.caution_active and not feed.alarm_active:
-                cv2.rectangle(frame_bgr, (0, 0), (w-1, h-1), (0, 255, 255), 4)
-                cv2.putText(frame_bgr, "CAUTION", (10, 30),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
-
-            # Draw RED alarm border (if alarm active - takes priority)
-            if feed.alarm_active:
-                cv2.rectangle(frame_bgr, (0, 0), (w-1, h-1), (0, 0, 255), 4)
-                cv2.putText(frame_bgr, "ALARM", (10, 30),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
-
             # Encode as JPEG
             ret, buffer = cv2.imencode('.jpg', frame_bgr, [cv2.IMWRITE_JPEG_QUALITY, 80])
             if ret:
-                frame_bytes = buffer.tobytes()
-                yield (b'--frame\r\n'
-                       b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
-        else:
-            # No frame yet — yield placeholder so the stream doesn't hang
-            yield (b'--frame\r\n'
-                   b'Content-Type: image/jpeg\r\n\r\n' + _NO_SIGNAL_JPEG + b'\r\n')
+                last_jpeg = buffer.tobytes()
+
+        # Always yield a frame — last good frame, or NO SIGNAL at startup
+        yield (b'--frame\r\n'
+               b'Content-Type: image/jpeg\r\n\r\n' + last_jpeg + b'\r\n')
 
         time.sleep(STREAM_INTERVAL)
 
@@ -1222,8 +1314,8 @@ async def update_zones(feed_id: str, request: ZonesUpdateRequest):
 
 
 @app.post("/feeds/{feed_id}/auto-segment")
-async def trigger_auto_segment(feed_id: str):
-    """Trigger on-demand auto-segmentation for a feed."""
+def trigger_auto_segment(feed_id: str):
+    """Trigger on-demand auto-segmentation for a feed (sync so it runs in a thread pool)."""
     if feed_id not in feed_manager.feeds:
         raise HTTPException(status_code=404, detail=f"Feed {feed_id} not found")
 
@@ -1250,6 +1342,29 @@ async def trigger_auto_segment(feed_id: str):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/trigger-snapshot")
+async def get_trigger_snapshot():
+    """Return the CCTV frame that triggered the last drone deployment as JPEG."""
+    if feed_manager.trigger_snapshot is None:
+        return JSONResponse(status_code=204, content=None)
+
+    from fastapi.responses import Response
+    return Response(
+        content=feed_manager.trigger_snapshot,
+        media_type="image/jpeg",
+    )
+
+
+@app.get("/trigger-info")
+async def get_trigger_info():
+    """Return metadata about the last trigger snapshot."""
+    return {
+        "has_snapshot": feed_manager.trigger_snapshot is not None,
+        "feed_id": feed_manager.trigger_feed_id,
+        "timestamp": feed_manager.trigger_timestamp,
+    }
 
 
 # ============================================================================

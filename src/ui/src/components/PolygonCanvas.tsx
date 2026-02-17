@@ -35,6 +35,8 @@ export function PolygonCanvas({
   const [selectedZoneId, setSelectedZoneId] = useState<string | null>(null);
   const [imageLoaded, setImageLoaded] = useState(false);
   const [imgRect, setImgRect] = useState<ImgRect | null>(null);
+  const [streamAttempt, setStreamAttempt] = useState(0);
+  const [, setRetryCount] = useState(0);
 
   // Measure the rendered image rect relative to the container
   const updateImgRect = useCallback(() => {
@@ -42,14 +44,38 @@ export function PolygonCanvas({
     const container = containerRef.current;
     if (!img || !container) return;
 
-    const imgBounds = img.getBoundingClientRect();
     const containerBounds = container.getBoundingClientRect();
+    const containerWidth = containerBounds.width;
+    const containerHeight = containerBounds.height;
+    const naturalWidth = img.naturalWidth;
+    const naturalHeight = img.naturalHeight;
+
+    if (!naturalWidth || !naturalHeight || !containerWidth || !containerHeight) return;
+
+    // Compute the actual rendered image box for object-contain (excluding letterboxing).
+    const imageAspect = naturalWidth / naturalHeight;
+    const containerAspect = containerWidth / containerHeight;
+
+    let width = containerWidth;
+    let height = containerHeight;
+    let left = 0;
+    let top = 0;
+
+    if (imageAspect > containerAspect) {
+      width = containerWidth;
+      height = containerWidth / imageAspect;
+      top = (containerHeight - height) / 2;
+    } else {
+      height = containerHeight;
+      width = containerHeight * imageAspect;
+      left = (containerWidth - width) / 2;
+    }
 
     setImgRect({
-      top: imgBounds.top - containerBounds.top,
-      left: imgBounds.left - containerBounds.left,
-      width: imgBounds.width,
-      height: imgBounds.height,
+      top,
+      left,
+      width,
+      height,
     });
   }, []);
 
@@ -60,20 +86,42 @@ export function PolygonCanvas({
     return () => window.removeEventListener('resize', updateImgRect);
   }, [imageLoaded, updateImgRect]);
 
-  // Get relative coordinates from mouse event using the image's bounding rect
+  // Keep overlay aligned if container size changes without a window resize.
+  useEffect(() => {
+    if (!imageLoaded || !containerRef.current) return;
+
+    const observer = new ResizeObserver(() => updateImgRect());
+    observer.observe(containerRef.current);
+    return () => observer.disconnect();
+  }, [imageLoaded, updateImgRect]);
+
+  // Get relative coordinates from mouse event using the rendered image rect.
   const getRelativeCoords = useCallback(
     (e: React.MouseEvent): Point | null => {
       const img = imageRef.current;
-      if (!img || !imageLoaded) return null;
+      const container = containerRef.current;
+      if (!img || !container || !imageLoaded || !imgRect) return null;
 
-      // Use the image's bounding rect directly for accurate coordinates
-      const rect = img.getBoundingClientRect();
-      const x = ((e.clientX - rect.left) / rect.width) * 100;
-      const y = ((e.clientY - rect.top) / rect.height) * 100;
+      const containerBounds = container.getBoundingClientRect();
+      const xPx = e.clientX - containerBounds.left;
+      const yPx = e.clientY - containerBounds.top;
+
+      // Ignore clicks in letterbox bars outside the actual rendered frame area.
+      if (
+        xPx < imgRect.left ||
+        xPx > imgRect.left + imgRect.width ||
+        yPx < imgRect.top ||
+        yPx > imgRect.top + imgRect.height
+      ) {
+        return null;
+      }
+
+      const x = ((xPx - imgRect.left) / imgRect.width) * 100;
+      const y = ((yPx - imgRect.top) / imgRect.height) * 100;
 
       return { x: Math.max(0, Math.min(100, x)), y: Math.max(0, Math.min(100, y)) };
     },
-    [imageLoaded]
+    [imageLoaded, imgRect]
   );
 
   // Handle canvas click
@@ -168,6 +216,16 @@ export function PolygonCanvas({
     setCurrentPoints([]);
   }, [activeTool]);
 
+  // Reset stream state when feed source changes.
+  useEffect(() => {
+    setImageLoaded(false);
+    setImgRect(null);
+    setStreamAttempt(0);
+    setRetryCount(0);
+  }, [imageSrc]);
+
+  const streamUrl = `${imageSrc}${imageSrc.includes('?') ? '&' : '?'}attempt=${streamAttempt}`;
+
   return (
     <div
       ref={containerRef}
@@ -178,15 +236,32 @@ export function PolygonCanvas({
       {/* Background Image */}
       <img
         ref={imageRef}
-        src={imageSrc}
+        src={streamUrl}
         alt="Feed"
         className="w-full h-full object-contain"
         onLoad={() => {
           setImageLoaded(true);
           updateImgRect();
         }}
+        onError={() => {
+          setImageLoaded(false);
+          setRetryCount((current) => {
+            const nextRetry = current + 1;
+            const delayMs = Math.min(1000 * Math.pow(2, Math.max(0, nextRetry - 1)), 2000);
+            setTimeout(() => setStreamAttempt((n) => n + 1), delayMs);
+            return nextRetry;
+          });
+        }}
         draggable={false}
       />
+
+      {!imageLoaded && (
+        <div className="absolute inset-0 flex items-center justify-center bg-[var(--bg-card)]">
+          <span className="text-xs font-mono text-[var(--text-muted)]">
+            Loading feed...
+          </span>
+        </div>
+      )}
 
       {/* SVG Overlay for zones — positioned to match the rendered image bounds */}
       {imageLoaded && imgRect && (

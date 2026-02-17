@@ -11,6 +11,10 @@ interface FeedCardProps {
 
 export function FeedCard({ feed, onEdit, onExpand }: FeedCardProps) {
   const [detectionStatus, setDetectionStatus] = useState<DetectionStatus | null>(null);
+  const [hasRenderedFrame, setHasRenderedFrame] = useState(false);
+  const [streamAttempt, setStreamAttempt] = useState(0);
+  const [, setRetryCount] = useState(0);
+  const [isStreamBroken, setIsStreamBroken] = useState(false);
 
   // Poll for detection status (only for live feeds)
   useEffect(() => {
@@ -34,8 +38,28 @@ export function FeedCard({ feed, onEdit, onExpand }: FeedCardProps) {
     return () => clearInterval(interval);
   }, [feed.id, feed.isLive]);
 
-  const isAlarmActive = detectionStatus?.alarm_active || false;
-  const isCautionActive = detectionStatus?.caution_active || false;
+  useEffect(() => {
+    setHasRenderedFrame(false);
+    setStreamAttempt(0);
+    setRetryCount(0);
+    setIsStreamBroken(false);
+  }, [feed.id, feed.imageSrc]);
+
+  // Watchdog: if the stream is broken, force a retry every 3s instead of
+  // waiting for the exponential backoff to climb.  Also catches silently
+  // stalled MJPEG connections that never fire onError.
+  useEffect(() => {
+    if (!feed.isLive || !feed.imageSrc || !isStreamBroken) return;
+
+    const watchdog = setInterval(() => {
+      setStreamAttempt((n) => n + 1);
+    }, 3000);
+
+    return () => clearInterval(watchdog);
+  }, [feed.isLive, feed.imageSrc, isStreamBroken]);
+
+  const isAlarmActive = hasRenderedFrame && (detectionStatus?.alarm_active || false);
+  const isCautionActive = hasRenderedFrame && (detectionStatus?.caution_active || false);
   const isPlaceholder = !feed.isLive || !feed.imageSrc;
 
   // Determine border and header colors based on state
@@ -64,12 +88,6 @@ export function FeedCard({ feed, onEdit, onExpand }: FeedCardProps) {
     return 'text-[var(--text-primary)]';
   };
 
-  const getTimestampColor = () => {
-    if (isAlarmActive) return 'text-[var(--zone-red)]';
-    if (isCautionActive) return 'text-[var(--zone-yellow)]';
-    return 'text-[var(--text-muted)]';
-  };
-
   return (
     <div className={`feed-card corner-brackets rounded-lg group flex flex-col h-full ${getBorderClass()}`}>
       {/* Header */}
@@ -85,9 +103,7 @@ export function FeedCard({ feed, onEdit, onExpand }: FeedCardProps) {
           <span className={`text-sm font-semibold tracking-wide ${getTextColor()}`}>
             {feed.name}
           </span>
-          <span className="text-xs text-[var(--text-muted)] font-mono">
-            {feed.location}
-          </span>
+          <span className="text-xs text-[var(--text-muted)] font-mono">{feed.location}</span>
         </div>
 
         {/* Action Icons */}
@@ -137,9 +153,23 @@ export function FeedCard({ feed, onEdit, onExpand }: FeedCardProps) {
           </div>
         ) : feed.isLive ? (
           <img
-            src={feed.imageSrc}
+            src={`${feed.imageSrc}?attempt=${streamAttempt}`}
             alt={`${feed.name} feed`}
             className="w-full h-full object-contain"
+            onLoad={() => {
+              setHasRenderedFrame(true);
+              setIsStreamBroken(false);
+              setRetryCount(0);
+            }}
+            onError={() => {
+              setIsStreamBroken(true);
+              setRetryCount((current) => {
+                const nextRetry = current + 1;
+                const delayMs = Math.min(1000 * Math.pow(2, Math.max(0, nextRetry - 1)), 2000);
+                setTimeout(() => setStreamAttempt((n) => n + 1), delayMs);
+                return nextRetry;
+              });
+            }}
           />
         ) : (
           <img
@@ -147,6 +177,14 @@ export function FeedCard({ feed, onEdit, onExpand }: FeedCardProps) {
             alt={`${feed.name} feed`}
             className="w-full h-full object-contain transition-transform duration-500 group-hover:scale-105"
           />
+        )}
+
+        {/* Reconnecting overlay — shown instead of black screen during stream errors */}
+        {isStreamBroken && hasRenderedFrame && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-[var(--bg-primary)]/80 z-10">
+            <div className="w-4 h-4 border-2 border-[var(--accent-cyan)] border-t-transparent rounded-full animate-spin mb-2" />
+            <span className="text-[10px] font-mono text-[var(--text-muted)] tracking-wider">RECONNECTING</span>
+          </div>
         )}
 
         {/* Alarm overlay (RED - highest priority) */}
@@ -199,11 +237,16 @@ export function FeedCard({ feed, onEdit, onExpand }: FeedCardProps) {
         )}
       </div>
 
-      {/* Timestamp */}
-      <div className={`px-3 py-1.5 border-t ${getFooterClass()}`}>
-        <span className={`text-[10px] font-mono tracking-wider ${getTimestampColor()}`}>
+      {/* Timestamp + Coordinates */}
+      <div className={`flex items-center justify-between px-3 py-1.5 border-t ${getFooterClass()}`}>
+        <span className="text-[10px] font-mono tracking-wider text-white">
           {new Date().toLocaleTimeString('en-US', { hour12: false })} UTC
         </span>
+        {detectionStatus?.position && (
+          <span className="text-[10px] font-mono tracking-wider text-white">
+            N:{detectionStatus.position.x.toFixed(1)} E:{detectionStatus.position.y.toFixed(1)} D:{detectionStatus.position.z.toFixed(1)}
+          </span>
+        )}
       </div>
     </div>
   );

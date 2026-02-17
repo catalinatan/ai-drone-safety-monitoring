@@ -10,45 +10,33 @@ interface CommandPanelProps {
 
 export function CommandPanel({ feeds, onEditFeed, onExpandFeed }: CommandPanelProps) {
   return (
-    <div className="h-full flex flex-col bg-[var(--bg-primary)] tactical-grid pt-14">
+    <div className="h-full flex flex-col bg-[var(--bg-primary)] tactical-grid">
       {/* Header */}
-      <header className="flex items-center justify-between px-6 py-4 border-b border-[var(--border-dim)] bg-[var(--bg-secondary)]/80 backdrop-blur-sm">
-        <div className="flex items-center gap-4">
-          <div className="flex items-center gap-2">
-            <Shield className="w-6 h-6 text-[var(--accent-cyan)]" />
-            <h1 className="text-xl font-bold tracking-wider uppercase text-glow-cyan">
-              Safety Command Center
-            </h1>
-          </div>
+      <header className="flex items-center justify-between px-4 py-3 border-b border-[var(--border-dim)] bg-[var(--bg-secondary)]/80 backdrop-blur-sm">
+        <div className="flex items-center gap-3">
+          <Shield className="w-5 h-5 text-[var(--accent-cyan)]" />
+          <h1 className="text-sm font-bold tracking-wider uppercase text-glow-cyan">
+            Command Center
+          </h1>
           <div className="h-4 w-px bg-[var(--border-dim)]" />
-          <span className="text-xs font-mono text-[var(--text-muted)] tracking-wide">
-            AI MONITORING SYSTEM v1.0
-          </span>
+          <div className="flex items-center gap-2 px-2 py-1 rounded border border-[var(--border-dim)] bg-[var(--bg-tertiary)]">
+            <Radio className="w-3 h-3 text-[var(--zone-green)] status-live" />
+            <span className="text-[10px] font-mono text-[var(--zone-green)]">ONLINE</span>
+          </div>
         </div>
 
-        <div className="flex items-center gap-4">
-          {/* System Status */}
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded border border-[var(--border-dim)] bg-[var(--bg-tertiary)]">
-            <Radio className="w-3 h-3 text-[var(--zone-green)] status-live" />
-            <span className="text-xs font-mono text-[var(--zone-green)]">
-              SYSTEM ONLINE
-            </span>
-          </div>
-
-          {/* Active feeds counter */}
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded border border-[var(--border-dim)] bg-[var(--bg-tertiary)]">
-            <span className="text-xs text-[var(--text-muted)]">FEEDS:</span>
-            <span className="text-sm font-mono text-[var(--accent-cyan)]">
-              {feeds.filter(f => f.isLive).length}/4
-            </span>
-          </div>
+        <div className="flex items-center gap-2 px-2 py-1 rounded border border-[var(--border-dim)] bg-[var(--bg-tertiary)]">
+          <span className="text-[10px] text-[var(--text-muted)]">FEEDS:</span>
+          <span className="text-xs font-mono text-[var(--accent-cyan)]">
+            {feeds.filter(f => f.isLive).length}/4
+          </span>
         </div>
       </header>
 
       {/* Main Content - 4 Corner Grid */}
-      <main className="flex-1 min-h-0 p-6 relative overflow-hidden">
+      <main className="flex-1 min-h-0 p-4 relative overflow-hidden">
         {/* Grid container */}
-        <div className="h-full grid grid-cols-2 grid-rows-2 gap-6">
+        <div className="h-full grid grid-cols-2 grid-rows-2 gap-4">
           {feeds.slice(0, 4).map((feed) => (
             <FeedCard
               key={feed.id}
@@ -72,9 +60,8 @@ export function CommandPanel({ feeds, onEditFeed, onExpandFeed }: CommandPanelPr
       </main>
 
       {/* Footer */}
-      <footer className="px-6 py-3 border-t border-[var(--border-dim)] bg-[var(--bg-secondary)]/80">
-        <div className="flex items-center justify-between text-xs font-mono text-[var(--text-muted)]">
-          <span>DRONE CONTROL: localhost:8000</span>
+      <footer className="px-4 py-2 border-t border-[var(--border-dim)] bg-[var(--bg-secondary)]/80">
+        <div className="flex items-center justify-between text-[10px] font-mono text-[var(--text-muted)]">
           <span>{new Date().toLocaleDateString('en-US', {
             weekday: 'short',
             year: 'numeric',

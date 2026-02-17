@@ -11,24 +11,35 @@ interface EditFeedPageProps {
 }
 
 type ToolType = ZoneLevel | 'delete' | null;
+type AutoSegResult = 'idle' | 'success' | 'empty' | 'failed';
 
 export function EditFeedPage({ feed, onSave, onCancel, onAutoSegment }: EditFeedPageProps) {
   const [zones, setZones] = useState<Zone[]>(feed.zones);
   const [activeTool, setActiveTool] = useState<ToolType>(null);
   const [isAutoSegmenting, setIsAutoSegmenting] = useState(false);
-  const [autoSegFailed, setAutoSegFailed] = useState(false);
+  const [autoSegResult, setAutoSegResult] = useState<AutoSegResult>('idle');
 
   const handleAutoSegment = async () => {
     if (!onAutoSegment) return;
     setIsAutoSegmenting(true);
-    setAutoSegFailed(false);
+    setAutoSegResult('idle');
+    // Clear current masks immediately when auto-segment is requested.
+    setZones([]);
     try {
       const newZones = await onAutoSegment();
-      if (newZones) {
+      // Treat an empty result as a valid run ("no hazards detected"),
+      // not a transport/API failure.
+      if (newZones !== null) {
         setZones(newZones);
+        if (newZones.length > 0) {
+          setAutoSegResult('success');
+        } else {
+          setAutoSegResult('empty');
+        }
+        setTimeout(() => setAutoSegResult('idle'), 2500);
       } else {
-        setAutoSegFailed(true);
-        setTimeout(() => setAutoSegFailed(false), 2000);
+        setAutoSegResult('failed');
+        setTimeout(() => setAutoSegResult('idle'), 2500);
       }
     } finally {
       setIsAutoSegmenting(false);
@@ -183,10 +194,20 @@ export function EditFeedPage({ feed, onSave, onCancel, onAutoSegment }: EditFeed
                         <Loader2 size={16} className="animate-spin" />
                         <span className="text-xs font-mono">Segmenting...</span>
                       </>
-                    ) : autoSegFailed ? (
+                    ) : autoSegResult === 'failed' ? (
                       <>
                         <Scan size={16} />
                         <span className="text-xs font-mono text-[var(--zone-red)]">Failed</span>
+                      </>
+                    ) : autoSegResult === 'empty' ? (
+                      <>
+                        <Scan size={16} />
+                        <span className="text-xs font-mono text-[var(--zone-yellow)]">No Hazards</span>
+                      </>
+                    ) : autoSegResult === 'success' ? (
+                      <>
+                        <Scan size={16} />
+                        <span className="text-xs font-mono text-[var(--zone-green)]">Updated</span>
                       </>
                     ) : (
                       <>

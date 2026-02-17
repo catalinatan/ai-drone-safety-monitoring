@@ -1,5 +1,4 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { AppNav, type AppView } from './components/AppNav';
 import { CommandPanel } from './components/CommandPanel';
 import { EditFeedPage } from './components/EditFeedPage';
 import { ExpandedFeedView } from './components/ExpandedFeedView';
@@ -8,9 +7,6 @@ import { mockFeeds, BACKEND_URL } from './data/mockFeeds';
 import type { Feed, ViewState, Zone } from './types';
 
 function App() {
-  // Top-level app view: Command Center vs Drone Control
-  const [appView, setAppView] = useState<AppView>('command-center');
-
   // Command Center specific state
   const [feeds, setFeeds] = useState<Feed[]>(mockFeeds);
   const [commandViewState, setCommandViewState] = useState<ViewState>({ type: 'command' });
@@ -28,7 +24,7 @@ function App() {
               const backendFeed = data.feeds?.find((f: Feed) => f.id === feed.id);
               if (backendFeed) {
                 const updated = { ...feed };
-                if (backendFeed.zones?.length > 0) {
+                if (Array.isArray(backendFeed.zones)) {
                   console.log(`[INIT] Loaded ${backendFeed.zones.length} zones for ${feed.id}`);
                   updated.zones = backendFeed.zones;
                 }
@@ -64,7 +60,7 @@ function App() {
         setFeeds((prevFeeds) =>
           prevFeeds.map((feed) => {
             const backendFeed = data.feeds?.find((f: Feed) => f.id === feed.id);
-            if (backendFeed?.zones?.length > 0) {
+            if (backendFeed && Array.isArray(backendFeed.zones)) {
               return { ...feed, zones: backendFeed.zones };
             }
             return feed;
@@ -195,21 +191,27 @@ function App() {
     }
   };
 
-  // Check if we're in a sub-view that shouldn't show nav
+  // In sub-views (edit/expanded), take full screen for the command center content
   const isInSubView = commandViewState.type !== 'command';
 
-  return (
-    <div className="h-screen flex flex-col bg-[var(--bg-primary)]">
-      {/* Navigation - hidden when in edit/expanded views */}
-      {!isInSubView && (
-        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50">
-          <AppNav currentView={appView} onViewChange={setAppView} />
-        </div>
-      )}
+  if (isInSubView) {
+    return (
+      <div className="h-screen flex flex-col bg-[var(--bg-primary)]">
+        {renderCommandCenter()}
+      </div>
+    );
+  }
 
-      {/* Main Content */}
-      <div className="flex-1">
-        {appView === 'command-center' ? renderCommandCenter() : <DroneControlPanel />}
+  return (
+    <div className="h-screen flex bg-[var(--bg-primary)]">
+      {/* Left: Command Center */}
+      <div className="flex-[6] min-w-0 h-full border-r border-[var(--border-dim)]">
+        {renderCommandCenter()}
+      </div>
+
+      {/* Right: Drone Control */}
+      <div className="flex-[4] min-w-0 h-full">
+        <DroneControlPanel />
       </div>
     </div>
   );
