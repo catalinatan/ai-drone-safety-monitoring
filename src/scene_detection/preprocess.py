@@ -1,11 +1,13 @@
 import os
-from dataclasses import dataclass
-from typing import Tuple
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import List, Tuple
 
 import numpy as np
 import torch
 import timm
-from torch.utils.data import DataLoader, Subset, WeightedRandomSampler
+from PIL import Image
+from torch.utils.data import DataLoader, Dataset, Subset, WeightedRandomSampler
 from torchvision import datasets
 
 from src.utils import find_project_root
@@ -14,10 +16,14 @@ from logger import setup_logger
 # Initialize logger with custom prefix and file output
 logger = setup_logger(__name__, log_prefix="preprocess", file_output=True)
 
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".webp"}
+
+
 @dataclass
 class DataConfig:
     """Configuration for Torch Dataset and DataLoaders"""
     data_dir: str | None = None
+    data_dirs: List[str] | None = None
     batch_size: int = 32
     num_workers: int = 2
     pin_memory: bool = True
@@ -26,6 +32,70 @@ class DataConfig:
     val_ratio: float = 0.1
     model_name: str = "mobilenetv3_large_100"
     input_size: Tuple[int, int, int] | None = None
+
+class SceneDataset(Dataset):
+    """Dataset that loads images from multiple YOLO-style dataset directories.
+
+    Each directory is treated as a separate class. The class name is inferred
+    by stripping the ``_dataset`` suffix from the directory name.
+
+    Expected layout per directory::
+
+        <name>_dataset/
+            images/
+                train/
+                    img1.jpg
+                val/
+                    img2.jpg
+    """
+
+    def __init__(self, data_dirs: List[str], transform=None):
+        self.transform = transform
+        self.samples: List[Tuple[str, int]] = []
+        self.class_to_idx: dict[str, int] = {}
+        self.targets: List[int] = []
+
+        # Derive sorted class names for deterministic label assignment
+        class_names = []
+        for d in data_dirs:
+            name = Path(d).name
+            class_name = name.replace("_dataset", "") if name.endswith("_dataset") else name
+            class_names.append((class_name, d))
+        class_names.sort(key=lambda x: x[0])
+
+        self.class_to_idx = {name: idx for idx, (name, _) in enumerate(class_names)}
+        self.classes = list(self.class_to_idx.keys())
+
+        for class_name, dir_path in class_names:
+            label = self.class_to_idx[class_name]
+            images_dir = Path(dir_path) / "images"
+            if not images_dir.exists():
+                logger.warning(f"No images/ directory in {dir_path}, skipping")
+                continue
+            for split in ("train", "val"):
+                split_dir = images_dir / split
+                if not split_dir.exists():
+                    continue
+                for img_path in sorted(split_dir.iterdir()):
+                    if img_path.suffix.lower() in IMAGE_EXTENSIONS and img_path.is_file():
+                        self.samples.append((str(img_path), label))
+                        self.targets.append(label)
+
+        logger.info(
+            f"SceneDataset: {len(self.samples)} images across "
+            f"{len(self.classes)} classes: {self.class_to_idx}"
+        )
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, idx):
+        path, label = self.samples[idx]
+        img = Image.open(path).convert("RGB")
+        if self.transform is not None:
+            img = self.transform(img)
+        return img, label
+
 
 class TransformFactory:
     """Factory to create model-specific transforms using TIMM"""
@@ -165,83 +235,118 @@ class SceneDatasetBuilder:
         self.splitter = StratifiedSplitter(seed=config.seed)
         self.transform_factory = TransformFactory()
     
-    def _create_datasets(
-        self, 
-        data_dir: str, 
-        train_transforms, 
+    def _create_imagefolder_datasets(
+        self,
+        data_dir: str,
+        train_transforms,
         eval_transforms,
         ):
-        """Create base datasets with transforms applied.
-        
+        """Create base datasets from an ImageFolder directory.
+
         Args:
-            data_dir (str): Root directory of the dataset.
-            train_transforms (): TIMM transforms for training data.
-            eval_transforms (): TIMM transforms for evaluation data.
+            data_dir (str): Root directory with class subfolders.
+            train_transforms: TIMM transforms for training data.
+            eval_transforms: TIMM transforms for evaluation data.
 
         Returns:
             tuple: (train_dataset, eval_dataset)
         """
         logger.debug(f"Creating ImageFolder datasets from: {data_dir}")
-        
+
         train_dataset = datasets.ImageFolder(root=data_dir, transform=train_transforms)
         eval_dataset = datasets.ImageFolder(root=data_dir, transform=eval_transforms)
-        
+
         logger.info(f"Datasets created - Found {len(train_dataset.classes)} classes: {train_dataset.classes}")
         return train_dataset, eval_dataset
-    
+
+    def _create_scene_datasets(
+        self,
+        data_dirs: List[str],
+        train_transforms,
+        eval_transforms,
+        ):
+        """Create base datasets from multiple YOLO-style dataset directories.
+
+        Args:
+            data_dirs: List of paths to YOLO-style dataset directories.
+            train_transforms: TIMM transforms for training data.
+            eval_transforms: TIMM transforms for evaluation data.
+
+        Returns:
+            tuple: (train_dataset, eval_dataset)
+        """
+        logger.debug(f"Creating SceneDatasets from: {data_dirs}")
+
+        train_dataset = SceneDataset(data_dirs, transform=train_transforms)
+        eval_dataset = SceneDataset(data_dirs, transform=eval_transforms)
+
+        return train_dataset, eval_dataset
+
     def build_dataloaders(self):
         """Build train, validation, and test dataloaders.
-        
+
         Returns:
             tuple: (train_loader, val_loader, test_loader, class_to_idx, config_dict)
         """
         logger.info("=" * 60)
         logger.info("Building dataloaders")
         logger.info("=" * 60)
-        
-        # Resolve data directory
-        root_dir = find_project_root()
-        if self.config.data_dir is None:
-            data_dir = os.path.join(root_dir, "data/scene_detection")
-            logger.info(f"Using default data directory: {data_dir}")
-        else:
-            data_dir = self.config.data_dir
-            logger.info(f"Using custom data directory: {data_dir}")
-        
-        if not os.path.exists(data_dir):
-            logger.error(f"Data directory does not exist: {data_dir}")
-            raise FileNotFoundError(f"Data directory not found: {data_dir}")
-        
+
         # Get transforms
         cfg, train_transforms, eval_transforms = self.transform_factory.create_transforms(
             model_name=self.config.model_name,
             input_size=self.config.input_size,
         )
-        
-        # Load base dataset to get targets
-        logger.info("Loading base dataset to extract class information")
-        base_dataset = datasets.ImageFolder(root=data_dir)
+
+        # Build base datasets depending on config
+        if self.config.data_dirs is not None:
+            # YOLO-style multi-directory mode
+            logger.info(f"Using YOLO-style data directories: {self.config.data_dirs}")
+            for d in self.config.data_dirs:
+                if not os.path.exists(d):
+                    logger.error(f"Data directory does not exist: {d}")
+                    raise FileNotFoundError(f"Data directory not found: {d}")
+
+            base_dataset = SceneDataset(self.config.data_dirs)
+            train_base_dataset, eval_base_dataset = self._create_scene_datasets(
+                self.config.data_dirs, train_transforms, eval_transforms,
+            )
+        else:
+            # ImageFolder mode (original behaviour)
+            root_dir = find_project_root()
+            if self.config.data_dir is None:
+                data_dir = os.path.join(root_dir, "data/scene_detection")
+                logger.info(f"Using default data directory: {data_dir}")
+            else:
+                data_dir = self.config.data_dir
+                logger.info(f"Using custom data directory: {data_dir}")
+
+            if not os.path.exists(data_dir):
+                logger.error(f"Data directory does not exist: {data_dir}")
+                raise FileNotFoundError(f"Data directory not found: {data_dir}")
+
+            logger.info("Loading base dataset to extract class information")
+            base_dataset = datasets.ImageFolder(root=data_dir)
+            train_base_dataset, eval_base_dataset = self._create_imagefolder_datasets(
+                data_dir, train_transforms, eval_transforms,
+            )
+
         img_class_array = np.array(base_dataset.targets, dtype=np.int64)
         num_classes = len(base_dataset.classes)
-        
+
         # Perform stratified split
         train_idx, val_idx, test_idx = self.splitter.split(
             targets=img_class_array,
             train_ratio=self.config.train_ratio,
             val_ratio=self.config.val_ratio,
         )
-        
-        # Create datasets with transforms
-        train_base_dataset, eval_base_dataset = self._create_datasets(
-            data_dir, train_transforms, eval_transforms,
-        )
-        
+
         # Create subsets
         logger.info("Creating dataset subsets")
         train_dataset = Subset(train_base_dataset, train_idx.tolist())
         val_dataset = Subset(eval_base_dataset, val_idx.tolist())
         test_dataset = Subset(eval_base_dataset, test_idx.tolist())
-        
+
         # Create weighted sampler for training
         train_targets = img_class_array[train_idx]
         sampler = WeightedSamplerFactory.create_sampler(
@@ -249,7 +354,7 @@ class SceneDatasetBuilder:
             num_classes=num_classes,
             seed=self.config.seed,
         )
-        
+
         # Create dataloaders
         logger.info("Creating DataLoaders")
         train_loader = DataLoader(
@@ -259,7 +364,7 @@ class SceneDatasetBuilder:
             num_workers=self.config.num_workers,
             pin_memory=self.config.pin_memory,
         )
-        
+
         val_loader = DataLoader(
             val_dataset,
             batch_size=self.config.batch_size,
@@ -267,7 +372,7 @@ class SceneDatasetBuilder:
             num_workers=self.config.num_workers,
             pin_memory=self.config.pin_memory,
         )
-        
+
         test_loader = DataLoader(
             test_dataset,
             batch_size=self.config.batch_size,
@@ -275,7 +380,7 @@ class SceneDatasetBuilder:
             num_workers=self.config.num_workers,
             pin_memory=self.config.pin_memory,
         )
-        
+
         logger.info(f"DataLoaders created successfully:")
         logger.info(f"  - Train: {len(train_loader)} batches ({len(train_dataset)} samples)")
         logger.info(f"  - Val:   {len(val_loader)} batches ({len(val_dataset)} samples)")
@@ -283,7 +388,7 @@ class SceneDatasetBuilder:
         logger.info(f"  - Batch size: {self.config.batch_size}")
         logger.info(f"  - Class mapping: {base_dataset.class_to_idx}")
         logger.info("=" * 60)
-        
+
         return train_loader, val_loader, test_loader, base_dataset.class_to_idx, cfg
 
 

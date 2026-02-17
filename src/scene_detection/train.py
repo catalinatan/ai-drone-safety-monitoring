@@ -212,9 +212,12 @@ def main():
     # Parse arguments
     parser = argparse.ArgumentParser(description="Train scene detection model")
     
-    # Data arguments
-    parser.add_argument("--data-dir", type=str, default=None,
+    # Data arguments (--data-dir and --data-dirs are mutually exclusive)
+    data_group = parser.add_mutually_exclusive_group()
+    data_group.add_argument("--data-dir", type=str, default=None,
                        help="ImageFolder root (contains class folders)")
+    data_group.add_argument("--data-dirs", type=str, nargs="+", default=None,
+                       help="YOLO-style dataset directories (e.g. data/bridge_dataset data/ship_dataset)")
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--num-workers", type=int, default=2)
     parser.add_argument("--train-ratio", type=float, default=0.8)
@@ -250,6 +253,7 @@ def main():
     # Create configurations
     data_config = DataConfig(
         data_dir=args.data_dir,
+        data_dirs=args.data_dirs,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
         seed=args.seed,
