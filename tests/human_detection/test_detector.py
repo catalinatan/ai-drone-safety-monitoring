@@ -2,6 +2,7 @@ import pytest
 import numpy as np
 from unittest.mock import MagicMock, patch
 from src.human_detection.detector import HumanDetector
+from src.human_detection.config import CONFIDENCE_THRESHOLD, INFERENCE_IMGSZ
 
 
 # Create a dummy image (100x100 pixels, 3 channels for RGB)
@@ -37,6 +38,12 @@ class TestHumanDetector:
 
         assert isinstance(masks, list)
         assert len(masks) == 0
+
+        # Verify imgsz is passed to inference
+        mock_yolo_instance = mock_yolo.return_value
+        mock_yolo_instance.assert_called_once_with(
+            dummy_frame, conf=CONFIDENCE_THRESHOLD, imgsz=INFERENCE_IMGSZ, verbose=False
+        )
 
     @patch('src.human_detection.detector.YOLO')
     def test_get_masks_with_detections(self, mock_yolo, dummy_frame):

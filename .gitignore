@@ -1,8 +1,8 @@
 # my settings
 env.py
 tmp/
-data/*
 .vscode/
+.DS_Store
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

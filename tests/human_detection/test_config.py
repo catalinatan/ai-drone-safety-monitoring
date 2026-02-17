@@ -12,3 +12,6 @@ def test_config_values():
 
     # Ensure the class ID for 'person' is an integer (usually 0 in COCO)
     assert isinstance(config.CLASS_ID_PERSON, int)
+
+    assert isinstance(config.INFERENCE_IMGSZ, int)
+    assert config.INFERENCE_IMGSZ >= 320

@@ -1,7 +1,7 @@
 from ultralytics import YOLO
 import cv2
 import numpy as np
-from .config import MODEL_PATH, CONFIDENCE_THRESHOLD, CLASS_ID_PERSON
+from .config import MODEL_PATH, CONFIDENCE_THRESHOLD, CLASS_ID_PERSON, INFERENCE_IMGSZ
 
 
 class HumanDetector:
@@ -15,7 +15,7 @@ class HumanDetector:
         Input: A single video frame (image).
         Output: A list of binary masks (numpy arrays), one for each human found.
         """
-        results = self.model(frame, conf=CONFIDENCE_THRESHOLD, verbose=False)
+        results = self.model(frame, conf=CONFIDENCE_THRESHOLD, imgsz=INFERENCE_IMGSZ, verbose=False)
         result = results[0]
 
         extracted_masks = []
