@@ -1,15 +1,27 @@
+import { useState, useEffect } from 'react';
 import { Pencil, Maximize2, AlertTriangle, AlertCircle, Users, VideoOff } from 'lucide-react';
 import type { Feed } from '../types';
 import { useDetectionStatus } from '../hooks/useDetectionStatus';
+
+const ZONE_COLORS: Record<string, { stroke: string; fill: string }> = {
+  red: { stroke: '#ff3b5c', fill: 'rgba(255, 59, 92, 0.25)' },
+  yellow: { stroke: '#ffc107', fill: 'rgba(255, 193, 7, 0.25)' },
+  green: { stroke: '#00e676', fill: 'rgba(0, 230, 118, 0.25)' },
+};
 
 interface FeedCardProps {
   feed: Feed;
   onEdit: () => void;
   onExpand: () => void;
+  showZones?: boolean;
 }
 
-export function FeedCard({ feed, onEdit, onExpand }: FeedCardProps) {
+export function FeedCard({ feed, onEdit, onExpand, showZones = false }: FeedCardProps) {
   const detectionStatus = useDetectionStatus(feed.id, feed.isLive);
+  const [hasRenderedFrame, setHasRenderedFrame] = useState(false);
+  const [streamAttempt, setStreamAttempt] = useState(0);
+  const [retryCount, setRetryCount] = useState(0);
+  const [isStreamBroken, setIsStreamBroken] = useState(false);
 
   useEffect(() => {
     setHasRenderedFrame(false);
@@ -194,6 +206,25 @@ export function FeedCard({ feed, onEdit, onExpand }: FeedCardProps) {
           <div className="absolute bottom-2 right-2 px-2 py-0.5 rounded text-xs font-mono bg-[var(--zone-yellow)]/80 border border-[var(--zone-yellow)]">
             <span className="text-black">{detectionStatus.caution_count} IN YELLOW ZONE</span>
           </div>
+        )}
+
+        {/* Zone overlay */}
+        {showZones && feed.zones.length > 0 && !isPlaceholder && (
+          <svg className="absolute inset-0 w-full h-full pointer-events-none z-[5]" viewBox="0 0 100 100" preserveAspectRatio="none">
+            {feed.zones.map((zone) => {
+              const colors = ZONE_COLORS[zone.level] || ZONE_COLORS.green;
+              const pointsStr = zone.points.map((p) => `${p.x},${p.y}`).join(' ');
+              return (
+                <polygon
+                  key={zone.id}
+                  points={pointsStr}
+                  fill={colors.fill}
+                  stroke={colors.stroke}
+                  strokeWidth="0.5"
+                />
+              );
+            })}
+          </svg>
         )}
 
         {/* Scanline overlay */}

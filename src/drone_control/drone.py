@@ -106,6 +106,7 @@ class DroneState:
         self.should_stop = False          # signals the control loop to land and exit
         self.returning_home = False       # True when executing RTH; triggers landing on arrival
         self.grounded = False            # True after RTH drop; needs takeoff before next flight
+        self.current_pose = None         # (x, y, z) NED from simGetVehiclePose
         # Camera frames for dual-view streaming
         self.frame_forward = None         # Camera 3: forward-looking view
         self.frame_down = None            # Camera 0: downward-looking view
@@ -237,6 +238,14 @@ class DroneState:
         with self.lock:
             return self.grounded
 
+    def set_pose(self, pose_xyz: Tuple[float, float, float]):
+        with self.lock:
+            self.current_pose = pose_xyz
+
+    def get_pose(self):
+        with self.lock:
+            return self.current_pose
+
 # Global state instance
 drone_state = DroneState()
 
@@ -351,12 +360,14 @@ async def return_home():
 async def get_status():
     """Get current drone status."""
     target, is_nav, _ = drone_state.get_nav_snapshot()
+    pose = drone_state.get_pose()
     return {
         "mode": drone_state.get_mode(),
         "connected": True,  # Would check actual connection
         "is_navigating": is_nav,
         "returning_home": drone_state.get_returning_home(),
-        "target_position": target
+        "target_position": target,
+        "pose": {"x": pose[0], "y": pose[1], "z": pose[2]} if pose else None,
     }
 
 def generate_frames_forward():
@@ -499,6 +510,10 @@ def drone_control_loop():
 
             cv2.waitKey(1)  # required by OpenCV to refresh the window
             
+            # ----- Update telemetry -----
+            pose = client.simGetVehiclePose()
+            drone_state.set_pose((pose.position.x_val, pose.position.y_val, pose.position.z_val))
+
             # ----- Mode-specific control -----
             current_mode = drone_state.get_mode()
             

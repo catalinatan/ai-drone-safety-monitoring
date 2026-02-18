@@ -13,6 +13,9 @@ import {
   Plane,
   Hand,
   Camera,
+  Battery,
+  Wifi,
+  Clock,
 } from 'lucide-react';
 import { BACKEND_URL } from '../data/mockFeeds';
 
@@ -22,6 +25,7 @@ interface DroneStatus {
   is_navigating: boolean;
   returning_home: boolean;
   target_position: [number, number, number] | null;
+  pose: { x: number; y: number; z: number } | null;
 }
 
 const DRONE_API_BASE = 'http://localhost:8000';
@@ -33,6 +37,7 @@ export function DroneControlPanel() {
     is_navigating: false,
     returning_home: false,
     target_position: null,
+    pose: null,
   });
   const [isConnected, setIsConnected] = useState(false);
   const [activeControls, setActiveControls] = useState<Set<string>>(new Set());
@@ -43,6 +48,8 @@ export function DroneControlPanel() {
   const [triggerImgKey, setTriggerImgKey] = useState(0);
   const videoRef = useRef<HTMLImageElement>(null);
   const lastVelocityRef = useRef({ vx: 0, vy: 0, vz: 0 });
+  const [connectedSince, setConnectedSince] = useState<number | null>(null);
+  const [flightTime, setFlightTime] = useState('00:00');
 
   // Fetch drone status periodically
   useEffect(() => {
@@ -52,12 +59,15 @@ export function DroneControlPanel() {
         if (response.ok) {
           const data = await response.json();
           setStatus(data);
+          if (!isConnected) setConnectedSince(Date.now());
           setIsConnected(true);
         } else {
           setIsConnected(false);
+          setConnectedSince(null);
         }
       } catch {
         setIsConnected(false);
+        setConnectedSince(null);
       }
     };
 
@@ -65,6 +75,18 @@ export function DroneControlPanel() {
     const interval = setInterval(fetchStatus, 1000);
     return () => clearInterval(interval);
   }, []);
+
+  // Flight time ticker
+  useEffect(() => {
+    if (!connectedSince) { setFlightTime('00:00'); return; }
+    const tick = setInterval(() => {
+      const elapsed = Math.floor((Date.now() - connectedSince) / 1000);
+      const mm = String(Math.floor(elapsed / 60)).padStart(2, '0');
+      const ss = String(elapsed % 60).padStart(2, '0');
+      setFlightTime(`${mm}:${ss}`);
+    }, 1000);
+    return () => clearInterval(tick);
+  }, [connectedSince]);
 
   // Poll trigger info from backend
   useEffect(() => {
@@ -333,6 +355,30 @@ export function DroneControlPanel() {
         )}
       </header>
 
+      {/* Telemetry Bar */}
+      {isConnected && (
+        <div className="flex items-center justify-between px-4 py-1.5 border-b border-[var(--border-dim)] bg-[var(--bg-secondary)]/50 backdrop-blur-sm flex-shrink-0">
+          <div className="flex items-center gap-1.5">
+            <Battery size={12} className="text-[var(--zone-green)]" />
+            <span className="text-[10px] font-bold font-mono uppercase tracking-wider text-[var(--zone-green)]">87%</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <ArrowUp size={12} className="text-[var(--accent-cyan)]" />
+            <span className="text-[10px] font-bold font-mono uppercase tracking-wider text-[var(--accent-cyan)]">
+              ALT {status.pose ? Math.abs(status.pose.z).toFixed(1) : '--'}M
+            </span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <Wifi size={12} className="text-[var(--zone-green)]" />
+            <span className="text-[10px] font-bold font-mono uppercase tracking-wider text-[var(--zone-green)]">STRONG</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <Clock size={12} className="text-[var(--text-secondary)]" />
+            <span className="text-[10px] font-bold font-mono uppercase tracking-wider text-[var(--text-secondary)]">{flightTime}</span>
+          </div>
+        </div>
+      )}
+
       {/* Main Content - CCTV Trigger + Drone Feeds */}
       <main className="flex-1 flex flex-col items-center px-4 py-3 gap-3 min-h-0 overflow-hidden">
         {/* CCTV Trigger Feed - shows the frame that triggered drone deployment */}
@@ -438,8 +484,8 @@ export function DroneControlPanel() {
             </div>
           )}
 
-          {/* Top row: Flight Mode Toggle + RTH + Deploy */}
-          <div className="flex items-center justify-between mb-3">
+          {/* Top row: RTH + Flight Mode Toggle */}
+          <div className="flex items-center justify-center gap-4 mb-3">
             {/* Return Home */}
             <button
               onClick={handleReturnHome}
@@ -492,28 +538,9 @@ export function DroneControlPanel() {
                 <span>Manual</span>
               </button>
             </div>
-
-            {/* Deploy Equipment */}
-            <button
-              onClick={handleDeployEquipment}
-              disabled={equipmentDeployed}
-              className={`
-                flex items-center gap-1.5 px-3 py-2 rounded-lg border-2 transition-all duration-300
-                ${
-                  equipmentDeployed
-                    ? 'border-[var(--zone-green)] bg-[var(--zone-green)]/20 text-[var(--zone-green)]'
-                    : 'border-[var(--zone-red)]/80 bg-[var(--zone-red)]/15 text-[var(--zone-red)] hover:border-[var(--zone-red)]'
-                }
-              `}
-            >
-              <Package size={16} className={equipmentDeployed ? 'animate-bounce' : ''} />
-              <span className="text-[9px] font-bold font-mono uppercase tracking-wider">
-                {equipmentDeployed ? 'Sent!' : 'Deploy'}
-              </span>
-            </button>
           </div>
 
-          {/* Bottom row: Movement + Altitude Controls */}
+          {/* Bottom row: Movement + Altitude + Deploy Controls */}
           <div className="flex items-center justify-center gap-6">
             {/* Movement Controls (WASD) */}
             <div className="flex flex-col items-center gap-1">
@@ -581,6 +608,31 @@ export function DroneControlPanel() {
                 label="X"
                 variant="altitude"
               />
+            </div>
+
+            {/* Deploy Equipment */}
+            <div className="flex flex-col items-center gap-1">
+              <span className="text-[9px] font-bold font-mono text-white uppercase tracking-wider mb-1">
+                Deploy
+              </span>
+              <button
+                onClick={handleDeployEquipment}
+                disabled={equipmentDeployed}
+                className={`
+                  relative w-11 h-11 rounded-lg border-2 transition-all duration-300
+                  flex items-center justify-center
+                  ${
+                    equipmentDeployed
+                      ? 'border-[var(--zone-green)] bg-[var(--zone-green)]/20 text-[var(--zone-green)]'
+                      : 'border-[var(--zone-red)]/80 bg-[var(--zone-red)]/15 text-[var(--zone-red)] hover:border-[var(--zone-red)]'
+                  }
+                `}
+              >
+                <Package size={18} className={equipmentDeployed ? 'animate-bounce' : ''} />
+              </button>
+              <span className="text-[9px] font-mono text-white/60">
+                {equipmentDeployed ? 'SENT' : 'DROP'}
+              </span>
             </div>
           </div>
         </div>

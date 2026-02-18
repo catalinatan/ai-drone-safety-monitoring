@@ -1021,7 +1021,12 @@ class FeedManager:
         if not feed.scene_type or self.segmenter is None:
             return []
 
-        best_zone_dicts: List[dict] = []
+        with feed.lock:
+            frame = feed.last_frame.copy() if feed.last_frame is not None else None
+
+        if frame is None:
+            return []
+
         # AirSim frames are stored as RGB; convert to BGR for the YOLO model
         frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
 
@@ -1032,12 +1037,12 @@ class FeedManager:
         feed.last_auto_seg_time = time.time()
         feed.auto_seg_active = False
 
-        if not best_zone_dicts:
-            print(f"[AUTO-SEG] No hazard zones detected in {feed_id} after {attempts} attempt(s)")
+        if not zone_dicts:
+            print(f"[AUTO-SEG] No hazard zones detected in {feed_id}")
             return []
 
         # Convert dicts to Zone objects
-        zones = [Zone(**z) for z in best_zone_dicts]
+        zones = [Zone(**z) for z in zone_dicts]
 
         # Apply zones (generates binary masks and persists to file)
         self.update_zones(feed_id, zones, frame.shape[1], frame.shape[0])

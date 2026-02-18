@@ -1,4 +1,5 @@
-import { Shield, Radio } from 'lucide-react';
+import { useState } from 'react';
+import { Shield, Radio, Eye, EyeOff } from 'lucide-react';
 import { FeedCard } from './FeedCard';
 import type { Feed } from '../types';
 
@@ -9,6 +10,8 @@ interface CommandPanelProps {
 }
 
 export function CommandPanel({ feeds, onEditFeed, onExpandFeed }: CommandPanelProps) {
+  const [showZones, setShowZones] = useState(false);
+
   return (
     <div className="h-full flex flex-col bg-[var(--bg-primary)] tactical-grid">
       {/* Header */}
@@ -25,24 +28,41 @@ export function CommandPanel({ feeds, onEditFeed, onExpandFeed }: CommandPanelPr
           </div>
         </div>
 
-        <div className="flex items-center gap-2 px-2 py-1 rounded border border-[var(--border-dim)] bg-[var(--bg-tertiary)]">
-          <span className="text-[10px] text-[var(--text-muted)]">FEEDS:</span>
-          <span className="text-xs font-mono text-[var(--accent-cyan)]">
-            {feeds.filter(f => f.isLive).length}/4
-          </span>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowZones((v) => !v)}
+            className={`
+              flex items-center gap-1.5 px-2 py-1 rounded border transition-all duration-200
+              ${showZones
+                ? 'border-[var(--accent-cyan)] bg-[var(--accent-cyan)]/10 text-[var(--accent-cyan)]'
+                : 'border-[var(--border-dim)] bg-[var(--bg-tertiary)] text-[var(--text-muted)] hover:text-[var(--text-secondary)]'
+              }
+            `}
+            title={showZones ? 'Hide zones' : 'Show zones'}
+          >
+            {showZones ? <Eye size={12} /> : <EyeOff size={12} />}
+            <span className="text-[10px] font-bold font-mono uppercase tracking-wider">Zones</span>
+          </button>
+          <div className="flex items-center gap-2 px-2 py-1 rounded border border-[var(--border-dim)] bg-[var(--bg-tertiary)]">
+            <span className="text-[10px] text-[var(--text-muted)]">FEEDS:</span>
+            <span className="text-xs font-mono text-[var(--accent-cyan)]">
+              {feeds.filter(f => f.isLive).length}/4
+            </span>
+          </div>
         </div>
       </header>
 
       {/* Main Content - 4 Corner Grid */}
-      <main className="flex-1 min-h-0 p-4 relative overflow-hidden">
+      <main className="flex-1 min-h-0 p-2 relative overflow-hidden">
         {/* Grid container */}
-        <div className="h-full grid grid-cols-2 grid-rows-2 gap-4">
+        <div className="h-full grid grid-cols-2 grid-rows-2 gap-2">
           {feeds.slice(0, 4).map((feed) => (
             <FeedCard
               key={feed.id}
               feed={feed}
               onEdit={() => onEditFeed(feed.id)}
               onExpand={() => onExpandFeed(feed.id)}
+              showZones={showZones}
             />
           ))}
         </div>
