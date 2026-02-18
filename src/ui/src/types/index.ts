@@ -26,6 +26,7 @@ export interface DetectionStatus {
   caution_count: number;      // People in YELLOW zones
   target_coordinates: NEDCoordinate | null;
   last_detection_time: string | null;
+  position: NEDCoordinate | null; // CCTV camera position (NED)
 }
 
 export interface Feed {

@@ -53,6 +53,10 @@ DETECTION_FPS = int(os.getenv("DETECTION_FPS", "30"))
 DETECTION_INTERVAL = 1.0 / DETECTION_FPS
 ALARM_COOLDOWN = float(os.getenv("ALARM_COOLDOWN", "5.0"))
 
+# Startup warm-up: require a minimum number of captured frames per feed
+# before detection can trigger alarms/drone actions.
+DETECTION_WARMUP_FRAMES = int(os.getenv("DETECTION_WARMUP_FRAMES", "20"))
+
 # ============================================================================
 # CAMERA / AIRSIM
 # ============================================================================
@@ -157,5 +161,13 @@ AUTO_SEG_INTERVAL = float(os.getenv("AUTO_SEG_INTERVAL", "60.0"))
 # YOLO segmentation confidence threshold
 AUTO_SEG_CONFIDENCE = float(os.getenv("AUTO_SEG_CONFIDENCE", "0.5"))
 
+# Auto-seg retries: more attempts with longer delays to capture diverse frames
+# and allow progressive confidence reduction for partially-visible hazards.
+AUTO_SEG_MAX_RETRIES = int(os.getenv("AUTO_SEG_MAX_RETRIES", "5"))
+AUTO_SEG_RETRY_DELAY = float(os.getenv("AUTO_SEG_RETRY_DELAY", "0.5"))
+
 # Polygon simplification epsilon for cv2.approxPolyDP (higher = fewer points)
 AUTO_SEG_SIMPLIFY_EPSILON = float(os.getenv("AUTO_SEG_SIMPLIFY_EPSILON", "2.0"))
+
+# Minimum contour area (pixels) for auto-segment polygons.
+AUTO_SEG_MIN_CONTOUR_AREA = float(os.getenv("AUTO_SEG_MIN_CONTOUR_AREA", "40.0"))

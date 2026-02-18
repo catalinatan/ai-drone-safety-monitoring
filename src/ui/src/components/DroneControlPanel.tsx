@@ -14,11 +14,13 @@ import {
   Hand,
   Camera,
 } from 'lucide-react';
+import { BACKEND_URL } from '../data/mockFeeds';
 
 interface DroneStatus {
   mode: 'manual' | 'automatic';
   connected: boolean;
   is_navigating: boolean;
+  returning_home: boolean;
   target_position: [number, number, number] | null;
 }
 
@@ -29,6 +31,7 @@ export function DroneControlPanel() {
     mode: 'manual',
     connected: false,
     is_navigating: false,
+    returning_home: false,
     target_position: null,
   });
   const [isConnected, setIsConnected] = useState(false);
@@ -36,6 +39,8 @@ export function DroneControlPanel() {
   const [isReturningHome, setIsReturningHome] = useState(false);
   const [equipmentDeployed, setEquipmentDeployed] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [triggerInfo, setTriggerInfo] = useState<{ has_snapshot: boolean; feed_id: string | null; timestamp: string | null }>({ has_snapshot: false, feed_id: null, timestamp: null });
+  const [triggerImgKey, setTriggerImgKey] = useState(0);
   const videoRef = useRef<HTMLImageElement>(null);
   const lastVelocityRef = useRef({ vx: 0, vy: 0, vz: 0 });
 
@@ -60,6 +65,29 @@ export function DroneControlPanel() {
     const interval = setInterval(fetchStatus, 1000);
     return () => clearInterval(interval);
   }, []);
+
+  // Poll trigger info from backend
+  useEffect(() => {
+    const fetchTriggerInfo = async () => {
+      try {
+        const response = await fetch(`${BACKEND_URL}/trigger-info`);
+        if (response.ok) {
+          const data = await response.json();
+          // If timestamp changed, bump key to reload image
+          if (data.has_snapshot && data.timestamp !== triggerInfo.timestamp) {
+            setTriggerImgKey((k) => k + 1);
+          }
+          setTriggerInfo(data);
+        }
+      } catch {
+        // Backend unavailable
+      }
+    };
+
+    fetchTriggerInfo();
+    const interval = setInterval(fetchTriggerInfo, 2000);
+    return () => clearInterval(interval);
+  }, [triggerInfo.timestamp]);
 
   // Show error with auto-dismiss
   const showError = useCallback((message: string) => {
@@ -111,7 +139,7 @@ export function DroneControlPanel() {
 
       if (response.ok) {
         setIsReturningHome(true);
-        setStatus((prev) => ({ ...prev, mode: 'automatic', is_navigating: true }));
+        setStatus((prev) => ({ ...prev, mode: 'automatic', is_navigating: true, returning_home: true }));
       } else {
         const data = await response.json();
         showError(data.detail || 'Failed to return home');
@@ -240,25 +268,28 @@ export function DroneControlPanel() {
     };
   }, [status.mode]);
 
-  // Reset returning home state when navigation completes
+  // Sync returning home state with backend
   useEffect(() => {
-    if (!status.is_navigating && isReturningHome) {
-      setIsReturningHome(false);
-    }
-  }, [status.is_navigating, isReturningHome]);
+    setIsReturningHome(status.returning_home);
+  }, [status.returning_home]);
 
   const isManual = status.mode === 'manual';
   const isAutomatic = status.mode === 'automatic';
 
   return (
-    <div className="h-full flex flex-col bg-[var(--bg-primary)] tactical-grid relative overflow-hidden pt-28">
-      {/* Top Bar - Connection & Navigation Status */}
-      <header className="absolute top-14 left-0 right-0 z-20 flex items-center justify-center px-6 py-3">
-        <div className="flex items-center gap-4">
+    <div className="h-full flex flex-col bg-[var(--bg-primary)] tactical-grid relative overflow-hidden">
+      {/* Header Bar */}
+      <header className="flex items-center justify-between px-4 py-3 border-b border-[var(--border-dim)] bg-[var(--bg-secondary)]/80 backdrop-blur-sm flex-shrink-0">
+        <div className="flex items-center gap-3">
+          <Plane className="w-5 h-5 text-[var(--accent-cyan)]" />
+          <h1 className="text-sm font-bold tracking-wider uppercase text-glow-cyan">
+            Drone Control
+          </h1>
+          <div className="h-4 w-px bg-[var(--border-dim)]" />
           {/* Connection Status */}
           <div
             className={`
-            flex items-center gap-2 px-3 py-2 rounded-lg border backdrop-blur-sm
+            flex items-center gap-2 px-2 py-1 rounded border
             ${
               isConnected
                 ? 'border-[var(--zone-green)]/50 bg-[var(--zone-green-fill)]'
@@ -267,185 +298,230 @@ export function DroneControlPanel() {
           `}
           >
             <Radio
-              size={14}
+              size={12}
               className={isConnected ? 'text-[var(--zone-green)] status-live' : 'text-[var(--zone-red)]'}
             />
             <span
-              className={`text-xs font-mono ${isConnected ? 'text-[var(--zone-green)]' : 'text-[var(--zone-red)]'}`}
+              className={`text-[10px] font-mono ${isConnected ? 'text-[var(--zone-green)]' : 'text-[var(--zone-red)]'}`}
             >
               {isConnected ? 'CONNECTED' : 'DISCONNECTED'}
             </span>
           </div>
-
-          {/* Navigation Status */}
-          {isAutomatic && status.is_navigating && (
-            <div className="flex items-center gap-2 px-3 py-2 rounded-lg border border-[var(--zone-yellow)]/50 bg-[var(--zone-yellow-fill)] backdrop-blur-sm">
-              <Plane size={14} className="text-[var(--zone-yellow)] animate-pulse" />
-              <span className="text-xs font-mono text-[var(--zone-yellow)]">NAVIGATING TO TARGET</span>
-            </div>
-          )}
         </div>
+
+        {/* Navigation Status */}
+        {isAutomatic && status.is_navigating && (
+          <div className={`flex items-center gap-2 px-2 py-1 rounded border ${
+            isReturningHome
+              ? 'border-[var(--accent-cyan)]/50 bg-[var(--accent-cyan)]/10'
+              : 'border-[var(--zone-yellow)]/50 bg-[var(--zone-yellow-fill)]'
+          }`}>
+            <Home size={12} className={isReturningHome
+              ? 'text-[var(--accent-cyan)] animate-pulse'
+              : 'hidden'
+            } />
+            <Plane size={12} className={isReturningHome
+              ? 'hidden'
+              : 'text-[var(--zone-yellow)] animate-pulse'
+            } />
+            <span className={`text-[10px] font-mono ${
+              isReturningHome ? 'text-[var(--accent-cyan)]' : 'text-[var(--zone-yellow)]'
+            }`}>
+              {isReturningHome ? 'RETURNING HOME' : 'NAVIGATING'}
+            </span>
+          </div>
+        )}
       </header>
 
       {/* Main Content - CCTV Trigger + Drone Feeds */}
-      <main className="flex-1 flex flex-col items-center justify-center px-6 pt-4 pb-56 gap-4 min-h-0">
+      <main className="flex-1 flex flex-col items-center px-4 py-3 gap-3 min-h-0 overflow-hidden">
         {/* CCTV Trigger Feed - shows the frame that triggered drone deployment */}
-        <div className="relative w-full max-w-sm aspect-video rounded-lg overflow-hidden border-2 border-dashed border-[var(--border-dim)] corner-brackets flex-shrink-0">
-          <div className="w-full h-full flex flex-col items-center justify-center bg-[var(--bg-card)] gap-2">
-            <Camera size={28} className="text-[var(--text-muted)]" />
-            <span className="text-xs font-mono text-[var(--text-secondary)] tracking-wider">CCTV TRIGGER FEED</span>
-            <span className="text-[10px] font-mono text-[var(--text-muted)]">Awaiting hazard detection...</span>
-          </div>
+        <div className={`relative w-full max-w-sm aspect-video rounded-lg overflow-hidden border-2 ${triggerInfo.has_snapshot ? 'border-[var(--zone-red)]' : 'border-dashed border-[var(--border-dim)]'} corner-brackets flex-shrink-0`}>
+          {triggerInfo.has_snapshot ? (
+            <img
+              key={triggerImgKey}
+              src={`${BACKEND_URL}/trigger-snapshot?t=${triggerImgKey}`}
+              alt="CCTV Trigger"
+              className="w-full h-full object-cover"
+            />
+          ) : (
+            <div className="w-full h-full flex flex-col items-center justify-center bg-[var(--bg-card)] gap-2">
+              <Camera size={28} className="text-[var(--text-muted)]" />
+              <span className="text-xs font-mono text-[var(--text-secondary)] tracking-wider">CCTV TRIGGER FEED</span>
+              <span className="text-[10px] font-mono text-[var(--text-muted)]">Awaiting hazard detection...</span>
+            </div>
+          )}
           <div className="absolute top-3 left-3 flex items-center gap-2 px-2 py-1 rounded bg-[var(--bg-primary)]/80 border border-[var(--border-dim)]">
-            <div className="w-2 h-2 rounded-full bg-[var(--text-muted)]" />
-            <span className="text-[10px] font-mono text-[var(--text-secondary)] tracking-wider">TRIGGER CAM</span>
+            <div className={`w-2 h-2 rounded-full ${triggerInfo.has_snapshot ? 'bg-[var(--zone-red)]' : 'bg-[var(--text-muted)]'}`} />
+            <span className="text-[10px] font-mono text-[var(--text-secondary)] tracking-wider">
+              {triggerInfo.has_snapshot && triggerInfo.feed_id ? triggerInfo.feed_id.toUpperCase().replace('-', ' ') + ' TRIGGER' : 'TRIGGER CAM'}
+            </span>
           </div>
+          {triggerInfo.has_snapshot && triggerInfo.timestamp && (
+            <div className="absolute bottom-3 right-3 px-2 py-1 rounded bg-[var(--bg-primary)]/80 border border-[var(--border-dim)]">
+              <span className="text-[10px] font-mono text-[var(--text-muted)] tracking-wider">
+                {new Date(triggerInfo.timestamp).toLocaleTimeString('en-US', { hour12: false })}
+              </span>
+            </div>
+          )}
           <div className="absolute inset-0 scanlines pointer-events-none opacity-50" />
         </div>
 
         {/* Drone Feeds - Side by Side */}
-        <div className="flex items-center justify-center gap-6 w-full flex-1 min-h-0">
-        {/* Down Camera (Camera 0) - Ground surveillance */}
-        <div className="relative flex-1 max-w-2xl h-full rounded-lg overflow-hidden border-2 border-[var(--border-dim)] corner-brackets">
-          {/* Video Feed */}
-          {isConnected ? (
-            <img
-              ref={videoRef}
-              src={`${DRONE_API_BASE}/video_feed/down`}
-              alt="Drone Down Camera"
-              className="w-full h-full object-cover"
-            />
-          ) : (
-            <div className="w-full h-full bg-[var(--bg-card)] flex flex-col items-center justify-center gap-4">
-              <AlertTriangle size={48} className="text-[var(--zone-yellow)]" />
-              <span className="text-lg font-mono text-[var(--text-secondary)]">NO VIDEO SIGNAL</span>
-              <span className="text-sm text-[var(--text-muted)]">Waiting for drone connection...</span>
+        <div className="flex items-center justify-center gap-3 w-full flex-1 min-h-0">
+          {/* Forward Camera */}
+          <div className="relative flex-1 h-full rounded-lg overflow-hidden border-2 border-[var(--border-dim)] corner-brackets">
+            {isConnected ? (
+              <img
+                ref={videoRef}
+                src={`${DRONE_API_BASE}/video_feed/down`}
+                alt="Drone Forward Camera"
+                className="w-full h-full object-cover"
+              />
+            ) : (
+              <div className="w-full h-full bg-[var(--bg-card)] flex flex-col items-center justify-center gap-2">
+                <AlertTriangle size={32} className="text-[var(--zone-yellow)]" />
+                <span className="text-sm font-mono text-[var(--text-secondary)]">NO SIGNAL</span>
+              </div>
+            )}
+            <div className="absolute inset-0 scanlines pointer-events-none" />
+            <div className="absolute inset-0 pointer-events-none">
+              <div className="absolute top-1/2 left-0 right-0 h-px bg-[var(--accent-cyan)]/20" />
+              <div className="absolute left-1/2 top-0 bottom-0 w-px bg-[var(--accent-cyan)]/20" />
+              <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-12 h-12 border border-[var(--accent-cyan)]/30 rounded-full" />
             </div>
-          )}
-
-          {/* Scanline overlay */}
-          <div className="absolute inset-0 scanlines pointer-events-none" />
-
-          {/* Crosshair overlay */}
-          <div className="absolute inset-0 pointer-events-none">
-            <div className="absolute top-1/2 left-0 right-0 h-px bg-[var(--accent-cyan)]/20" />
-            <div className="absolute left-1/2 top-0 bottom-0 w-px bg-[var(--accent-cyan)]/20" />
-            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-16 h-16 border border-[var(--accent-cyan)]/30 rounded-full" />
-            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-8 h-8 border border-[var(--accent-cyan)]/50 rounded-full" />
-          </div>
-
-          {/* Camera label */}
-          <div className="absolute top-4 left-4 flex items-center gap-2 px-2 py-1 rounded bg-[var(--bg-primary)]/80 border border-[var(--border-dim)]">
-            <div
-              className={`w-2 h-2 rounded-full ${isAutomatic ? 'bg-[var(--zone-yellow)]' : 'bg-[var(--zone-green)]'} status-live`}
-            />
-            <span className="text-[10px] font-mono text-[var(--text-secondary)] tracking-wider">
-              FORWARD CAM
-            </span>
-          </div>
-
-          {/* Timestamp */}
-          <div className="absolute bottom-4 right-4 px-2 py-1 rounded bg-[var(--bg-primary)]/80 border border-[var(--border-dim)]">
-            <span className="text-[10px] font-mono text-[var(--text-muted)] tracking-wider">
-              {new Date().toLocaleTimeString('en-US', { hour12: false })} UTC
-            </span>
-          </div>
-        </div>
-
-        {/* Forward Camera (Camera 3) - Navigation view */}
-        <div className="relative flex-1 max-w-2xl aspect-video rounded-lg overflow-hidden border-2 border-[var(--border-dim)] corner-brackets">
-          {/* Video Feed */}
-          {isConnected ? (
-            <img
-              src={`${DRONE_API_BASE}/video_feed/forward`}
-              alt="Drone Forward Camera"
-              className="w-full h-full object-cover"
-            />
-          ) : (
-            <div className="w-full h-full bg-[var(--bg-card)] flex flex-col items-center justify-center gap-4">
-              <AlertTriangle size={48} className="text-[var(--zone-yellow)]" />
-              <span className="text-lg font-mono text-[var(--text-secondary)]">NO VIDEO SIGNAL</span>
-              <span className="text-sm text-[var(--text-muted)]">Waiting for drone connection...</span>
+            <div className="absolute top-2 left-2 flex items-center gap-1.5 px-1.5 py-0.5 rounded bg-[var(--bg-primary)]/80 border border-[var(--border-dim)]">
+              <div className={`w-1.5 h-1.5 rounded-full ${isAutomatic ? 'bg-[var(--zone-yellow)]' : 'bg-[var(--zone-green)]'} status-live`} />
+              <span className="text-[9px] font-mono text-[var(--text-secondary)] tracking-wider">FORWARD</span>
             </div>
-          )}
-
-          {/* Scanline overlay */}
-          <div className="absolute inset-0 scanlines pointer-events-none" />
-
-          {/* Crosshair overlay */}
-          <div className="absolute inset-0 pointer-events-none">
-            <div className="absolute top-1/2 left-0 right-0 h-px bg-[var(--accent-cyan)]/20" />
-            <div className="absolute left-1/2 top-0 bottom-0 w-px bg-[var(--accent-cyan)]/20" />
-            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-16 h-16 border border-[var(--accent-cyan)]/30 rounded-full" />
-            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-8 h-8 border border-[var(--accent-cyan)]/50 rounded-full" />
           </div>
 
-          {/* Camera label */}
-          <div className="absolute top-4 left-4 flex items-center gap-2 px-2 py-1 rounded bg-[var(--bg-primary)]/80 border border-[var(--border-dim)]">
-            <div
-              className={`w-2 h-2 rounded-full ${isConnected ? 'bg-[var(--zone-green)]' : 'bg-[var(--zone-red)]'} status-live`}
-            />
-            <span className="text-[10px] font-mono text-[var(--text-secondary)] tracking-wider">
-              DOWN CAM
-            </span>
+          {/* Down Camera */}
+          <div className="relative flex-1 h-full rounded-lg overflow-hidden border-2 border-[var(--border-dim)] corner-brackets">
+            {isConnected ? (
+              <img
+                src={`${DRONE_API_BASE}/video_feed/forward`}
+                alt="Drone Down Camera"
+                className="w-full h-full object-cover"
+              />
+            ) : (
+              <div className="w-full h-full bg-[var(--bg-card)] flex flex-col items-center justify-center gap-2">
+                <AlertTriangle size={32} className="text-[var(--zone-yellow)]" />
+                <span className="text-sm font-mono text-[var(--text-secondary)]">NO SIGNAL</span>
+              </div>
+            )}
+            <div className="absolute inset-0 scanlines pointer-events-none" />
+            <div className="absolute inset-0 pointer-events-none">
+              <div className="absolute top-1/2 left-0 right-0 h-px bg-[var(--accent-cyan)]/20" />
+              <div className="absolute left-1/2 top-0 bottom-0 w-px bg-[var(--accent-cyan)]/20" />
+              <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-12 h-12 border border-[var(--accent-cyan)]/30 rounded-full" />
+            </div>
+            <div className="absolute top-2 left-2 flex items-center gap-1.5 px-1.5 py-0.5 rounded bg-[var(--bg-primary)]/80 border border-[var(--border-dim)]">
+              <div className={`w-1.5 h-1.5 rounded-full ${isConnected ? 'bg-[var(--zone-green)]' : 'bg-[var(--zone-red)]'} status-live`} />
+              <span className="text-[9px] font-mono text-[var(--text-secondary)] tracking-wider">DOWN</span>
+            </div>
           </div>
-
-          {/* Timestamp */}
-          <div className="absolute bottom-4 right-4 px-2 py-1 rounded bg-[var(--bg-primary)]/80 border border-[var(--border-dim)]">
-            <span className="text-[10px] font-mono text-[var(--text-muted)] tracking-wider">
-              {new Date().toLocaleTimeString('en-US', { hour12: false })} UTC
-            </span>
-          </div>
-        </div>
         </div>
       </main>
 
       {/* Bottom Controls Bar */}
-      <footer className="absolute bottom-0 left-0 right-0 z-20 px-5 py-3">
-        <div className="relative flex items-end justify-between rounded-xl border border-[var(--accent-cyan)]/30 bg-[var(--bg-primary)]/80 backdrop-blur-xl px-6 py-5 shadow-[0_0_20px_rgba(0,0,0,0.5),inset_0_1px_0_rgba(255,255,255,0.05)]">
-          {/* Container label */}
-          <div className="absolute -top-3 left-6 px-4 py-1 rounded-md bg-[var(--bg-primary)] border border-[var(--accent-cyan)]/40 shadow-[0_0_8px_var(--accent-cyan-glow)]">
-            <span className="text-xs font-bold font-mono text-[var(--accent-cyan)] uppercase tracking-widest">Drone Control</span>
-          </div>
+      <footer className="flex-shrink-0 px-3 py-3">
+        <div className="relative rounded-xl border border-[var(--accent-cyan)]/30 bg-[var(--bg-primary)]/80 backdrop-blur-xl px-4 py-4 shadow-[0_0_20px_rgba(0,0,0,0.5),inset_0_1px_0_rgba(255,255,255,0.05)]">
 
-          {/* Auto-flight warning - centered above Flight Mode */}
+          {/* Auto-flight warning */}
           {isAutomatic && (
-            <div className="absolute -top-3 left-1/2 -translate-x-1/2 flex items-center gap-2 px-3 py-1 rounded-md bg-[var(--bg-primary)] border border-[var(--zone-yellow)] animate-pulse whitespace-nowrap">
-              <AlertTriangle size={12} className="text-[var(--zone-yellow)]" />
-              <span className="text-xs font-bold font-mono text-[var(--zone-yellow)]">
-                Manual controls disabled during auto flight
+            <div className="absolute -top-3 left-1/2 -translate-x-1/2 flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-[var(--bg-primary)] border border-[var(--zone-yellow)] animate-pulse whitespace-nowrap">
+              <AlertTriangle size={10} className="text-[var(--zone-yellow)]" />
+              <span className="text-[10px] font-bold font-mono text-[var(--zone-yellow)]">
+                Auto flight active
               </span>
             </div>
           )}
 
-          {/* Left: Return Home + Movement Controls (WASD) */}
-          <div className="flex items-end gap-4">
+          {/* Top row: Flight Mode Toggle + RTH + Deploy */}
+          <div className="flex items-center justify-between mb-3">
+            {/* Return Home */}
             <button
               onClick={handleReturnHome}
               disabled={isReturningHome}
               className={`
-                flex flex-col items-center gap-1.5 px-5 py-3.5 rounded-lg border-2 transition-all duration-300
+                flex items-center gap-1.5 px-3 py-2 rounded-lg border-2 transition-all duration-300
                 ${
                   isReturningHome
-                    ? 'border-[var(--zone-yellow)] bg-[var(--zone-yellow)]/20 text-[var(--zone-yellow)] shadow-[0_0_12px_var(--zone-yellow-fill)]'
-                    : 'border-[var(--accent-cyan)]/60 bg-[var(--accent-cyan)]/10 text-[var(--accent-cyan)] hover:border-[var(--accent-cyan)] hover:bg-[var(--accent-cyan)]/20 hover:shadow-[0_0_12px_var(--accent-cyan-glow)]'
+                    ? 'border-[var(--zone-yellow)] bg-[var(--zone-yellow)]/20 text-[var(--zone-yellow)]'
+                    : 'border-[var(--accent-cyan)]/60 bg-[var(--accent-cyan)]/10 text-[var(--accent-cyan)] hover:border-[var(--accent-cyan)]'
                 }
-                backdrop-blur-sm
               `}
             >
-              <Home size={22} className={isReturningHome ? 'animate-pulse' : ''} />
-              <span className="text-[10px] font-bold font-mono uppercase tracking-wider">
-                {isReturningHome ? 'RTH...' : 'Back to Base'}
+              <Home size={16} className={isReturningHome ? 'animate-pulse' : ''} />
+              <span className="text-[9px] font-bold font-mono uppercase tracking-wider">
+                {isReturningHome ? 'RTH...' : 'RTH'}
               </span>
             </button>
 
-            <div className="flex flex-col items-center gap-2">
-              <span className="text-[10px] font-bold font-mono text-white uppercase tracking-wider mb-2">
+            {/* Flight Mode Toggle */}
+            <div className="flex items-center gap-1 bg-[var(--bg-tertiary)] rounded-lg p-0.5 border border-[var(--border-dim)]">
+              <button
+                onClick={() => { if (!isAutomatic) handleModeSwitch(); }}
+                className={`
+                  px-3 py-1.5 rounded-md text-[10px] font-bold uppercase tracking-wider transition-all duration-200
+                  flex items-center gap-1.5
+                  ${
+                    isAutomatic
+                      ? 'bg-[var(--zone-red)] text-white shadow-lg shadow-[var(--zone-red)]/20'
+                      : 'text-[var(--text-muted)] hover:text-[var(--zone-red)] hover:bg-[var(--zone-red)]/10'
+                  }
+                `}
+              >
+                <Plane size={12} />
+                <span>Auto</span>
+              </button>
+              <button
+                onClick={() => { if (!isManual) handleModeSwitch(); }}
+                className={`
+                  px-3 py-1.5 rounded-md text-[10px] font-bold uppercase tracking-wider transition-all duration-200
+                  flex items-center gap-1.5
+                  ${
+                    isManual
+                      ? 'bg-[var(--zone-green)] text-white shadow-lg shadow-[var(--zone-green)]/20'
+                      : 'text-[var(--text-muted)] hover:text-[var(--zone-green)] hover:bg-[var(--zone-green)]/10'
+                  }
+                `}
+              >
+                <Hand size={12} />
+                <span>Manual</span>
+              </button>
+            </div>
+
+            {/* Deploy Equipment */}
+            <button
+              onClick={handleDeployEquipment}
+              disabled={equipmentDeployed}
+              className={`
+                flex items-center gap-1.5 px-3 py-2 rounded-lg border-2 transition-all duration-300
+                ${
+                  equipmentDeployed
+                    ? 'border-[var(--zone-green)] bg-[var(--zone-green)]/20 text-[var(--zone-green)]'
+                    : 'border-[var(--zone-red)]/80 bg-[var(--zone-red)]/15 text-[var(--zone-red)] hover:border-[var(--zone-red)]'
+                }
+              `}
+            >
+              <Package size={16} className={equipmentDeployed ? 'animate-bounce' : ''} />
+              <span className="text-[9px] font-bold font-mono uppercase tracking-wider">
+                {equipmentDeployed ? 'Sent!' : 'Deploy'}
+              </span>
+            </button>
+          </div>
+
+          {/* Bottom row: Movement + Altitude Controls */}
+          <div className="flex items-center justify-center gap-6">
+            {/* Movement Controls (WASD) */}
+            <div className="flex flex-col items-center gap-1">
+              <span className="text-[9px] font-bold font-mono text-white uppercase tracking-wider mb-1">
                 Movement
               </span>
-
               <ControlButton
-                icon={<ChevronUp size={24} />}
+                icon={<ChevronUp size={18} />}
                 isActive={activeControls.has('forward')}
                 isDisabled={!isManual}
                 onPress={() => handleControlPress('forward')}
@@ -453,10 +529,9 @@ export function DroneControlPanel() {
                 label="W"
                 labelPosition="above"
               />
-
-              <div className="flex gap-2">
+              <div className="flex gap-1">
                 <ControlButton
-                  icon={<ChevronLeft size={24} />}
+                  icon={<ChevronLeft size={18} />}
                   isActive={activeControls.has('left')}
                   isDisabled={!isManual}
                   onPress={() => handleControlPress('left')}
@@ -464,7 +539,7 @@ export function DroneControlPanel() {
                   label="A"
                 />
                 <ControlButton
-                  icon={<ChevronDown size={24} />}
+                  icon={<ChevronDown size={18} />}
                   isActive={activeControls.has('backward')}
                   isDisabled={!isManual}
                   onPress={() => handleControlPress('backward')}
@@ -472,7 +547,7 @@ export function DroneControlPanel() {
                   label="S"
                 />
                 <ControlButton
-                  icon={<ChevronRight size={24} />}
+                  icon={<ChevronRight size={18} />}
                   isActive={activeControls.has('right')}
                   isDisabled={!isManual}
                   onPress={() => handleControlPress('right')}
@@ -481,73 +556,14 @@ export function DroneControlPanel() {
                 />
               </div>
             </div>
-          </div>
 
-          {/* Center: Auto / Manual Flight Mode Tabs */}
-          <div className="absolute left-1/2 -translate-x-1/2 bottom-0 flex flex-col items-center gap-2">
-            <span className="text-[10px] font-bold font-mono text-white uppercase tracking-wider">
-              Flight Mode
-            </span>
-            <span className="text-[11px] font-mono text-white/70 max-w-[260px] text-center leading-relaxed">
-              Select Manual to override automatic flight. Use WASD to steer, Z/X for altitude.
-            </span>
-
-            <div className="flex items-center gap-1 bg-[var(--bg-tertiary)] rounded-lg p-1 border border-[var(--border-dim)]">
-              {/* Auto Tab (red) */}
-              <button
-                onClick={() => { if (!isAutomatic) handleModeSwitch(); }}
-                className={`
-                  px-5 py-2.5 rounded-md text-sm font-bold uppercase tracking-wider transition-all duration-200
-                  flex items-center gap-2
-                  ${
-                    isAutomatic
-                      ? 'bg-[var(--zone-red)] text-white shadow-lg shadow-[var(--zone-red)]/20'
-                      : 'text-[var(--text-muted)] hover:text-[var(--zone-red)] hover:bg-[var(--zone-red)]/10'
-                  }
-                `}
-              >
-                <Plane size={16} />
-                <span>Auto</span>
-              </button>
-
-              {/* Manual Tab (green) with tooltip */}
-              <div className="relative group">
-                <button
-                  onClick={() => { if (!isManual) handleModeSwitch(); }}
-                  className={`
-                    px-5 py-2.5 rounded-md text-sm font-bold uppercase tracking-wider transition-all duration-200
-                    flex items-center gap-2
-                    ${
-                      isManual
-                        ? 'bg-[var(--zone-green)] text-white shadow-lg shadow-[var(--zone-green)]/20'
-                        : 'text-[var(--text-muted)] hover:text-[var(--zone-green)] hover:bg-[var(--zone-green)]/10'
-                    }
-                  `}
-                >
-                  <Hand size={16} />
-                  <span>Manual</span>
-                </button>
-
-                {/* Tooltip - appears on hover when not already in manual mode */}
-                {!isManual && (
-                  <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-3 px-3 py-2 rounded-lg bg-[var(--bg-primary)] border border-[var(--border-dim)] shadow-xl opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none whitespace-nowrap z-50">
-                    <span className="text-xs font-mono text-[var(--text-secondary)]">Click to override auto flight to manual</span>
-                    <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-[var(--border-dim)]" />
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-
-          {/* Right: Altitude Controls + Deploy Equipment */}
-          <div className="flex items-end gap-4">
-            <div className="flex flex-col items-center gap-2">
-              <span className="text-[10px] font-bold font-mono text-white uppercase tracking-wider mb-2">
+            {/* Altitude Controls */}
+            <div className="flex flex-col items-center gap-1">
+              <span className="text-[9px] font-bold font-mono text-white uppercase tracking-wider mb-1">
                 Altitude
               </span>
-
               <ControlButton
-                icon={<ArrowUp size={24} />}
+                icon={<ArrowUp size={18} />}
                 isActive={activeControls.has('up')}
                 isDisabled={!isManual}
                 onPress={() => handleControlPress('up')}
@@ -556,9 +572,8 @@ export function DroneControlPanel() {
                 variant="altitude"
                 labelPosition="above"
               />
-
               <ControlButton
-                icon={<ArrowDown size={24} />}
+                icon={<ArrowDown size={18} />}
                 isActive={activeControls.has('down')}
                 isDisabled={!isManual}
                 onPress={() => handleControlPress('down')}
@@ -567,35 +582,15 @@ export function DroneControlPanel() {
                 variant="altitude"
               />
             </div>
-
-            <button
-              onClick={handleDeployEquipment}
-              disabled={equipmentDeployed}
-              className={`
-                flex flex-col items-center gap-1.5 px-5 py-3.5 rounded-lg border-2 transition-all duration-300
-                ${
-                  equipmentDeployed
-                    ? 'border-[var(--zone-green)] bg-[var(--zone-green)]/20 text-[var(--zone-green)] shadow-[0_0_12px_var(--zone-green-fill)]'
-                    : 'border-[var(--zone-red)]/80 bg-[var(--zone-red)]/15 text-[var(--zone-red)] hover:border-[var(--zone-red)] hover:bg-[var(--zone-red)]/25 hover:shadow-[0_0_12px_var(--zone-red-fill)]'
-                }
-                backdrop-blur-sm
-              `}
-            >
-              <Package size={22} className={equipmentDeployed ? 'animate-bounce' : ''} />
-              <span className="text-[10px] font-bold font-mono uppercase tracking-wider">
-                {equipmentDeployed ? 'Sent!' : 'Deploy Equipment'}
-              </span>
-            </button>
           </div>
         </div>
       </footer>
 
-
       {/* Error Notification */}
       {errorMessage && (
-        <div className="absolute top-20 left-1/2 -translate-x-1/2 flex items-center gap-2 px-4 py-2 rounded-lg border border-[var(--zone-red)] bg-[var(--zone-red-fill)] backdrop-blur-sm z-50">
-          <AlertTriangle size={16} className="text-[var(--zone-red)]" />
-          <span className="text-sm font-mono text-[var(--zone-red)]">
+        <div className="absolute top-16 left-1/2 -translate-x-1/2 flex items-center gap-2 px-3 py-1.5 rounded-lg border border-[var(--zone-red)] bg-[var(--zone-red-fill)] backdrop-blur-sm z-50">
+          <AlertTriangle size={14} className="text-[var(--zone-red)]" />
+          <span className="text-xs font-mono text-[var(--zone-red)]">
             {errorMessage}
           </span>
         </div>
@@ -637,7 +632,7 @@ function ControlButton({
       onTouchEnd={onRelease}
       disabled={isDisabled}
       className={`
-        relative w-14 h-14 rounded-lg border-2 transition-all duration-150
+        relative w-11 h-11 rounded-lg border-2 transition-all duration-150
         flex items-center justify-center
         ${
           isDisabled

@@ -440,7 +440,13 @@ def run_security_system():
                 last_status_check_time = current_time
                 try:
                     status = drone_api.get_status()
-                    if status and not status.get("is_navigating", True):
+                    if status and status.get("returning_home", False):
+                        # User triggered RTH — cancel our mission tracking
+                        log_event("Return-to-home active — mission overridden by operator", "INFO")
+                        drone_is_navigating = False
+                        target_position = None
+                        alarm_active = False
+                    elif status and not status.get("is_navigating", True):
                         # Drone has reached the target or stopped navigating
                         log_event(f"Drone reached target position {target_position}", "SUCCESS")
                         drone_is_navigating = False
