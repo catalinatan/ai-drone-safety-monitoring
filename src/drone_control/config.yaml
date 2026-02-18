@@ -4,3 +4,4 @@ safety:
 navigation:
   speed: 5.0  # m/s for automatic mode
   position_tolerance: 2.0  # meters - how close to target before "arrived"
+  rth_altitude: -10.0  # NED metres — cruise altitude for return-to-home (negative = above ground)

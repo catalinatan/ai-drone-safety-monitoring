@@ -20,6 +20,7 @@ interface DroneStatus {
   mode: 'manual' | 'automatic';
   connected: boolean;
   is_navigating: boolean;
+  returning_home: boolean;
   target_position: [number, number, number] | null;
 }
 
@@ -30,6 +31,7 @@ export function DroneControlPanel() {
     mode: 'manual',
     connected: false,
     is_navigating: false,
+    returning_home: false,
     target_position: null,
   });
   const [isConnected, setIsConnected] = useState(false);
@@ -137,7 +139,7 @@ export function DroneControlPanel() {
 
       if (response.ok) {
         setIsReturningHome(true);
-        setStatus((prev) => ({ ...prev, mode: 'automatic', is_navigating: true }));
+        setStatus((prev) => ({ ...prev, mode: 'automatic', is_navigating: true, returning_home: true }));
       } else {
         const data = await response.json();
         showError(data.detail || 'Failed to return home');
@@ -266,12 +268,10 @@ export function DroneControlPanel() {
     };
   }, [status.mode]);
 
-  // Reset returning home state when navigation completes
+  // Sync returning home state with backend
   useEffect(() => {
-    if (!status.is_navigating && isReturningHome) {
-      setIsReturningHome(false);
-    }
-  }, [status.is_navigating, isReturningHome]);
+    setIsReturningHome(status.returning_home);
+  }, [status.returning_home]);
 
   const isManual = status.mode === 'manual';
   const isAutomatic = status.mode === 'automatic';
@@ -311,9 +311,24 @@ export function DroneControlPanel() {
 
         {/* Navigation Status */}
         {isAutomatic && status.is_navigating && (
-          <div className="flex items-center gap-2 px-2 py-1 rounded border border-[var(--zone-yellow)]/50 bg-[var(--zone-yellow-fill)]">
-            <Plane size={12} className="text-[var(--zone-yellow)] animate-pulse" />
-            <span className="text-[10px] font-mono text-[var(--zone-yellow)]">NAVIGATING</span>
+          <div className={`flex items-center gap-2 px-2 py-1 rounded border ${
+            isReturningHome
+              ? 'border-[var(--accent-cyan)]/50 bg-[var(--accent-cyan)]/10'
+              : 'border-[var(--zone-yellow)]/50 bg-[var(--zone-yellow-fill)]'
+          }`}>
+            <Home size={12} className={isReturningHome
+              ? 'text-[var(--accent-cyan)] animate-pulse'
+              : 'hidden'
+            } />
+            <Plane size={12} className={isReturningHome
+              ? 'hidden'
+              : 'text-[var(--zone-yellow)] animate-pulse'
+            } />
+            <span className={`text-[10px] font-mono ${
+              isReturningHome ? 'text-[var(--accent-cyan)]' : 'text-[var(--zone-yellow)]'
+            }`}>
+              {isReturningHome ? 'RETURNING HOME' : 'NAVIGATING'}
+            </span>
           </div>
         )}
       </header>

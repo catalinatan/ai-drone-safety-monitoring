@@ -65,6 +65,7 @@ MAX_ALTITUDE = _cfg["safety"]["max_altitude"]
 # Navigation parameters
 POSITION_TOLERANCE = _cfg["navigation"]["position_tolerance"]
 NAVIGATION_SPEED = _cfg["navigation"]["speed"]
+RTH_ALTITUDE = _cfg["navigation"]["rth_altitude"]
 
 # ============================================================================
 # PYDANTIC MODELS (for FastAPI)
@@ -103,6 +104,7 @@ class DroneState:
         self.nav_task = None              # AirSim future returned by moveToPositionAsync
         self.idle_hover_sent = False      # prevents issuing hover repeatedly when auto-mode has no target
         self.should_stop = False          # signals the control loop to land and exit
+        self.returning_home = False       # True when executing RTH; triggers landing on arrival
         # Camera frames for dual-view streaming
         self.frame_forward = None         # Camera 3: forward-looking view
         self.frame_down = None            # Camera 0: downward-looking view
@@ -115,6 +117,7 @@ class DroneState:
             if mode == "manual":
                 self.is_navigating = False
                 self.nav_command_sent = False
+                self.returning_home = False
                 if self.nav_task is not None:
                     try:
                         self.nav_task.cancel()
@@ -217,6 +220,14 @@ class DroneState:
         with self.lock:
             return self.home_position
 
+    def set_returning_home(self, value: bool):
+        with self.lock:
+            self.returning_home = value
+
+    def get_returning_home(self) -> bool:
+        with self.lock:
+            return self.returning_home
+
 # Global state instance
 drone_state = DroneState()
 
@@ -281,6 +292,12 @@ async def goto_position(request: GotoRequest):
             detail=f"Cannot navigate in {current_mode} mode. Switch to automatic first."
         )
 
+    if drone_state.get_returning_home():
+        raise HTTPException(
+            status_code=409,
+            detail="Drone is returning home. New goto commands are blocked until landing completes."
+        )
+
     target_ned = (request.x, request.y, request.z)
 
     print(f"[API] Goto command received: NED=({request.x}, {request.y}, {request.z})")
@@ -313,9 +330,12 @@ async def return_home():
             detail=f"Cannot return home in {current_mode} mode. Switch to automatic first."
         )
     
-    print(f"[API] Return to home command: {home}")
+    # Fly directly to the exact home position; 2D arrival check + landAsync
+    # handles the final descent.
+    print(f"[API] Return to home command: target={home}")
+    drone_state.set_returning_home(True)
     drone_state.set_target(home)
-    
+
     return {"status": "success", "message": "Returning to home", "home_position": home}
 
 @app.get("/status")
@@ -326,6 +346,7 @@ async def get_status():
         "mode": drone_state.get_mode(),
         "connected": True,  # Would check actual connection
         "is_navigating": is_nav,
+        "returning_home": drone_state.get_returning_home(),
         "target_position": target
     }
 
@@ -482,41 +503,72 @@ def drone_control_loop():
                 if target is not None and is_nav:
                     if not cmd_sent:
                         # PHASE 1 — New target received; validate and dispatch.
-                        is_safe, reason = check_safety(target)
-                        if not is_safe:
-                            print(f"[AUTO] Navigation aborted: {reason}")
-                            drone_state.clear_target()
+                        # Skip safety check for return-to-home so the drone
+                        # always flies directly to the exact home coordinates.
+                        if drone_state.get_returning_home():
+                            print("[AUTO] RTH — safety check bypassed")
+                            fly_speed = NAVIGATION_SPEED * 3
                         else:
-                            print(f"[AUTO] Navigating to position: {target}")
-                            task = client.moveToPositionAsync(
-                                target[0], target[1], target[2],
-                                velocity=NAVIGATION_SPEED,
-                                drivetrain=airsim.DrivetrainType.MaxDegreeOfFreedom,
-                                yaw_mode=airsim.YawMode(is_rate=False, yaw_or_rate=0)
-                            )
-                            # CAS guard: only commit if the target is still the
-                            # same one we validated above (see docstring on
-                            # try_mark_nav_dispatched).
-                            drone_state.try_mark_nav_dispatched(target, task)
+                            is_safe, reason = check_safety(target)
+                            if not is_safe:
+                                print(f"[AUTO] Navigation aborted: {reason}")
+                                drone_state.clear_target()
+                                continue
+                            fly_speed = NAVIGATION_SPEED
+
+                        # Re-arm if drone was dropped after a previous RTH
+                        client.enableApiControl(True)
+                        client.armDisarm(True)
+
+                        print(f"[AUTO] Navigating to ({target[0]:.1f}, {target[1]:.1f}, {target[2]:.1f}) at {fly_speed:.0f} m/s")
+                        task = client.moveToPositionAsync(
+                            target[0], target[1], target[2],
+                            velocity=fly_speed,
+                            drivetrain=airsim.DrivetrainType.MaxDegreeOfFreedom,
+                            yaw_mode=airsim.YawMode(is_rate=False, yaw_or_rate=0)
+                        )
+                        # CAS guard: only commit if the target is still the
+                        # same one we validated above (see docstring on
+                        # try_mark_nav_dispatched).
+                        drone_state.try_mark_nav_dispatched(target, task)
                     else:
                         # PHASE 2 — Command dispatched; poll position until arrival.
                         pose = client.simGetVehiclePose()
                         current = (pose.position.x_val, pose.position.y_val, pose.position.z_val)
-                        distance = math.sqrt(
-                            (current[0] - target[0])**2 +
-                            (current[1] - target[1])**2 +
-                            (current[2] - target[2])**2
-                        )
+
+                        # For RTH use 2D (XY) distance only — the drone just
+                        # needs to be above the home spot; landAsync handles
+                        # the final descent.  For normal goto use full 3D.
+                        if drone_state.get_returning_home():
+                            distance = math.sqrt(
+                                (current[0] - target[0])**2 +
+                                (current[1] - target[1])**2
+                            )
+                        else:
+                            distance = math.sqrt(
+                                (current[0] - target[0])**2 +
+                                (current[1] - target[1])**2 +
+                                (current[2] - target[2])**2
+                            )
 
                         now = time.monotonic()
                         if now - last_distance_log >= 1.0:
                             print(f"[AUTO] Distance to target: {distance:.2f}m")
                             last_distance_log = now
 
-                        if distance < POSITION_TOLERANCE:
+                        rth_tolerance = POSITION_TOLERANCE * 3 if drone_state.get_returning_home() else POSITION_TOLERANCE
+                        if distance < rth_tolerance:
                             print("[AUTO] Arrived at target position")
                             drone_state.clear_target()
-                            client.hoverAsync().join()
+                            if drone_state.get_returning_home():
+                                print("[AUTO] Home reached — dropping")
+                                drone_state.set_returning_home(False)
+                                client.armDisarm(False)
+                                client.enableApiControl(False)
+                                # Prevent PHASE 3 from re-engaging
+                                drone_state.mark_idle_hover_sent()
+                            else:
+                                client.hoverAsync().join()
                 else:
                     # PHASE 3 — Automatic mode with no target: hover in place.
                     # We only issue hover once to avoid spamming AirSim.
