@@ -105,6 +105,7 @@ class DroneState:
         self.idle_hover_sent = False      # prevents issuing hover repeatedly when auto-mode has no target
         self.should_stop = False          # signals the control loop to land and exit
         self.returning_home = False       # True when executing RTH; triggers landing on arrival
+        self.grounded = False            # True after RTH drop; needs takeoff before next flight
         # Camera frames for dual-view streaming
         self.frame_forward = None         # Camera 3: forward-looking view
         self.frame_down = None            # Camera 0: downward-looking view
@@ -227,6 +228,14 @@ class DroneState:
     def get_returning_home(self) -> bool:
         with self.lock:
             return self.returning_home
+
+    def set_grounded(self, value: bool):
+        with self.lock:
+            self.grounded = value
+
+    def is_grounded(self) -> bool:
+        with self.lock:
+            return self.grounded
 
 # Global state instance
 drone_state = DroneState()
@@ -516,9 +525,16 @@ def drone_control_loop():
                                 continue
                             fly_speed = NAVIGATION_SPEED
 
-                        # Re-arm if drone was dropped after a previous RTH
-                        client.enableApiControl(True)
-                        client.armDisarm(True)
+                        # Re-arm and take off if drone was dropped after a previous RTH
+                        if drone_state.is_grounded():
+                            print("[AUTO] Drone is grounded — re-arming and taking off")
+                            client.enableApiControl(True)
+                            client.armDisarm(True)
+                            client.takeoffAsync().join()
+                            drone_state.set_grounded(False)
+                        else:
+                            client.enableApiControl(True)
+                            client.armDisarm(True)
 
                         print(f"[AUTO] Navigating to ({target[0]:.1f}, {target[1]:.1f}, {target[2]:.1f}) at {fly_speed:.0f} m/s")
                         task = client.moveToPositionAsync(
@@ -565,6 +581,7 @@ def drone_control_loop():
                                 drone_state.set_returning_home(False)
                                 client.armDisarm(False)
                                 client.enableApiControl(False)
+                                drone_state.set_grounded(True)
                                 # Prevent PHASE 3 from re-engaging
                                 drone_state.mark_idle_hover_sent()
                             else:
