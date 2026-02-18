@@ -90,6 +90,12 @@ FOLLOW_TARGETS = {
 _follow_label = os.getenv("CCTV_FOLLOW_TARGET", "")
 CCTV_FOLLOW_TARGET = FOLLOW_TARGETS.get(_follow_label, "")
 
+# Set via --hover in main.py — makes CCTV drones take off and hover at altitude
+CCTV_HOVER_DRONES = os.getenv("CCTV_HOVER_DRONES", "") == "1"
+
+# Altitude for CCTV hover mode (NED, so negative = up). Default -15m.
+CCTV_HOVER_ALTITUDE = float(os.getenv("CCTV_HOVER_ALTITUDE", "-15.0"))
+
 # Camera Actor guides: drone → Camera Actor name in UE World Outliner.
 # The follow loop reads each Camera Actor's pose and teleports the drone
 # to that exact position + orientation. Position cameras in UE to adjust views.

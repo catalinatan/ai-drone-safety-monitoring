@@ -5,6 +5,8 @@ Usage:
     python main.py                   # backend (8001) + drone API (8000) + React UI (5173)
     python main.py --no-ui           # backend + drone API only
     python main.py --follow ship     # CCTV drones follow the ship object
+    python main.py --hover           # CCTV drones take off and hover at altitude
+    python main.py --no-mask         # disable human detection mask overlay on video feeds
 
 Ctrl+C shuts down all processes cleanly.
 """
@@ -59,10 +61,17 @@ def main():
     print("  AI SAFETY MONITORING — Development Server")
     print("=" * 60)
 
-    # Build env for subprocesses (pass follow target to backend)
+    no_mask = "--no-mask" in sys.argv
+    hover = "--hover" in sys.argv
+
+    # Build env for subprocesses (pass flags to backend)
     env = os.environ.copy()
     if follow_target:
         env["CCTV_FOLLOW_TARGET"] = follow_target
+    if hover:
+        env["CCTV_HOVER_DRONES"] = "1"
+    if no_mask:
+        env["DISABLE_MASK_OVERLAY"] = "1"
 
     # Launch Python services
     for name, svc in SERVICES.items():
@@ -77,6 +86,8 @@ def main():
 
     if follow_target:
         print(f"  [{'follow':8s}]  CCTV drones following '{follow_target}'")
+    if hover:
+        print(f"  [{'hover':8s}]  CCTV drones will hover at altitude")
     print("=" * 60)
     print("  Press Ctrl+C to stop all services")
     print("=" * 60)

@@ -9,16 +9,35 @@ Usage:
     python -m src.human_detection.validate_model
     python -m src.human_detection.validate_model --images data/human_images --output data/validation_results --show
     python -m src.human_detection.validate_model --images data/human_dataset/images/val --output data/validation_results
+    python -m src.human_detection.validate_model --model base --show   # use base YOLOv8 (no fine-tuning)
 """
 import argparse
 import cv2
 import numpy as np
 from pathlib import Path
 from .detector import HumanDetector
-from .config import MODEL_PATH, CONFIDENCE_THRESHOLD, INFERENCE_IMGSZ
+from .config import MODEL_PATH, CONFIDENCE_THRESHOLD, INFERENCE_IMGSZ, CLASS_ID_PERSON
 
 
-def validate_model(images_dir, output_dir, show=False):
+BASE_MODEL_PATH = "yolov8n-seg.pt"
+
+
+def _get_masks_base(model, frame):
+    """Run base YOLOv8 model and extract person masks (class 0)."""
+    results = model(frame, conf=CONFIDENCE_THRESHOLD, imgsz=INFERENCE_IMGSZ, verbose=False)
+    result = results[0]
+    masks = []
+    if result.masks is not None:
+        for i, box in enumerate(result.boxes):
+            if int(box.cls[0]) == CLASS_ID_PERSON:
+                mask_raw = result.masks.data[i].cpu().numpy()
+                mask_resized = cv2.resize(mask_raw, (frame.shape[1], frame.shape[0]))
+                mask_binary = (mask_resized > 0.5).astype(np.uint8)
+                masks.append(mask_binary)
+    return masks
+
+
+def validate_model(images_dir, output_dir, show=False, model_path=None):
     """
     Run detection on all images in a directory and save visual results.
 
@@ -30,6 +49,7 @@ def validate_model(images_dir, output_dir, show=False):
         images_dir: Directory containing test images (.jpg, .png).
         output_dir: Directory to save result images.
         show: If True, display each result in a CV2 window.
+        model_path: Override model path. None = fine-tuned, "base" = base YOLOv8.
     """
     images_path = Path(images_dir)
     output_path = Path(output_dir)
@@ -40,12 +60,20 @@ def validate_model(images_dir, output_dir, show=False):
         print(f"No images found in {images_path}")
         return
 
-    print(f"Model: {MODEL_PATH}")
+    use_model = model_path or MODEL_PATH
+    print(f"Model: {use_model}")
     print(f"Confidence: {CONFIDENCE_THRESHOLD} | Image Size: {INFERENCE_IMGSZ}")
     print(f"Found {len(img_files)} images in {images_path}")
     print(f"Saving results to {output_path}\n")
 
-    detector = HumanDetector()
+    if model_path:
+        from ultralytics import YOLO
+        detector = type('', (), {
+            'model': YOLO(use_model),
+            'get_masks': lambda self, frame: _get_masks_base(self.model, frame)
+        })()
+    else:
+        detector = HumanDetector()
 
     total_detections = 0
 
@@ -126,5 +154,9 @@ if __name__ == "__main__":
                         help="Directory to save result images")
     parser.add_argument("--show", action="store_true",
                         help="Display results in a window (press any key to advance)")
+    parser.add_argument("--model", type=str, default=None,
+                        choices=["base"],
+                        help="Use 'base' for base YOLOv8n-seg (no fine-tuning)")
     args = parser.parse_args()
-    validate_model(args.images, args.output, args.show)
+    model_path = BASE_MODEL_PATH if args.model == "base" else None
+    validate_model(args.images, args.output, args.show, model_path=model_path)

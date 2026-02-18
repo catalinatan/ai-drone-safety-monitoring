@@ -1,7 +1,6 @@
-import { useState, useEffect } from 'react';
 import { Pencil, Maximize2, AlertTriangle, AlertCircle, Users, VideoOff } from 'lucide-react';
-import type { Feed, DetectionStatus } from '../types';
-import { BACKEND_URL } from '../data/mockFeeds';
+import type { Feed } from '../types';
+import { useDetectionStatus } from '../hooks/useDetectionStatus';
 
 interface FeedCardProps {
   feed: Feed;
@@ -10,29 +9,7 @@ interface FeedCardProps {
 }
 
 export function FeedCard({ feed, onEdit, onExpand }: FeedCardProps) {
-  const [detectionStatus, setDetectionStatus] = useState<DetectionStatus | null>(null);
-
-  // Poll for detection status (only for live feeds)
-  useEffect(() => {
-    if (!feed.isLive) return;
-
-    const fetchStatus = async () => {
-      try {
-        const response = await fetch(`${BACKEND_URL}/feeds/${feed.id}/status`);
-        if (response.ok) {
-          const status = await response.json();
-          setDetectionStatus(status);
-        }
-      } catch (error) {
-        // Silently fail - backend might not be running
-      }
-    };
-
-    fetchStatus();
-    const interval = setInterval(fetchStatus, 1000);
-
-    return () => clearInterval(interval);
-  }, [feed.id, feed.isLive]);
+  const detectionStatus = useDetectionStatus(feed.id, feed.isLive);
 
   const isAlarmActive = detectionStatus?.alarm_active || false;
   const isCautionActive = detectionStatus?.caution_active || false;

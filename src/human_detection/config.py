@@ -1,5 +1,6 @@
 # Model Settings
-MODEL_PATH = "runs/segment/runs/segment/human_detection/weights/best.pt"
+# MODEL_PATH = "runs/segment/runs/segment/human_detection/weights/best.pt"
+MODEL_PATH = "yolov8n-seg.pt"
 CONFIDENCE_THRESHOLD = 0.25    # Lowered from 0.5 for small/distant humans in water
 CLASS_ID_PERSON = 0            # YOLO specific ID for 'person'
 
@@ -14,4 +15,4 @@ DANGER_ZONE_OVERLAP_THRESHOLD = 0.5
 
 # Optional: Minimum pixels to consider a person "real" before checking overlap
 # This prevents tiny specks of noise from triggering alarms.
-MIN_PERSON_AREA_PIXELS = 100
+MIN_PERSON_AREA_PIXELS = 2

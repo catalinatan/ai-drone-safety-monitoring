@@ -1,8 +1,8 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useCallback } from 'react';
 import { ArrowLeft, Pencil, Navigation, Loader2, CheckCircle, AlertCircle, AlertTriangle, Users } from 'lucide-react';
 import { PolygonCanvas } from './PolygonCanvas';
-import type { Feed, NEDCoordinate, DetectionStatus } from '../types';
-import { BACKEND_URL } from '../data/mockFeeds';
+import type { Feed, NEDCoordinate } from '../types';
+import { useDetectionStatus } from '../hooks/useDetectionStatus';
 
 // Drone control API URL
 const DRONE_API_URL = 'http://localhost:8000';
@@ -16,34 +16,9 @@ interface ExpandedFeedViewProps {
 type DeployStatus = 'idle' | 'deploying' | 'success' | 'error';
 
 export function ExpandedFeedView({ feed, onBack, onEdit }: ExpandedFeedViewProps) {
-  const [detectionStatus, setDetectionStatus] = useState<DetectionStatus | null>(null);
+  const detectionStatus = useDetectionStatus(feed.id, feed.isLive);
   const [deployStatus, setDeployStatus] = useState<DeployStatus>('idle');
   const [errorMessage, setErrorMessage] = useState<string>('');
-
-  // Poll for detection status
-  useEffect(() => {
-    if (!feed.isLive) return;
-
-    const fetchStatus = async () => {
-      try {
-        const response = await fetch(`${BACKEND_URL}/feeds/${feed.id}/status`);
-        if (response.ok) {
-          const status = await response.json();
-          setDetectionStatus(status);
-        }
-      } catch (error) {
-        console.error('[STATUS] Failed to fetch detection status:', error);
-      }
-    };
-
-    // Fetch immediately
-    fetchStatus();
-
-    // Then poll every second
-    const interval = setInterval(fetchStatus, 1000);
-
-    return () => clearInterval(interval);
-  }, [feed.id, feed.isLive]);
 
   // Get target coordinates from detection status (only for RED zone alarms)
   const targetCoordinates: NEDCoordinate | null = detectionStatus?.target_coordinates || null;
