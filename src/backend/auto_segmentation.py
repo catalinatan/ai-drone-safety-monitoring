@@ -56,7 +56,7 @@ class SceneSegmenter:
 
         model = self.models[scene_type]
         conf = confidence if confidence is not None else self.confidence
-        results = model(frame, conf=conf, verbose=False)[0]
+        results = model(frame, conf=conf, verbose=False, save=False)[0]
 
         if results.masks is None:
             return []

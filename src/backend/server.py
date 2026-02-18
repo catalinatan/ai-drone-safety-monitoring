@@ -25,6 +25,7 @@ Endpoints:
 - GET  /health                    - Health check
 """
 
+import asyncio
 import airsim
 import cv2
 import json
@@ -38,7 +39,7 @@ from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
@@ -60,6 +61,7 @@ from src.backend.config import (
     AUTO_SEG_MAX_RETRIES, AUTO_SEG_RETRY_DELAY,
     CCTV_FOLLOW_TARGET, CCTV_FOLLOW_CAMERAS,
     CCTV_FOLLOW_INTERVAL,
+    CCTV_HOVER_DRONES, CCTV_HOVER_ALTITUDE,
 )
 
 # --- DETECTION MODULES (optional — graceful fallback) ---
@@ -88,6 +90,9 @@ try:
 except ImportError as e:
     print(f"[WARNING] Auto-segmentation module not available: {e}")
     AUTO_SEG_AVAILABLE = False
+
+# --- MASK OVERLAY TOGGLE ---
+MASK_OVERLAY_ENABLED = os.getenv("DISABLE_MASK_OVERLAY", "") != "1"
 
 # ============================================================================
 # PERSISTENCE FUNCTIONS
@@ -246,6 +251,7 @@ class FeedState:
     caution_count: int = 0              # People in YELLOW zones
     target_coordinates: Optional[Tuple[float, float, float]] = None
     last_frame: Optional[np.ndarray] = None
+    last_mask_overlay: Optional[np.ndarray] = None     # Pre-rendered mask image (RGB, same size as frame)
     last_detection_time: Optional[datetime] = None
     position: Optional[Tuple[float, float, float]] = None  # NED coordinates (x, y, z)
     frame_count: int = 0                                    # Total captured frames
@@ -270,6 +276,7 @@ class FeedManager:
         self.running = False
         self._init_lock = threading.Lock()
         self._airsim_lock = threading.Lock()
+        self._detector_lock = threading.Lock()  # Serialize YOLO inference (CUDA isn't thread-safe)
         self._depth_queue: queue.Queue = queue.Queue(maxsize=4)
         self.segmenter: Optional[SceneSegmenter] = None if AUTO_SEG_AVAILABLE else None
         # Trigger snapshot: the CCTV frame that caused drone deployment
@@ -465,6 +472,38 @@ class FeedManager:
             print(f"[ERROR] Failed to get frame for {feed_id}: {e}")
             return None
 
+    def capture_all_frames(self):
+        """Grab frames from all feeds in a single lock acquisition.
+
+        Much faster than calling get_frame() per feed (one lock acquire
+        instead of N).
+        """
+        if self.client is None:
+            return
+
+        with self._airsim_lock:
+            for feed_id, feed in self.feeds.items():
+                try:
+                    responses = self.client.simGetImages([
+                        airsim.ImageRequest(feed.camera_name, airsim.ImageType.Scene, False, False)
+                    ], vehicle_name=feed.vehicle_name)
+
+                    if not responses or len(responses) == 0:
+                        continue
+
+                    response = responses[0]
+                    if len(response.image_data_uint8) == 0:
+                        continue
+
+                    img1d = np.frombuffer(response.image_data_uint8, dtype=np.uint8)
+                    img_rgb = img1d.reshape(response.height, response.width, 3)
+
+                    with feed.lock:
+                        feed.last_frame = img_rgb
+
+                except Exception as e:
+                    print(f"[ERROR] Failed to get frame for {feed_id}: {e}")
+
     def update_zones(self, feed_id: str, zones: List[Zone], image_width: int, image_height: int):
         """Update zones for a feed and regenerate binary masks."""
         if feed_id not in self.feeds:
@@ -635,21 +674,35 @@ class FeedManager:
 
         feed = self.feeds[feed_id]
 
-        # Use cached frame instead of fetching new one; snapshot masks too
-        # so the detection thread works on a stable copy even if the API
-        # thread clears them (TOCTOU race fix).
+        # Use cached frame
         with feed.lock:
             frame = feed.last_frame.copy() if feed.last_frame is not None else None
+
+        if frame is None:
+            return self._get_status(feed)
+
+        # Regenerate masks if needed (e.g., after server restart) — must
+        # happen BEFORE the zoneless check since masks start as None.
+        self._regenerate_masks_if_needed(feed_id, frame.shape[1], frame.shape[0])
+
+        # Snapshot masks so the detection thread works on a stable copy
+        with feed.lock:
             red_zone_mask = (feed.red_zone_mask.copy()
                             if feed.red_zone_mask is not None else None)
             yellow_zone_mask = (feed.yellow_zone_mask.copy()
                                 if feed.yellow_zone_mask is not None else None)
 
-        if frame is None:
+        # Skip expensive YOLO inference if no zones are configured
+        if red_zone_mask is None and yellow_zone_mask is None:
             return self._get_status(feed)
 
-        # Regenerate masks if needed (e.g., after server restart)
-        self._regenerate_masks_if_needed(feed_id, frame.shape[1], frame.shape[0])
+        # Snapshot previous state to detect changes (for WebSocket broadcast)
+        with feed.lock:
+            prev_alarm = feed.alarm_active
+            prev_caution = feed.caution_active
+            prev_people = feed.people_count
+            prev_danger = feed.danger_count
+            prev_caution_count = feed.caution_count
 
         if not self._is_feed_warmed_up(feed):
             with feed.lock:
@@ -663,11 +716,28 @@ class FeedManager:
             return self._get_status(feed)
 
         try:
-            # Run human detection
-            person_masks = self.detector.get_masks(frame)
+            # Run human detection (lock serializes CUDA inference across threads)
+            t0 = time.time()
+            with self._detector_lock:
+                t_lock = time.time()
+                person_masks = self.detector.get_masks(frame)
+                t_yolo = time.time()
+            print(f"[TIMING] {feed_id}: lock_wait={t_lock-t0:.3f}s  yolo={t_yolo-t_lock:.3f}s  total={t_yolo-t0:.3f}s")
+
+            # Pre-render mask overlay (skip if disabled via --no-mask)
+            overlay = None
+            if MASK_OVERLAY_ENABLED and person_masks:
+                h, w = frame.shape[:2]
+                overlay = np.zeros((h, w, 3), dtype=np.uint8)
+                for mask in person_masks:
+                    m = mask if mask.shape[:2] == (h, w) else cv2.resize(mask, (w, h), interpolation=cv2.INTER_NEAREST)
+                    overlay[m == 1] = (0, 255, 255)  # Cyan in RGB
+                    contours, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                    cv2.drawContours(overlay, contours, -1, (0, 255, 255), 2)
 
             with feed.lock:
                 feed.people_count = len(person_masks)
+                feed.last_mask_overlay = overlay
                 feed.last_detection_time = datetime.now()
 
                 # Reset counts
@@ -739,7 +809,164 @@ class FeedManager:
             import traceback
             traceback.print_exc()
 
-        return self._get_status(feed)
+        status = self._get_status(feed)
+
+        # Only broadcast over WebSocket when detection state actually changed
+        changed = (
+            feed.alarm_active != prev_alarm
+            or feed.caution_active != prev_caution
+            or feed.people_count != prev_people
+            or feed.danger_count != prev_danger
+            or feed.caution_count != prev_caution_count
+        )
+        if changed:
+            _ws_broadcast_from_thread(status.model_dump_json())
+
+        return status
+
+    def run_detection_batch(self):
+        """Run detection on all feeds with zones in a single batch YOLO call.
+
+        Collects frames from feeds that have zones configured, runs one
+        batched YOLO inference, then processes results (zone overlap,
+        mask overlay, WebSocket broadcast) for each feed.
+        """
+        if self.detector is None:
+            return
+
+        # 1. Collect frames and metadata for feeds with zones
+        batch_feed_ids = []
+        batch_frames = []
+        batch_zone_data = []  # (red_mask, yellow_mask) per feed
+        batch_prev_state = []  # (alarm, caution, people, danger, caution_count)
+
+        for feed_id, feed in self.feeds.items():
+            with feed.lock:
+                frame = feed.last_frame.copy() if feed.last_frame is not None else None
+
+            if frame is None:
+                continue
+
+            # Regenerate masks if needed (e.g., after server restart) — must
+            # happen BEFORE the zoneless check since masks start as None.
+            self._regenerate_masks_if_needed(feed_id, frame.shape[1], frame.shape[0])
+
+            with feed.lock:
+                red_zone_mask = (feed.red_zone_mask.copy()
+                                 if feed.red_zone_mask is not None else None)
+                yellow_zone_mask = (feed.yellow_zone_mask.copy()
+                                    if feed.yellow_zone_mask is not None else None)
+
+            # Skip feeds without zones (no expensive YOLO needed)
+            if red_zone_mask is None and yellow_zone_mask is None:
+                continue
+
+            # Snapshot previous state for change detection
+            with feed.lock:
+                prev = (feed.alarm_active, feed.caution_active,
+                        feed.people_count, feed.danger_count, feed.caution_count)
+
+            batch_feed_ids.append(feed_id)
+            batch_frames.append(frame)
+            batch_zone_data.append((red_zone_mask, yellow_zone_mask))
+            batch_prev_state.append(prev)
+
+        if not batch_frames:
+            return
+
+        # 2. Run batch YOLO inference (single GPU call for all frames)
+        t0 = time.time()
+        batch_masks = self.detector.get_masks_batch(batch_frames)
+        t_yolo = time.time()
+        feed_names = ", ".join(batch_feed_ids)
+        print(f"[TIMING] Batch YOLO ({len(batch_frames)} frames): {t_yolo-t0:.3f}s  feeds=[{feed_names}]")
+
+        # 3. Process results for each feed
+        for idx, feed_id in enumerate(batch_feed_ids):
+            feed = self.feeds[feed_id]
+            frame = batch_frames[idx]
+            person_masks = batch_masks[idx]
+            red_zone_mask, yellow_zone_mask = batch_zone_data[idx]
+            prev_alarm, prev_caution, prev_people, prev_danger, prev_caution_count = batch_prev_state[idx]
+
+            # Pre-render mask overlay (skip if disabled via --no-mask)
+            overlay = None
+            if MASK_OVERLAY_ENABLED and person_masks:
+                h, w = frame.shape[:2]
+                overlay = np.zeros((h, w, 3), dtype=np.uint8)
+                for mask in person_masks:
+                    m = mask if mask.shape[:2] == (h, w) else cv2.resize(mask, (w, h), interpolation=cv2.INTER_NEAREST)
+                    overlay[m == 1] = (0, 255, 255)  # Cyan in RGB
+                    contours, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                    cv2.drawContours(overlay, contours, -1, (0, 255, 255), 2)
+
+            with feed.lock:
+                feed.people_count = len(person_masks)
+                feed.last_mask_overlay = overlay
+                feed.last_detection_time = datetime.now()
+
+                # Reset counts
+                feed.alarm_active = False
+                feed.caution_active = False
+                feed.danger_count = 0
+                feed.caution_count = 0
+
+                if len(person_masks) > 0:
+                    # Check RED zone overlap
+                    if red_zone_mask is not None:
+                        red_mask = red_zone_mask
+                        if red_mask.shape != frame.shape[:2]:
+                            red_mask = cv2.resize(red_mask, (frame.shape[1], frame.shape[0]),
+                                                  interpolation=cv2.INTER_NEAREST)
+
+                        is_alarm, danger_masks = check_danger_zone_overlap(person_masks, red_mask)
+                        feed.alarm_active = is_alarm
+                        feed.danger_count = len(danger_masks)
+
+                        if is_alarm and len(danger_masks) > 0 and self.depth_model is not None:
+                            target_mask = danger_masks[0]
+                            feet_pixel = coord_utils.get_feet_from_mask(target_mask)
+                            if feet_pixel is not None:
+                                try:
+                                    job = (feed_id, frame.copy(), feet_pixel)
+                                    self._depth_queue.put_nowait(job)
+                                except queue.Full:
+                                    pass
+
+                    # Check YELLOW zone overlap
+                    if yellow_zone_mask is not None:
+                        y_mask = yellow_zone_mask
+                        if y_mask.shape != frame.shape[:2]:
+                            y_mask = cv2.resize(y_mask, (frame.shape[1], frame.shape[0]),
+                                                interpolation=cv2.INTER_NEAREST)
+
+                        effective_yellow = y_mask
+                        if red_zone_mask is not None:
+                            red_for_subtract = red_zone_mask
+                            if red_for_subtract.shape != y_mask.shape:
+                                red_for_subtract = cv2.resize(red_for_subtract, (y_mask.shape[1], y_mask.shape[0]),
+                                                              interpolation=cv2.INTER_NEAREST)
+                            effective_yellow = y_mask & (~red_for_subtract)
+
+                        is_caution, caution_masks = check_danger_zone_overlap(person_masks, effective_yellow)
+                        feed.caution_active = is_caution
+                        feed.caution_count = len(caution_masks)
+
+                # Clear target coordinates if no RED zone alarm
+                if not feed.alarm_active:
+                    feed.target_coordinates = None
+
+            # Broadcast via WebSocket only on state change
+            changed = (
+                feed.alarm_active != prev_alarm
+                or feed.caution_active != prev_caution
+                or feed.people_count != prev_people
+                or feed.danger_count != prev_danger
+                or feed.caution_count != prev_caution_count
+            )
+            if changed:
+                status = self._get_status(feed)
+                _ws_broadcast_from_thread(status.model_dump_json())
 
     def _get_status(self, feed: FeedState) -> DetectionStatus:
         """Get detection status for a feed."""
@@ -795,53 +1022,11 @@ class FeedManager:
             return []
 
         best_zone_dicts: List[dict] = []
-        attempts = max(1, AUTO_SEG_MAX_RETRIES)
+        # AirSim frames are stored as RGB; convert to BGR for the YOLO model
+        frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
 
-        for attempt_idx in range(attempts):
-            # Try fresh frame first for manual/on-demand consistency.
-            frame = self.get_frame(feed_id)
-
-            # Fallback to cached frame if fresh capture failed.
-            if frame is None:
-                with feed.lock:
-                    frame = feed.last_frame.copy() if feed.last_frame is not None else None
-
-            if frame is None:
-                if attempt_idx == attempts - 1:
-                    print(f"[AUTO-SEG] No frame available for {feed_id}")
-                if attempt_idx < attempts - 1:
-                    time.sleep(max(AUTO_SEG_RETRY_DELAY, 0.5))
-                continue
-
-            # Skip dark/invalid frames (e.g., captured mid-teleport)
-            mean_brightness = float(np.mean(frame))
-            if mean_brightness < 15:
-                print(f"[AUTO-SEG] {feed_id}: Skipping dark frame "
-                      f"(brightness={mean_brightness:.1f}), attempt {attempt_idx + 1}/{attempts}")
-                if attempt_idx < attempts - 1:
-                    time.sleep(max(AUTO_SEG_RETRY_DELAY, 0.5))
-                continue
-
-            # AirSim scene frames are RGB; OpenCV/Ultralytics pipeline expects BGR.
-            frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-
-            # Progressive confidence: lower threshold on later retries so
-            # partially-visible or distant hazards can still be detected.
-            conf = max(AUTO_SEG_CONFIDENCE - attempt_idx * 0.08, 0.2)
-            zone_dicts = self.segmenter.segment_frame(frame_bgr, feed.scene_type, confidence=conf)
-
-            if len(zone_dicts) > len(best_zone_dicts):
-                best_zone_dicts = zone_dicts
-
-            # Stop early once we get a usable segmentation.
-            if zone_dicts:
-                break
-
-            print(f"[AUTO-SEG] {feed_id}: No detections on attempt {attempt_idx + 1}/{attempts} "
-                  f"(conf={conf:.2f}, brightness={mean_brightness:.1f})")
-
-            if attempt_idx < attempts - 1:
-                time.sleep(max(AUTO_SEG_RETRY_DELAY, 0.5))
+        # Run segmentation
+        zone_dicts = self.segmenter.segment_frame(frame_bgr, feed.scene_type)
 
         # Always update timestamp to maintain the interval (even if no zones found)
         feed.last_auto_seg_time = time.time()
@@ -863,6 +1048,26 @@ class FeedManager:
 # Global feed manager
 feed_manager = FeedManager()
 
+# WebSocket clients for real-time status push
+_ws_clients: set[WebSocket] = set()
+_event_loop: Optional[asyncio.AbstractEventLoop] = None
+
+async def _ws_broadcast(message: str):
+    """Send a message to all connected WebSocket clients."""
+    dead = []
+    for ws in _ws_clients:
+        try:
+            await ws.send_text(message)
+        except Exception:
+            dead.append(ws)
+    for ws in dead:
+        _ws_clients.discard(ws)
+
+def _ws_broadcast_from_thread(message: str):
+    """Schedule a WebSocket broadcast from a background thread."""
+    if _event_loop is not None and _ws_clients:
+        asyncio.run_coroutine_threadsafe(_ws_broadcast(message), _event_loop)
+
 # ============================================================================
 # BACKGROUND THREADS: FRAME CAPTURE + DETECTION
 # ============================================================================
@@ -876,14 +1081,10 @@ def frame_capture_loop():
     print(f"[CAPTURE] Starting frame capture loop ({1/FRAME_CAPTURE_INTERVAL:.0f} FPS)...")
 
     while feed_manager.running:
-        for feed_id in feed_manager.feeds:
-            if not feed_manager.running:
-                break
-            try:
-                # Just grab the frame, don't run detection
-                feed_manager.get_frame(feed_id)
-            except Exception as e:
-                print(f"[CAPTURE] Error capturing {feed_id}: {e}")
+        try:
+            feed_manager.capture_all_frames()
+        except Exception as e:
+            print(f"[CAPTURE] Error capturing frames: {e}")
 
         time.sleep(FRAME_CAPTURE_INTERVAL)
 
@@ -891,22 +1092,22 @@ def frame_capture_loop():
 
 
 def detection_loop():
-    """Detection thread — runs human detection at lower FPS.
+    """Detection thread — runs human detection using batch YOLO inference.
 
-    This runs at DETECTION_FPS (default 10) since detection is CPU/GPU intensive.
-    Reads from cached frames populated by the capture thread.
+    Collects all frames from feeds with zones, runs a single batched
+    YOLO call on the GPU, then processes results per-feed. This is
+    significantly faster than running YOLO sequentially per feed.
     """
-    print(f"[DETECTION] Starting detection loop ({1/DETECTION_INTERVAL:.0f} FPS)...")
+    print(f"[DETECTION] Starting detection loop ({1/DETECTION_INTERVAL:.0f} FPS, batch)...")
     last_drone_status_check = 0.0
 
     while feed_manager.running:
-        for feed_id in feed_manager.feeds:
-            if not feed_manager.running:
-                break
-            try:
-                feed_manager.run_detection_only(feed_id)
-            except Exception as e:
-                print(f"[DETECTION] Error processing {feed_id}: {e}")
+        try:
+            feed_manager.run_detection_batch()
+        except Exception as e:
+            print(f"[DETECTION] Error in batch detection: {e}")
+            import traceback
+            traceback.print_exc()
 
         # Poll drone status (rate-limited to once per second)
         current_time = time.time()
@@ -1052,6 +1253,73 @@ def depth_worker_loop():
     print("[DEPTH] Depth worker thread stopped")
 
 
+def hover_cctv_drones():
+    """Take off and hover all CCTV drones at a fixed altitude.
+
+    Uses the feed_manager's AirSim client. Called once during startup
+    when --hover flag is set. Each drone is armed, takes off, moves to
+    CCTV_HOVER_ALTITUDE, and enters hover mode.
+    """
+    client = feed_manager.client
+    if client is None:
+        print("[HOVER] No AirSim client, skipping CCTV hover")
+        return
+
+    vehicle_names = [feed.vehicle_name for feed in feed_manager.feeds.values()]
+    # Deduplicate while preserving order
+    seen = set()
+    unique_vehicles = []
+    for v in vehicle_names:
+        if v not in seen:
+            seen.add(v)
+            unique_vehicles.append(v)
+
+    print(f"[HOVER] Arming and taking off {len(unique_vehicles)} CCTV drones...")
+
+    # Arm and take off all drones, collecting futures
+    takeoff_futures = []
+    for vehicle_name in unique_vehicles:
+        try:
+            client.enableApiControl(True, vehicle_name=vehicle_name)
+            client.armDisarm(True, vehicle_name=vehicle_name)
+            future = client.takeoffAsync(vehicle_name=vehicle_name)
+            takeoff_futures.append((vehicle_name, future))
+        except Exception as e:
+            print(f"[HOVER] Failed to arm {vehicle_name}: {e}")
+
+    # Wait for all takeoffs
+    for vehicle_name, future in takeoff_futures:
+        try:
+            future.join()
+            print(f"[HOVER] {vehicle_name} takeoff complete")
+        except Exception as e:
+            print(f"[HOVER] {vehicle_name} takeoff issue: {e}")
+
+    # Move all drones to hover altitude
+    altitude_futures = []
+    for vehicle_name in unique_vehicles:
+        try:
+            future = client.moveToZAsync(CCTV_HOVER_ALTITUDE, 5, vehicle_name=vehicle_name)
+            altitude_futures.append((vehicle_name, future))
+        except Exception as e:
+            print(f"[HOVER] Failed to move {vehicle_name}: {e}")
+
+    for vehicle_name, future in altitude_futures:
+        try:
+            future.join()
+        except Exception as e:
+            print(f"[HOVER] {vehicle_name} altitude issue: {e}")
+
+    # Enter hover mode on all drones
+    for vehicle_name in unique_vehicles:
+        try:
+            client.hoverAsync(vehicle_name=vehicle_name).join()
+        except Exception as e:
+            print(f"[HOVER] {vehicle_name} hover issue: {e}")
+
+    print(f"[HOVER] All CCTV drones hovering at altitude {CCTV_HOVER_ALTITUDE}m")
+
+
 def cctv_follow_loop():
     """Follow loop — teleports CCTV drones to match Camera Actor positions.
 
@@ -1123,6 +1391,9 @@ def cctv_follow_loop():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan context manager for startup and shutdown events."""
+    global _event_loop
+    _event_loop = asyncio.get_running_loop()
+
     # Startup
     if feed_manager.initialize():
         feed_manager.running = True
@@ -1152,6 +1423,10 @@ async def lifespan(app: FastAPI):
             follow_thread = threading.Thread(target=cctv_follow_loop, daemon=True)
             follow_thread.start()
             print(f"[SERVER] CCTV follow mode active — tracking '{CCTV_FOLLOW_TARGET}'")
+        elif CCTV_HOVER_DRONES:
+            # Hover mode: take off and hold altitude (skip if follow is active,
+            # since follow already handles takeoff)
+            hover_cctv_drones()
 
         print("[SERVER] Backend server started successfully")
     else:
@@ -1224,13 +1499,10 @@ _NO_SIGNAL_JPEG = _create_no_signal_frame()
 def generate_mjpeg_frames(feed_id: str):
     """Generate MJPEG frames for video streaming.
 
-    Reads cached frames from feed.last_frame (populated by the capture
-    thread) instead of calling AirSim directly, avoiding concurrent
-    client access issues.
-
-    Caches the last successfully encoded JPEG so that transient frame
-    capture failures repeat the previous good frame instead of flashing
-    a NO SIGNAL placeholder.
+    Uses the pre-rendered frame (with detection masks baked in) when
+    available, so the mask overlay always aligns with the frame it was
+    computed from.  Falls back to the raw frame when no detection has
+    run yet.
     """
     last_jpeg = _NO_SIGNAL_JPEG
 
@@ -1238,14 +1510,44 @@ def generate_mjpeg_frames(feed_id: str):
         feed = feed_manager.feeds.get(feed_id)
 
         frame = None
+        mask_overlay = None
         if feed:
             with feed.lock:
                 if feed.last_frame is not None:
                     frame = feed.last_frame.copy()
+                if feed.last_mask_overlay is not None:
+                    mask_overlay = feed.last_mask_overlay
 
         if frame is not None:
             # Convert RGB to BGR for OpenCV encoding
             frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+
+            # Composite detection mask overlay (pre-rendered at detection time)
+            if mask_overlay is not None:
+                h, w = frame_bgr.shape[:2]
+                ov = mask_overlay
+                if ov.shape[:2] != (h, w):
+                    ov = cv2.resize(ov, (w, h), interpolation=cv2.INTER_NEAREST)
+                # Convert overlay RGB→BGR and blend where non-zero
+                ov_bgr = cv2.cvtColor(ov, cv2.COLOR_RGB2BGR)
+                mask_region = np.any(ov_bgr > 0, axis=2)
+                frame_bgr[mask_region] = cv2.addWeighted(
+                    frame_bgr, 0.6, ov_bgr, 0.4, 0
+                )[mask_region]
+
+            h, w = frame_bgr.shape[:2]
+
+            # Draw YELLOW caution border (if caution active)
+            if feed.caution_active and not feed.alarm_active:
+                cv2.rectangle(frame_bgr, (0, 0), (w-1, h-1), (0, 255, 255), 4)
+                cv2.putText(frame_bgr, "CAUTION", (10, 30),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
+
+            # Draw RED alarm border (if alarm active - takes priority)
+            if feed.alarm_active:
+                cv2.rectangle(frame_bgr, (0, 0), (w-1, h-1), (0, 0, 255), 4)
+                cv2.putText(frame_bgr, "ALARM", (10, 30),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
 
             # Encode as JPEG
             ret, buffer = cv2.imencode('.jpg', frame_bgr, [cv2.IMWRITE_JPEG_QUALITY, 80])
@@ -1277,6 +1579,19 @@ async def get_feed_status(feed_id: str):
 
     feed = feed_manager.feeds[feed_id]
     return feed_manager._get_status(feed).model_dump()
+
+@app.websocket("/ws/status")
+async def ws_status(websocket: WebSocket):
+    """WebSocket endpoint for real-time detection status updates."""
+    await websocket.accept()
+    _ws_clients.add(websocket)
+    try:
+        while True:
+            await websocket.receive_text()  # keep connection alive
+    except WebSocketDisconnect:
+        pass
+    finally:
+        _ws_clients.discard(websocket)
 
 @app.post("/feeds/{feed_id}/zones")
 async def update_zones(feed_id: str, request: ZonesUpdateRequest):
