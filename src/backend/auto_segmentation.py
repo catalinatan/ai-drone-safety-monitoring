@@ -56,9 +56,24 @@ class SceneSegmenter:
 
         model = self.models[scene_type]
         conf = confidence if confidence is not None else self.confidence
+        print(f"[AUTO-SEG] segment_frame: scene_type='{scene_type}', confidence={conf}, frame_shape={frame.shape}")
+
         results = model(frame, conf=conf, verbose=False, save=False)[0]
 
+        # Log raw model output
+        num_detections = len(results.boxes) if results.boxes is not None else 0
+        num_masks = len(results.masks.data) if results.masks is not None else 0
+        print(f"[AUTO-SEG] Raw model output: {num_detections} detections, {num_masks} masks")
+        if results.boxes is not None and len(results.boxes) > 0:
+            class_names = results.names if hasattr(results, 'names') else {}
+            for i, box in enumerate(results.boxes):
+                cls_id = int(box.cls[0]) if box.cls is not None else -1
+                cls_name = class_names.get(cls_id, f"class_{cls_id}")
+                box_conf = float(box.conf[0]) if box.conf is not None else 0
+                print(f"[AUTO-SEG]   detection[{i}]: class='{cls_name}' (id={cls_id}), conf={box_conf:.3f}")
+
         if results.masks is None:
+            print(f"[AUTO-SEG] No masks produced — returning empty")
             return []
 
         zones = []
@@ -73,13 +88,18 @@ class SceneSegmenter:
 
             # Binary threshold
             mask_binary = (mask_resized > 0.5).astype(np.uint8)
+            mask_pixel_count = int(mask_binary.sum())
+            print(f"[AUTO-SEG]   mask[{i}]: raw_shape={mask_raw.shape}, resized={mask_resized.shape}, pixels={mask_pixel_count}")
 
             # Find contours (outer contours only)
             contours, _ = cv2.findContours(mask_binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            print(f"[AUTO-SEG]   mask[{i}]: {len(contours)} contour(s) found")
 
             for j, contour in enumerate(contours):
+                area = cv2.contourArea(contour)
                 # Filter out tiny contours (noise)
-                if cv2.contourArea(contour) < AUTO_SEG_MIN_CONTOUR_AREA:
+                if area < AUTO_SEG_MIN_CONTOUR_AREA:
+                    print(f"[AUTO-SEG]   mask[{i}] contour[{j}]: area={area:.0f} < min={AUTO_SEG_MIN_CONTOUR_AREA} — SKIPPED")
                     continue
 
                 # Simplify polygon to reduce point count
@@ -87,7 +107,9 @@ class SceneSegmenter:
 
                 # Need at least 3 points for a valid polygon
                 if len(approx) < 3:
+                    print(f"[AUTO-SEG]   mask[{i}] contour[{j}]: only {len(approx)} points after simplify — SKIPPED")
                     continue
+                print(f"[AUTO-SEG]   mask[{i}] contour[{j}]: area={area:.0f}, points={len(approx)} — OK")
 
                 # Convert pixel coordinates to percentage coordinates (0-100)
                 points = []
@@ -105,4 +127,5 @@ class SceneSegmenter:
                 }
                 zones.append(zone)
 
+        print(f"[AUTO-SEG] segment_frame result: {len(zones)} zone(s) for scene_type='{scene_type}'")
         return zones

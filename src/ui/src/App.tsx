@@ -10,6 +10,8 @@ function App() {
   // Command Center specific state
   const [feeds, setFeeds] = useState<Feed[]>(mockFeeds);
   const [commandViewState, setCommandViewState] = useState<ViewState>({ type: 'command' });
+  const [sceneType, setSceneType] = useState('bridge');
+  const [autoRefresh, setAutoRefresh] = useState(false);
 
   // Load saved zones from backend on startup
   useEffect(() => {
@@ -35,6 +37,9 @@ function App() {
               return feed;
             })
           );
+          // Load global settings
+          if (data.globalSceneType) setSceneType(data.globalSceneType);
+          if (data.autoRefresh != null) setAutoRefresh(data.autoRefresh);
         }
       } catch (error) {
         console.log('[INIT] Backend not available, using default feeds');
@@ -120,29 +125,50 @@ function App() {
     setCommandViewState({ type: 'command' });
   }, []);
 
-  const handleAutoSegment = useCallback(async (feedId: string): Promise<Zone[] | null> => {
+  const handleAutoSegmentAll = useCallback(async (): Promise<boolean> => {
+    const feedIds = feeds.map((f) => f.id);
     try {
-      const response = await fetch(`${BACKEND_URL}/feeds/${feedId}/auto-segment`, {
-        method: 'POST',
-      });
+      const results = await Promise.all(
+        feedIds.map((feedId) =>
+          fetch(`${BACKEND_URL}/feeds/${feedId}/auto-segment`, { method: 'POST' })
+            .then((res) => (res.ok ? res.json() : null))
+            .catch(() => null)
+        )
+      );
 
-      if (response.ok) {
-        const data = await response.json();
-        console.log(`[AUTO-SEG] Generated ${data.zones_count} zones for ${feedId}`);
+      let totalZones = 0;
+      setFeeds((prev) =>
+        prev.map((feed, i) => {
+          const data = results[i];
+          if (data?.zones) {
+            totalZones += data.zones.length;
+            return { ...feed, zones: data.zones };
+          }
+          return feed;
+        })
+      );
 
-        if (data.zones) {
-          setFeeds((prev) =>
-            prev.map((feed) => (feed.id === feedId ? { ...feed, zones: data.zones } : feed))
-          );
-          return data.zones;
-        }
-      } else {
-        console.error(`[AUTO-SEG] Failed for ${feedId}`);
-      }
+      console.log(`[AUTO-SEG] All feeds segmented: ${totalZones} total zones`);
+      return totalZones > 0;
     } catch (error) {
-      console.error(`[AUTO-SEG] Error for ${feedId}:`, error);
+      console.error('[AUTO-SEG] Error segmenting all feeds:', error);
+      return false;
     }
-    return null;
+  }, [feeds]);
+
+  const handleSaveSettings = useCallback(async (newSceneType: string, newAutoRefresh: boolean) => {
+    const response = await fetch(`${BACKEND_URL}/settings`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sceneType: newSceneType, autoRefresh: newAutoRefresh }),
+    });
+    if (response.ok) {
+      setSceneType(newSceneType);
+      setAutoRefresh(newAutoRefresh);
+      // Update scene type on all local feeds
+      setFeeds((prev) => prev.map((f) => ({ ...f, sceneType: newSceneType as Feed['sceneType'] })));
+      console.log(`[SETTINGS] Saved: sceneType=${newSceneType}, autoRefresh=${newAutoRefresh}`);
+    }
   }, []);
 
   // Render Command Center views
@@ -159,7 +185,6 @@ function App() {
             feed={feed}
             onSave={(zones) => handleSaveZones(feed.id, zones)}
             onCancel={handleBackToCommand}
-            onAutoSegment={() => handleAutoSegment(feed.id)}
           />
         );
       }
@@ -186,6 +211,10 @@ function App() {
             feeds={feeds}
             onEditFeed={handleEditFeed}
             onExpandFeed={handleExpandFeed}
+            onAutoSegmentAll={handleAutoSegmentAll}
+            sceneType={sceneType}
+            autoRefresh={autoRefresh}
+            onSaveSettings={handleSaveSettings}
           />
         );
     }

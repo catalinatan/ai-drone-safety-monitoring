@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ArrowLeft, Circle, Trash2, Scan, Loader2 } from 'lucide-react';
+import { ArrowLeft, Circle, Trash2 } from 'lucide-react';
 import { PolygonCanvas } from './PolygonCanvas';
 import type { Feed, Zone, ZoneLevel } from '../types';
 
@@ -7,44 +7,13 @@ interface EditFeedPageProps {
   feed: Feed;
   onSave: (zones: Zone[]) => void;
   onCancel: () => void;
-  onAutoSegment?: () => Promise<Zone[] | null>;
 }
 
 type ToolType = ZoneLevel | 'delete' | null;
-type AutoSegResult = 'idle' | 'success' | 'empty' | 'failed';
 
-export function EditFeedPage({ feed, onSave, onCancel, onAutoSegment }: EditFeedPageProps) {
+export function EditFeedPage({ feed, onSave, onCancel }: EditFeedPageProps) {
   const [zones, setZones] = useState<Zone[]>(feed.zones);
   const [activeTool, setActiveTool] = useState<ToolType>(null);
-  const [isAutoSegmenting, setIsAutoSegmenting] = useState(false);
-  const [autoSegResult, setAutoSegResult] = useState<AutoSegResult>('idle');
-
-  const handleAutoSegment = async () => {
-    if (!onAutoSegment) return;
-    setIsAutoSegmenting(true);
-    setAutoSegResult('idle');
-    // Clear current masks immediately when auto-segment is requested.
-    setZones([]);
-    try {
-      const newZones = await onAutoSegment();
-      // Treat an empty result as a valid run ("no hazards detected"),
-      // not a transport/API failure.
-      if (newZones !== null) {
-        setZones(newZones);
-        if (newZones.length > 0) {
-          setAutoSegResult('success');
-        } else {
-          setAutoSegResult('empty');
-        }
-        setTimeout(() => setAutoSegResult('idle'), 2500);
-      } else {
-        setAutoSegResult('failed');
-        setTimeout(() => setAutoSegResult('idle'), 2500);
-      }
-    } finally {
-      setIsAutoSegmenting(false);
-    }
-  };
 
   const handleToolClick = (tool: ToolType) => {
     setActiveTool((current) => (current === tool ? null : tool));
@@ -179,45 +148,6 @@ export function EditFeedPage({ feed, onSave, onCancel, onAutoSegment }: EditFeed
                 <Trash2 size={18} />
               </button>
 
-              {/* Auto Segment Button */}
-              {feed.sceneType && onAutoSegment && (
-                <>
-                  <div className="h-6 w-px bg-[var(--border-dim)] mx-2" />
-                  <button
-                    onClick={handleAutoSegment}
-                    disabled={isAutoSegmenting}
-                    className="flex items-center gap-2 px-3 py-1.5 rounded border border-[var(--accent-cyan-dim)] text-[var(--accent-cyan)] hover:bg-[var(--accent-cyan-glow)] transition-all disabled:opacity-50"
-                    title={`Auto-detect ${feed.sceneType} hazard zones`}
-                  >
-                    {isAutoSegmenting ? (
-                      <>
-                        <Loader2 size={16} className="animate-spin" />
-                        <span className="text-xs font-mono">Segmenting...</span>
-                      </>
-                    ) : autoSegResult === 'failed' ? (
-                      <>
-                        <Scan size={16} />
-                        <span className="text-xs font-mono text-[var(--zone-red)]">Failed</span>
-                      </>
-                    ) : autoSegResult === 'empty' ? (
-                      <>
-                        <Scan size={16} />
-                        <span className="text-xs font-mono text-[var(--zone-yellow)]">No Hazards</span>
-                      </>
-                    ) : autoSegResult === 'success' ? (
-                      <>
-                        <Scan size={16} />
-                        <span className="text-xs font-mono text-[var(--zone-green)]">Updated</span>
-                      </>
-                    ) : (
-                      <>
-                        <Scan size={16} />
-                        <span className="text-xs font-mono">Auto Segment</span>
-                      </>
-                    )}
-                  </button>
-                </>
-              )}
             </div>
 
             {/* Tool descriptions */}

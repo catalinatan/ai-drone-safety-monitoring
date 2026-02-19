@@ -1,16 +1,34 @@
 import { useState } from 'react';
-import { Shield, Radio, Eye, EyeOff } from 'lucide-react';
+import { Shield, Radio, Eye, EyeOff, Scan, Loader2, Check, AlertTriangle, Settings } from 'lucide-react';
 import { FeedCard } from './FeedCard';
+import { SettingsPanel } from './SettingsPanel';
 import type { Feed } from '../types';
 
 interface CommandPanelProps {
   feeds: Feed[];
   onEditFeed: (feedId: string) => void;
   onExpandFeed: (feedId: string) => void;
+  onAutoSegmentAll: () => Promise<boolean>;
+  sceneType: string;
+  autoRefresh: boolean;
+  onSaveSettings: (sceneType: string, autoRefresh: boolean) => Promise<void>;
 }
 
-export function CommandPanel({ feeds, onEditFeed, onExpandFeed }: CommandPanelProps) {
+export function CommandPanel({ feeds, onEditFeed, onExpandFeed, onAutoSegmentAll, sceneType, autoRefresh, onSaveSettings }: CommandPanelProps) {
   const [showZones, setShowZones] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [segState, setSegState] = useState<'idle' | 'loading' | 'success' | 'empty' | 'failed'>('idle');
+
+  const handleAutoSegmentAll = async () => {
+    setSegState('loading');
+    try {
+      const hasZones = await onAutoSegmentAll();
+      setSegState(hasZones ? 'success' : 'empty');
+    } catch {
+      setSegState('failed');
+    }
+    setTimeout(() => setSegState('idle'), 2500);
+  };
 
   return (
     <div className="h-full flex flex-col bg-[var(--bg-primary)] tactical-grid">
@@ -26,9 +44,45 @@ export function CommandPanel({ feeds, onEditFeed, onExpandFeed }: CommandPanelPr
             <Radio className="w-3 h-3 text-[var(--zone-green)] status-live" />
             <span className="text-[10px] font-mono text-[var(--zone-green)]">ONLINE</span>
           </div>
+          <button
+            onClick={() => setShowSettings(true)}
+            className="flex items-center gap-1.5 px-2 py-1 rounded border border-[var(--border-dim)] bg-[var(--bg-tertiary)] text-[var(--text-muted)] hover:text-[var(--accent-cyan)] hover:border-[var(--accent-cyan)] transition-all duration-200"
+            title="Settings"
+          >
+            <Settings size={12} />
+            <span className="text-[10px] font-bold font-mono uppercase tracking-wider">Settings</span>
+          </button>
         </div>
 
         <div className="flex items-center gap-2">
+          <button
+            onClick={handleAutoSegmentAll}
+            disabled={segState === 'loading'}
+            className={`
+              flex items-center gap-1.5 px-2 py-1 rounded border transition-all duration-200
+              ${segState === 'loading'
+                ? 'border-[var(--accent-cyan)] bg-[var(--accent-cyan)]/10 text-[var(--accent-cyan)] cursor-wait'
+                : segState === 'success'
+                ? 'border-[var(--zone-green)] bg-[var(--zone-green)]/10 text-[var(--zone-green)]'
+                : segState === 'failed' || segState === 'empty'
+                ? 'border-[var(--zone-red)] bg-[var(--zone-red)]/10 text-[var(--zone-red)]'
+                : 'border-[var(--border-dim)] bg-[var(--bg-tertiary)] text-[var(--text-muted)] hover:text-[var(--accent-cyan)] hover:border-[var(--accent-cyan)]'
+              }
+            `}
+            title="Auto-segment zones for all feeds"
+          >
+            {segState === 'loading' ? <Loader2 size={12} className="animate-spin" /> :
+             segState === 'success' ? <Check size={12} /> :
+             segState === 'failed' || segState === 'empty' ? <AlertTriangle size={12} /> :
+             <Scan size={12} />}
+            <span className="text-[10px] font-bold font-mono uppercase tracking-wider">
+              {segState === 'loading' ? 'Segmenting...' :
+               segState === 'success' ? 'Done' :
+               segState === 'empty' ? 'No Zones' :
+               segState === 'failed' ? 'Failed' :
+               'Auto Segment'}
+            </span>
+          </button>
           <button
             onClick={() => setShowZones((v) => !v)}
             className={`
@@ -91,6 +145,19 @@ export function CommandPanel({ feeds, onEditFeed, onExpandFeed }: CommandPanelPr
           <span>LAT: 51.4988° N | LON: 0.1749° W</span>
         </div>
       </footer>
+
+      {/* Settings Overlay */}
+      {showSettings && (
+        <SettingsPanel
+          sceneType={sceneType}
+          autoRefresh={autoRefresh}
+          onSave={async (st, ar) => {
+            await onSaveSettings(st, ar);
+            setShowSettings(false);
+          }}
+          onClose={() => setShowSettings(false)}
+        />
+      )}
     </div>
   );
 }

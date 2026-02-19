@@ -39,7 +39,7 @@ from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
@@ -58,7 +58,6 @@ from src.backend.config import (
     BACKEND_PORT,
     FEED_SCENE_TYPE, SEG_MODEL_PATHS,
     AUTO_SEG_INTERVAL, AUTO_SEG_CONFIDENCE,
-    AUTO_SEG_MAX_RETRIES, AUTO_SEG_RETRY_DELAY,
     CCTV_FOLLOW_TARGET, CCTV_FOLLOW_CAMERAS,
     CCTV_FOLLOW_INTERVAL,
     CCTV_HOVER_DRONES, CCTV_HOVER_ALTITUDE,
@@ -279,6 +278,9 @@ class FeedManager:
         self._detector_lock = threading.Lock()  # Serialize YOLO inference (CUDA isn't thread-safe)
         self._depth_queue: queue.Queue = queue.Queue(maxsize=4)
         self.segmenter: Optional[SceneSegmenter] = None if AUTO_SEG_AVAILABLE else None
+        # Global settings (adjustable at runtime via PATCH /settings)
+        self.global_scene_type: str = next(iter(FEED_SCENE_TYPE.values()), "bridge")
+        self.auto_refresh: bool = False   # periodic auto-seg loop enabled?
         # Trigger snapshot: the CCTV frame that caused drone deployment
         self.trigger_snapshot: Optional[bytes] = None   # JPEG bytes
         self.trigger_feed_id: Optional[str] = None
@@ -319,10 +321,15 @@ class FeedManager:
                 if AUTO_SEG_AVAILABLE:
                     needed_types = set(t for t in FEED_SCENE_TYPE.values() if t)
                     needed_paths = {t: SEG_MODEL_PATHS[t] for t in needed_types if t in SEG_MODEL_PATHS}
+                    print(f"[INIT] Scene types from config: {list(FEED_SCENE_TYPE.values())}")
+                    print(f"[INIT] All model paths: { {k: v for k, v in SEG_MODEL_PATHS.items()} }")
+                    for stype, spath in needed_paths.items():
+                        import os as _os
+                        print(f"[INIT] Model '{stype}': {spath} (exists={_os.path.exists(spath)})")
                     if needed_paths:
                         print("[INIT] Loading scene segmentation models...")
                         self.segmenter = SceneSegmenter(needed_paths, confidence=AUTO_SEG_CONFIDENCE)
-                        print(f"[INIT] Loaded {len(self.segmenter.models)} segmentation model(s)")
+                        print(f"[INIT] Loaded {len(self.segmenter.models)} segmentation model(s): {list(self.segmenter.models.keys())}")
                     else:
                         print("[INIT] No segmentation model paths configured")
 
@@ -1019,16 +1026,20 @@ class FeedManager:
         feed = self.feeds[feed_id]
 
         if not feed.scene_type or self.segmenter is None:
+            print(f"[AUTO-SEG] {feed_id}: SKIPPED — scene_type={feed.scene_type!r}, segmenter={'loaded' if self.segmenter else 'None'}")
             return []
 
         with feed.lock:
             frame = feed.last_frame.copy() if feed.last_frame is not None else None
 
         if frame is None:
+            print(f"[AUTO-SEG] {feed_id}: SKIPPED — no frame available")
             return []
 
         # AirSim frames are stored as RGB; convert to BGR for the YOLO model
         frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+
+        print(f"[AUTO-SEG] {feed_id}: Running segmentation — scene_type='{feed.scene_type}', frame={frame_bgr.shape}, model_loaded={feed.scene_type in self.segmenter.models}")
 
         # Run segmentation
         zone_dicts = self.segmenter.segment_frame(frame_bgr, feed.scene_type)
@@ -1122,9 +1133,12 @@ def detection_loop():
             last_drone_status_check = current_time
             try:
                 status = feed_manager.drone_api.get_status()
-                if status and not status.get("is_navigating", True):
-                    print("[DRONE] Drone reached target, mission complete")
-                    feed_manager.drone_is_navigating = False
+                if status:
+                    # Drone switched to manual (arrived at target) or stopped navigating
+                    if not status.get("is_navigating", True):
+                        if feed_manager.drone_is_navigating:
+                            print("[DRONE] Drone reached target — now in user control")
+                        feed_manager.drone_is_navigating = False
             except Exception as e:
                 print(f"[DRONE] Error checking drone status: {e}")
 
@@ -1160,22 +1174,22 @@ def auto_segmentation_loop():
                 continue
 
             try:
-                if feed.scene_type == "ship":
-                    # Ship: re-segment every AUTO_SEG_INTERVAL, always overwrite
-                    current_time = time.time()
-                    if current_time - feed.last_auto_seg_time >= AUTO_SEG_INTERVAL:
-                        feed.auto_seg_active = True
-                        feed_manager.run_auto_segmentation(feed_id)
-
-                elif feed.scene_type in ("railway", "bridge"):
-                    # Railway/Bridge: segment once initially, skip if user has set manual zones
-                    if feed_id not in initial_seg_done and not feed.manual_zones_set:
+                # Initial segmentation: run once per feed on startup (only if auto-refresh is on)
+                if feed_id not in initial_seg_done and not feed.manual_zones_set:
+                    if feed_manager.auto_refresh:
                         with feed.lock:
                             has_frame = feed.last_frame is not None
                         if has_frame:
                             feed_manager.run_auto_segmentation(feed_id)
                             initial_seg_done.add(feed_id)
                             print(f"[AUTO-SEG] Initial segmentation done for {feed_id} ({feed.scene_type})")
+
+                # Periodic refresh: only when auto_refresh is enabled
+                elif feed_manager.auto_refresh and feed_id in initial_seg_done:
+                    current_time = time.time()
+                    if current_time - feed.last_auto_seg_time >= AUTO_SEG_INTERVAL:
+                        feed.auto_seg_active = True
+                        feed_manager.run_auto_segmentation(feed_id)
 
             except Exception as e:
                 print(f"[AUTO-SEG] Error processing {feed_id}: {e}")
@@ -1215,13 +1229,15 @@ def depth_worker_loop():
                     rel_depth, CCTV_HEIGHT, feed.vehicle_name
                 )
 
-            # Update coordinates
+            # Update coordinates — also snapshot locally so the detection
+            # thread can't clear them before we deploy the drone.
+            deploy_coords = (
+                target_pos.x_val,
+                target_pos.y_val,
+                SAFE_Z_ALTITUDE,
+            )
             with feed.lock:
-                feed.target_coordinates = (
-                    target_pos.x_val,
-                    target_pos.y_val,
-                    SAFE_Z_ALTITUDE
-                )
+                feed.target_coordinates = deploy_coords
 
             # Capture trigger snapshot (the CCTV frame that caused the alarm)
             try:
@@ -1234,21 +1250,48 @@ def depth_worker_loop():
             except Exception as snap_err:
                 print(f"[TRIGGER] Failed to capture snapshot: {snap_err}")
 
-            # Deploy drone (cooldown check)
-            if feed_manager.drone_api is not None:
+            # Deploy drone — only when drone is at home in automatic mode
+            # Lazy reconnect: if drone_api was None at startup, try connecting now
+            if feed_manager.drone_api is None:
+                try:
+                    candidate = DroneAPIClient()
+                    if candidate.check_connection():
+                        feed_manager.drone_api = candidate
+                        print("[DRONE] Lazy-connected to drone API")
+                except Exception:
+                    pass
+            if feed_manager.drone_api is None:
+                print("[DRONE] Skipped deploy — drone API not connected")
+            else:
                 current_time = time.time()
                 cooldown_ok = (current_time - feed_manager.last_deployment_time
                                > ALARM_COOLDOWN)
-                if cooldown_ok and not feed_manager.drone_is_navigating:
-                    tx, ty, tz = feed.target_coordinates
-                    print(f"[DRONE] Deploying to ({tx:.2f}, {ty:.2f}, {tz:.2f})"
-                          f" for {feed_id}")
-                    if feed_manager.drone_api.goto_position(tx, ty, tz):
-                        feed_manager.last_deployment_time = current_time
-                        feed_manager.drone_is_navigating = True
-                        print("[DRONE] Deployment command sent successfully")
+                if not cooldown_ok:
+                    pass  # Cooldown active — silent skip (too frequent to log)
+                elif feed_manager.drone_is_navigating:
+                    pass  # Already navigating — silent skip
+                else:
+                    # Check drone is actually ready (auto mode + not navigating)
+                    drone_status = feed_manager.drone_api.get_status()
+                    drone_mode = drone_status.get("mode") if drone_status else None
+                    drone_nav = drone_status.get("is_navigating", True) if drone_status else True
+                    drone_ready = (
+                        drone_status is not None
+                        and drone_mode == "automatic"
+                        and not drone_nav
+                    )
+                    if not drone_ready:
+                        print(f"[DRONE] Skipped deploy — drone not ready: mode={drone_mode}, is_navigating={drone_nav}, status={'OK' if drone_status else 'UNREACHABLE'}")
                     else:
-                        print("[DRONE] Deployment command failed")
+                        tx, ty, tz = deploy_coords
+                        print(f"[DRONE] Deploying to ({tx:.2f}, {ty:.2f}, {tz:.2f})"
+                              f" for {feed_id}")
+                        if feed_manager.drone_api.goto_position(tx, ty, tz):
+                            feed_manager.last_deployment_time = current_time
+                            feed_manager.drone_is_navigating = True
+                            print("[DRONE] Deployment command sent successfully")
+                        else:
+                            print("[DRONE] Deployment command failed")
 
         except Exception as e:
             print(f"[DEPTH] Error processing {feed_id}: {e}")
@@ -1485,7 +1528,73 @@ async def list_feeds():
             "sceneType": feed.scene_type,
             "autoSegActive": feed.auto_seg_active,
         })
-    return {"feeds": feeds}
+    return {
+        "feeds": feeds,
+        "globalSceneType": feed_manager.global_scene_type,
+        "autoRefresh": feed_manager.auto_refresh,
+    }
+
+@app.patch("/settings")
+async def update_settings(request: Request):
+    """Update global settings (scene type, auto-refresh)."""
+    body = await request.json()
+    scene_type = body.get("sceneType")
+    auto_refresh = body.get("autoRefresh")
+
+    if scene_type is not None:
+        if scene_type not in ("ship", "railway", "bridge"):
+            return JSONResponse({"error": f"Invalid scene type: {scene_type}"}, status_code=400)
+        old_scene_type = feed_manager.global_scene_type
+        feed_manager.global_scene_type = scene_type
+        # Apply to all feeds
+        for fid, feed in feed_manager.feeds.items():
+            feed.scene_type = scene_type
+            print(f"[SETTINGS] {fid}: scene_type = '{scene_type}'")
+        print(f"[SETTINGS] Scene type changed: '{old_scene_type}' -> '{scene_type}'")
+
+        # Log model path for the new scene type
+        model_path = SEG_MODEL_PATHS.get(scene_type)
+        print(f"[SETTINGS] Model path for '{scene_type}': {model_path}")
+        if model_path:
+            import os as _os
+            print(f"[SETTINGS] Model file exists: {_os.path.exists(model_path)}")
+
+        # Load the segmentation model for the new scene type if not already loaded
+        if feed_manager.segmenter is not None:
+            loaded_models = list(feed_manager.segmenter.models.keys())
+            print(f"[SETTINGS] Currently loaded models: {loaded_models}")
+            if scene_type in SEG_MODEL_PATHS:
+                if scene_type not in feed_manager.segmenter.models:
+                    print(f"[SETTINGS] Model for '{scene_type}' not loaded — loading now...")
+                    try:
+                        new_paths = {scene_type: SEG_MODEL_PATHS[scene_type]}
+                        feed_manager.segmenter = SceneSegmenter(
+                            {**{k: v for k, v in SEG_MODEL_PATHS.items() if k in feed_manager.segmenter.models}, **new_paths},
+                            confidence=AUTO_SEG_CONFIDENCE,
+                        )
+                        print(f"[SETTINGS] Loaded segmentation model for '{scene_type}' — now loaded: {list(feed_manager.segmenter.models.keys())}")
+                    except Exception as e:
+                        print(f"[SETTINGS] Failed to load model for '{scene_type}': {e}")
+                        import traceback
+                        traceback.print_exc()
+                else:
+                    print(f"[SETTINGS] Model for '{scene_type}' already loaded — OK")
+            else:
+                print(f"[SETTINGS] WARNING: No model path configured for '{scene_type}'")
+        else:
+            print(f"[SETTINGS] WARNING: segmenter is None — auto-segmentation not available")
+
+    if auto_refresh is not None:
+        feed_manager.auto_refresh = bool(auto_refresh)
+        print(f"[SETTINGS] Auto-refresh {'enabled' if feed_manager.auto_refresh else 'disabled'}")
+        if feed_manager.auto_refresh:
+            print(f"[SETTINGS] Auto-seg will run every {AUTO_SEG_INTERVAL}s for scene_type='{feed_manager.global_scene_type}'")
+
+    return {
+        "globalSceneType": feed_manager.global_scene_type,
+        "autoRefresh": feed_manager.auto_refresh,
+    }
+
 
 def _create_no_signal_frame(width: int = 640, height: int = 480) -> bytes:
     """Create a 'NO SIGNAL' placeholder JPEG."""

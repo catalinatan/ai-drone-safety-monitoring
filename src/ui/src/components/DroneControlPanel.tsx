@@ -48,8 +48,10 @@ export function DroneControlPanel() {
   const [triggerImgKey, setTriggerImgKey] = useState(0);
   const videoRef = useRef<HTMLImageElement>(null);
   const lastVelocityRef = useRef({ vx: 0, vy: 0, vz: 0 });
-  const [connectedSince, setConnectedSince] = useState<number | null>(null);
-  const [flightTime, setFlightTime] = useState('00:00');
+  const [missionStartTime, setMissionStartTime] = useState<number | null>(null);
+  const [missionEndTime, setMissionEndTime] = useState<number | null>(null);
+  const wasNavigatingRef = useRef(false);
+  const [flightTime, setFlightTime] = useState('--:--');
 
   // Fetch drone status periodically
   useEffect(() => {
@@ -59,15 +61,22 @@ export function DroneControlPanel() {
         if (response.ok) {
           const data = await response.json();
           setStatus(data);
-          if (!isConnected) setConnectedSince(Date.now());
           setIsConnected(true);
+
+          // Detect mission start/end transitions
+          const nowNavigating = data.is_navigating || data.returning_home;
+          if (!wasNavigatingRef.current && nowNavigating) {
+            setMissionStartTime(Date.now());
+            setMissionEndTime(null);
+          } else if (wasNavigatingRef.current && !nowNavigating) {
+            setMissionEndTime(Date.now());
+          }
+          wasNavigatingRef.current = nowNavigating;
         } else {
           setIsConnected(false);
-          setConnectedSince(null);
         }
       } catch {
         setIsConnected(false);
-        setConnectedSince(null);
       }
     };
 
@@ -76,17 +85,18 @@ export function DroneControlPanel() {
     return () => clearInterval(interval);
   }, []);
 
-  // Flight time ticker
+  // Flight time ticker (mission-based)
   useEffect(() => {
-    if (!connectedSince) { setFlightTime('00:00'); return; }
+    if (!missionStartTime) { setFlightTime('--:--'); return; }
     const tick = setInterval(() => {
-      const elapsed = Math.floor((Date.now() - connectedSince) / 1000);
+      const end = missionEndTime ?? Date.now();
+      const elapsed = Math.floor((end - missionStartTime) / 1000);
       const mm = String(Math.floor(elapsed / 60)).padStart(2, '0');
       const ss = String(elapsed % 60).padStart(2, '0');
       setFlightTime(`${mm}:${ss}`);
     }, 1000);
     return () => clearInterval(tick);
-  }, [connectedSince]);
+  }, [missionStartTime, missionEndTime]);
 
   // Poll trigger info from backend
   useEffect(() => {
@@ -141,20 +151,7 @@ export function DroneControlPanel() {
   // Handle return home
   const handleReturnHome = useCallback(async () => {
     try {
-      // First switch to automatic mode if not already
-      if (status.mode !== 'automatic') {
-        const modeResponse = await fetch(`${DRONE_API_BASE}/mode`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ mode: 'automatic' }),
-        });
-        if (!modeResponse.ok) {
-          const data = await modeResponse.json();
-          showError(data.detail || 'Failed to switch to automatic mode');
-          return;
-        }
-      }
-
+      // /return_home switches to automatic mode internally
       const response = await fetch(`${DRONE_API_BASE}/return_home`, {
         method: 'POST',
       });
@@ -484,143 +481,140 @@ export function DroneControlPanel() {
             </div>
           )}
 
-          {/* Top row: RTH + Flight Mode Toggle */}
-          <div className="flex items-center justify-center gap-4 mb-3">
-            {/* Return Home */}
-            <button
-              onClick={handleReturnHome}
-              disabled={isReturningHome}
-              className={`
-                flex items-center gap-1.5 px-3 py-2 rounded-lg border-2 transition-all duration-300
-                ${
-                  isReturningHome
-                    ? 'border-[var(--zone-yellow)] bg-[var(--zone-yellow)]/20 text-[var(--zone-yellow)]'
-                    : 'border-[var(--accent-cyan)]/60 bg-[var(--accent-cyan)]/10 text-[var(--accent-cyan)] hover:border-[var(--accent-cyan)]'
-                }
-              `}
-            >
-              <Home size={16} className={isReturningHome ? 'animate-pulse' : ''} />
-              <span className="text-[9px] font-bold font-mono uppercase tracking-wider">
-                {isReturningHome ? 'RTH...' : 'RTH'}
-              </span>
-            </button>
-
-            {/* Flight Mode Toggle */}
-            <div className="flex items-center gap-1 bg-[var(--bg-tertiary)] rounded-lg p-0.5 border border-[var(--border-dim)]">
-              <button
-                onClick={() => { if (!isAutomatic) handleModeSwitch(); }}
-                className={`
-                  px-3 py-1.5 rounded-md text-[10px] font-bold uppercase tracking-wider transition-all duration-200
-                  flex items-center gap-1.5
-                  ${
-                    isAutomatic
-                      ? 'bg-[var(--zone-red)] text-white shadow-lg shadow-[var(--zone-red)]/20'
-                      : 'text-[var(--text-muted)] hover:text-[var(--zone-red)] hover:bg-[var(--zone-red)]/10'
-                  }
-                `}
-              >
-                <Plane size={12} />
-                <span>Auto</span>
-              </button>
-              <button
-                onClick={() => { if (!isManual) handleModeSwitch(); }}
-                className={`
-                  px-3 py-1.5 rounded-md text-[10px] font-bold uppercase tracking-wider transition-all duration-200
-                  flex items-center gap-1.5
-                  ${
-                    isManual
-                      ? 'bg-[var(--zone-green)] text-white shadow-lg shadow-[var(--zone-green)]/20'
-                      : 'text-[var(--text-muted)] hover:text-[var(--zone-green)] hover:bg-[var(--zone-green)]/10'
-                  }
-                `}
-              >
-                <Hand size={12} />
-                <span>Manual</span>
-              </button>
-            </div>
-          </div>
-
-          {/* Bottom row: Movement + Altitude + Deploy Controls */}
-          <div className="flex items-center justify-center gap-6">
-            {/* Movement Controls (WASD) */}
-            <div className="flex flex-col items-center gap-1">
-              <span className="text-[9px] font-bold font-mono text-white uppercase tracking-wider mb-1">
-                Movement
-              </span>
-              <ControlButton
-                icon={<ChevronUp size={18} />}
-                isActive={activeControls.has('forward')}
-                isDisabled={!isManual}
-                onPress={() => handleControlPress('forward')}
-                onRelease={() => handleControlRelease('forward')}
-                label="W"
-                labelPosition="above"
-              />
-              <div className="flex gap-1">
+          {/* Controls: Left (Movement + Altitude) | Right (RTH + Mode + Deploy) */}
+          <div className="flex items-start justify-evenly">
+            {/* Left side: Movement + Altitude */}
+            <div className="flex items-start gap-4">
+              {/* Movement Controls (WASD) */}
+              <div className="flex flex-col items-center gap-1">
+                <span className="text-[9px] font-bold font-mono text-white uppercase tracking-wider mb-1">
+                  Movement
+                </span>
                 <ControlButton
-                  icon={<ChevronLeft size={18} />}
-                  isActive={activeControls.has('left')}
+                  icon={<ChevronUp size={18} />}
+                  isActive={activeControls.has('forward')}
                   isDisabled={!isManual}
-                  onPress={() => handleControlPress('left')}
-                  onRelease={() => handleControlRelease('left')}
-                  label="A"
+                  onPress={() => handleControlPress('forward')}
+                  onRelease={() => handleControlRelease('forward')}
+                  label="W"
+                  labelPosition="above"
+                />
+                <div className="flex gap-1">
+                  <ControlButton
+                    icon={<ChevronLeft size={18} />}
+                    isActive={activeControls.has('left')}
+                    isDisabled={!isManual}
+                    onPress={() => handleControlPress('left')}
+                    onRelease={() => handleControlRelease('left')}
+                    label="A"
+                  />
+                  <ControlButton
+                    icon={<ChevronDown size={18} />}
+                    isActive={activeControls.has('backward')}
+                    isDisabled={!isManual}
+                    onPress={() => handleControlPress('backward')}
+                    onRelease={() => handleControlRelease('backward')}
+                    label="S"
+                  />
+                  <ControlButton
+                    icon={<ChevronRight size={18} />}
+                    isActive={activeControls.has('right')}
+                    isDisabled={!isManual}
+                    onPress={() => handleControlPress('right')}
+                    onRelease={() => handleControlRelease('right')}
+                    label="D"
+                  />
+                </div>
+              </div>
+
+              {/* Altitude Controls */}
+              <div className="flex flex-col items-center gap-1">
+                <span className="text-[9px] font-bold font-mono text-white uppercase tracking-wider mb-1">
+                  Altitude
+                </span>
+                <ControlButton
+                  icon={<ArrowUp size={18} />}
+                  isActive={activeControls.has('up')}
+                  isDisabled={!isManual}
+                  onPress={() => handleControlPress('up')}
+                  onRelease={() => handleControlRelease('up')}
+                  label="Z"
+                  variant="altitude"
+                  labelPosition="above"
                 />
                 <ControlButton
-                  icon={<ChevronDown size={18} />}
-                  isActive={activeControls.has('backward')}
+                  icon={<ArrowDown size={18} />}
+                  isActive={activeControls.has('down')}
                   isDisabled={!isManual}
-                  onPress={() => handleControlPress('backward')}
-                  onRelease={() => handleControlRelease('backward')}
-                  label="S"
-                />
-                <ControlButton
-                  icon={<ChevronRight size={18} />}
-                  isActive={activeControls.has('right')}
-                  isDisabled={!isManual}
-                  onPress={() => handleControlPress('right')}
-                  onRelease={() => handleControlRelease('right')}
-                  label="D"
+                  onPress={() => handleControlPress('down')}
+                  onRelease={() => handleControlRelease('down')}
+                  label="X"
+                  variant="altitude"
                 />
               </div>
             </div>
 
-            {/* Altitude Controls */}
-            <div className="flex flex-col items-center gap-1">
-              <span className="text-[9px] font-bold font-mono text-white uppercase tracking-wider mb-1">
-                Altitude
-              </span>
-              <ControlButton
-                icon={<ArrowUp size={18} />}
-                isActive={activeControls.has('up')}
-                isDisabled={!isManual}
-                onPress={() => handleControlPress('up')}
-                onRelease={() => handleControlRelease('up')}
-                label="Z"
-                variant="altitude"
-                labelPosition="above"
-              />
-              <ControlButton
-                icon={<ArrowDown size={18} />}
-                isActive={activeControls.has('down')}
-                isDisabled={!isManual}
-                onPress={() => handleControlPress('down')}
-                onRelease={() => handleControlRelease('down')}
-                label="X"
-                variant="altitude"
-              />
-            </div>
+            {/* Right side: RTH + Mode Toggle + Deploy */}
+            <div className="flex flex-col items-center gap-2">
+              {/* Return Home */}
+              <button
+                onClick={handleReturnHome}
+                disabled={isReturningHome}
+                className={`
+                  flex items-center gap-1.5 px-3 py-2 rounded-lg border-2 transition-all duration-300 w-full justify-center
+                  ${
+                    isReturningHome
+                      ? 'border-[var(--zone-yellow)] bg-[var(--zone-yellow)]/20 text-[var(--zone-yellow)]'
+                      : 'border-[var(--accent-cyan)]/60 bg-[var(--accent-cyan)]/10 text-[var(--accent-cyan)] hover:border-[var(--accent-cyan)]'
+                  }
+                `}
+              >
+                <Home size={16} className={isReturningHome ? 'animate-pulse' : ''} />
+                <span className="text-[9px] font-bold font-mono uppercase tracking-wider">
+                  {isReturningHome ? 'RTH...' : 'RTH'}
+                </span>
+              </button>
 
-            {/* Deploy Equipment */}
-            <div className="flex flex-col items-center gap-1">
-              <span className="text-[9px] font-bold font-mono text-white uppercase tracking-wider mb-1">
-                Deploy
-              </span>
+              {/* Flight Mode Toggle */}
+              <div className="flex items-center gap-1 bg-[var(--bg-tertiary)] rounded-lg p-0.5 border border-[var(--border-dim)]">
+                <button
+                  onClick={() => { if (!isAutomatic) handleModeSwitch(); }}
+                  className={`
+                    px-3 py-1.5 rounded-md text-[10px] font-bold uppercase tracking-wider transition-all duration-200
+                    flex items-center gap-1.5
+                    ${
+                      isAutomatic
+                        ? 'bg-[var(--zone-red)] text-white shadow-lg shadow-[var(--zone-red)]/20'
+                        : 'text-[var(--text-muted)] hover:text-[var(--zone-red)] hover:bg-[var(--zone-red)]/10'
+                    }
+                  `}
+                >
+                  <Plane size={12} />
+                  <span>Auto</span>
+                </button>
+                <button
+                  onClick={() => { if (!isManual) handleModeSwitch(); }}
+                  className={`
+                    px-3 py-1.5 rounded-md text-[10px] font-bold uppercase tracking-wider transition-all duration-200
+                    flex items-center gap-1.5
+                    ${
+                      isManual
+                        ? 'bg-[var(--zone-green)] text-white shadow-lg shadow-[var(--zone-green)]/20'
+                        : 'text-[var(--text-muted)] hover:text-[var(--zone-green)] hover:bg-[var(--zone-green)]/10'
+                    }
+                  `}
+                >
+                  <Hand size={12} />
+                  <span>Manual</span>
+                </button>
+              </div>
+
+              {/* Deploy Equipment */}
               <button
                 onClick={handleDeployEquipment}
                 disabled={equipmentDeployed}
                 className={`
-                  relative w-11 h-11 rounded-lg border-2 transition-all duration-300
-                  flex items-center justify-center
+                  flex items-center gap-1.5 px-3 py-2 rounded-lg border-2 transition-all duration-300 w-full justify-center
                   ${
                     equipmentDeployed
                       ? 'border-[var(--zone-green)] bg-[var(--zone-green)]/20 text-[var(--zone-green)]'
@@ -628,11 +622,11 @@ export function DroneControlPanel() {
                   }
                 `}
               >
-                <Package size={18} className={equipmentDeployed ? 'animate-bounce' : ''} />
+                <Package size={16} className={equipmentDeployed ? 'animate-bounce' : ''} />
+                <span className="text-[9px] font-bold font-mono uppercase tracking-wider">
+                  {equipmentDeployed ? 'SENT' : 'DROP'}
+                </span>
               </button>
-              <span className="text-[9px] font-mono text-white/60">
-                {equipmentDeployed ? 'SENT' : 'DROP'}
-              </span>
             </div>
           </div>
         </div>

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Pencil, Maximize2, AlertTriangle, AlertCircle, Users, VideoOff } from 'lucide-react';
 import type { Feed } from '../types';
 import { useDetectionStatus } from '../hooks/useDetectionStatus';
@@ -22,6 +22,33 @@ export function FeedCard({ feed, onEdit, onExpand, showZones = false }: FeedCard
   const [streamAttempt, setStreamAttempt] = useState(0);
   const [retryCount, setRetryCount] = useState(0);
   const [isStreamBroken, setIsStreamBroken] = useState(false);
+  const imgRef = useRef<HTMLImageElement>(null);
+  const [imgRect, setImgRect] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
+
+  // Calculate the rendered image area within the object-contain container
+  const updateImgRect = useCallback(() => {
+    const img = imgRef.current;
+    if (!img || !img.naturalWidth || !img.naturalHeight) return;
+    const containerW = img.clientWidth;
+    const containerH = img.clientHeight;
+    const naturalW = img.naturalWidth;
+    const naturalH = img.naturalHeight;
+    const scale = Math.min(containerW / naturalW, containerH / naturalH);
+    const renderedW = naturalW * scale;
+    const renderedH = naturalH * scale;
+    const left = (containerW - renderedW) / 2;
+    const top = (containerH - renderedH) / 2;
+    setImgRect({ left, top, width: renderedW, height: renderedH });
+  }, []);
+
+  // Update on resize
+  useEffect(() => {
+    const img = imgRef.current;
+    if (!img) return;
+    const observer = new ResizeObserver(updateImgRect);
+    observer.observe(img);
+    return () => observer.disconnect();
+  }, [updateImgRect]);
 
   useEffect(() => {
     setHasRenderedFrame(false);
@@ -138,6 +165,7 @@ export function FeedCard({ feed, onEdit, onExpand, showZones = false }: FeedCard
           </div>
         ) : feed.isLive ? (
           <img
+            ref={imgRef}
             src={`${feed.imageSrc}?attempt=${streamAttempt}`}
             alt={`${feed.name} feed`}
             className="w-full h-full object-contain"
@@ -145,6 +173,7 @@ export function FeedCard({ feed, onEdit, onExpand, showZones = false }: FeedCard
               setHasRenderedFrame(true);
               setIsStreamBroken(false);
               setRetryCount(0);
+              updateImgRect();
             }}
             onError={() => {
               setIsStreamBroken(true);
@@ -208,9 +237,14 @@ export function FeedCard({ feed, onEdit, onExpand, showZones = false }: FeedCard
           </div>
         )}
 
-        {/* Zone overlay */}
-        {showZones && feed.zones.length > 0 && !isPlaceholder && (
-          <svg className="absolute inset-0 w-full h-full pointer-events-none z-[5]" viewBox="0 0 100 100" preserveAspectRatio="none">
+        {/* Zone overlay — positioned to match the object-contain image area */}
+        {showZones && feed.zones.length > 0 && !isPlaceholder && imgRect && (
+          <svg
+            className="absolute pointer-events-none z-[5]"
+            style={{ left: imgRect.left, top: imgRect.top, width: imgRect.width, height: imgRect.height }}
+            viewBox="0 0 100 100"
+            preserveAspectRatio="none"
+          >
             {feed.zones.map((zone) => {
               const colors = ZONE_COLORS[zone.level] || ZONE_COLORS.green;
               const pointsStr = zone.points.map((p) => `${p.x},${p.y}`).join(' ');

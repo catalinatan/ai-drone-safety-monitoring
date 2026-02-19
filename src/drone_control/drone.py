@@ -96,7 +96,7 @@ class DroneState:
 
     def __init__(self):
         self.lock = threading.Lock()
-        self.mode = "manual"              # "manual" | "automatic"
+        self.mode = "automatic"           # "manual" | "automatic"
         self.target_position = None       # (x, y, z) NED metres, set by /goto
         self.home_position = None         # recorded once at takeoff
         self.is_navigating = False        # True while flying toward a target
@@ -335,24 +335,22 @@ async def goto_position(request: GotoRequest):
 
 @app.post("/return_home")
 async def return_home():
-    """Command drone to return to home position."""
+    """Command drone to return to home position.
+
+    Works from any mode — switches to automatic for the return flight.
+    On arrival the control loop will land, disarm, and set mode back to
+    automatic so the drone is ready for the next auto-trigger.
+    """
     home = drone_state.get_home()
-    
+
     if home is None:
         raise HTTPException(status_code=400, detail="Home position not set")
-    
-    current_mode = drone_state.get_mode()
-    if current_mode != "automatic":
-        raise HTTPException(
-            status_code=400,
-            detail=f"Cannot return home in {current_mode} mode. Switch to automatic first."
-        )
-    
-    # Fly directly to the exact home position; 2D arrival check + landAsync
-    # handles the final descent.
-    print(f"[API] Return to home command: target={home}")
+
+    # Switch to automatic mode so the navigation loop takes over
+    drone_state.set_mode("automatic")
     drone_state.set_returning_home(True)
     drone_state.set_target(home)
+    print(f"[API] Return to home command: target={home}")
 
     return {"status": "success", "message": "Returning to home", "home_position": home}
 
@@ -366,6 +364,7 @@ async def get_status():
         "connected": True,  # Would check actual connection
         "is_navigating": is_nav,
         "returning_home": drone_state.get_returning_home(),
+        "grounded": drone_state.is_grounded(),
         "target_position": target,
         "pose": {"x": pose[0], "y": pose[1], "z": pose[2]} if pose else None,
     }
@@ -590,17 +589,25 @@ def drone_control_loop():
                         rth_tolerance = POSITION_TOLERANCE * 3 if drone_state.get_returning_home() else POSITION_TOLERANCE
                         if distance < rth_tolerance:
                             print("[AUTO] Arrived at target position")
+                            is_rth = drone_state.get_returning_home()
                             drone_state.clear_target()
-                            if drone_state.get_returning_home():
-                                print("[AUTO] Home reached — dropping")
+                            if is_rth:
+                                print("[AUTO] Home reached — landing and disarming")
                                 drone_state.set_returning_home(False)
+                                client.hoverAsync().join()
+                                client.landAsync().join()
                                 client.armDisarm(False)
                                 client.enableApiControl(False)
                                 drone_state.set_grounded(True)
-                                # Prevent PHASE 3 from re-engaging
+                                # Switch back to automatic so drone is ready for next trigger
+                                drone_state.set_mode("automatic")
                                 drone_state.mark_idle_hover_sent()
+                                print("[AUTO] Drone grounded in automatic mode — ready for next trigger")
                             else:
+                                # Arrived at target — hold position then hand over to user
+                                print("[AUTO] Switching to manual mode — user has control")
                                 client.hoverAsync().join()
+                                drone_state.set_mode("manual")
                 else:
                     # PHASE 3 — Automatic mode with no target: hover in place.
                     # We only issue hover once to avoid spamming AirSim.
