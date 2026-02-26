@@ -1,0 +1,6 @@
+names:
+- danger-zone
+nc: 1
+path: C:\Users\Jia Yi PC\PycharmProjects\ai-safety-monitoring\data\bridge_dataset
+train: images/train
+val: images/val

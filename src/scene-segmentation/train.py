@@ -66,7 +66,7 @@ def prepare_dataset_yaml(dataset_type, logger):
         'names': config['names']
     }
     
-    yaml_path = f"data_{dataset_type}.yaml"
+    yaml_path = str(dataset_path / "data.yaml")
     with open(yaml_path, 'w') as f:
         yaml.dump(data_yaml, f)
     

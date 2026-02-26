@@ -4,7 +4,7 @@ Modeled after src/scene-segmentation/train.py
 
 Usage:
     python -m src.human_detection.train --epochs 100
-    python -m src.human_detection.train --epochs 100 --imgsz 1280 --model yolov8m-seg
+    python -m src.human_detection.train --epochs 100 --imgsz 1280 --model yolo11n-seg
     python -m src.human_detection.train --epochs 100 --model yolov8l-seg --freeze 0
 """
 import logging
@@ -55,7 +55,7 @@ def prepare_dataset_yaml(logger):
         "names": DATASET_CONFIG["names"],
     }
 
-    yaml_path = "data_human.yaml"
+    yaml_path = "data/human_dataset/data.yaml"
     with open(yaml_path, "w") as f:
         yaml.dump(data_yaml, f)
 
@@ -64,13 +64,13 @@ def prepare_dataset_yaml(logger):
 
 
 def train_model(
-    model_name="yolov8m-seg",
+    model_name="yolo11n-seg",
     epochs=100,
     imgsz=1280,
     batch_size=-1,
     device=0,
     patience=20,
-    data_yaml_path="data_human.yaml",
+    data_yaml_path="data/human_dataset/data.yaml",
     freeze=10,
     logger=None,
 ):
@@ -78,7 +78,7 @@ def train_model(
     Fine-tune YOLO segmentation model for human detection.
 
     Args:
-        model_name: Base model name (e.g. yolov8m-seg, yolov8l-seg).
+        model_name: Base model name (e.g. yolo11n-seg, yolov8l-seg).
         epochs: Number of training epochs.
         imgsz: Training image size (should match inference size).
         batch_size: Batch size (-1 for auto).
@@ -164,8 +164,8 @@ if __name__ == "__main__":
                         help="Number of training epochs")
     parser.add_argument("--imgsz", type=int, default=1280,
                         help="Training image size (default: 1280)")
-    parser.add_argument("--model", type=str, default="yolov8m-seg",
-                        help="Base model: yolov8m-seg, yolov8l-seg, or yolov8x-seg")
+    parser.add_argument("--model", type=str, default="yolo11n-seg",
+                        help="Base model: yolo11n-seg, yolov8l-seg, or yolov8x-seg")
     parser.add_argument("--freeze", type=int, default=10,
                         help="Number of backbone layers to freeze (0=train all, 10=freeze backbone)")
     parser.add_argument("--device", type=str, default="0",
