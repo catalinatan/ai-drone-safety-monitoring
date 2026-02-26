@@ -9,8 +9,8 @@ import yaml
 DATASET_CONFIGS = {
     "railway": {
         "path": "data/railway_dataset",
-        "nc": 6,
-        "names": ['rail-track', 'rail-raised', 'rail-embedded', 'tram-track', 'trackbed', 'on-rails']
+        "nc": 1,
+        "names": ['danger-zone']
     },
     "ship": {
         "path": "data/ship_dataset",
