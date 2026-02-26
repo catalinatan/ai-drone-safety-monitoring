@@ -33,9 +33,9 @@ from src.human_detection.config import CONFIDENCE_THRESHOLD, INFERENCE_IMGSZ
 
 # Model paths for scene segmentation
 SCENE_MODELS = {
-    "railway": "runs/segment/runs/segment/railway_hazard/weights/best.pt",
-    "bridge": "runs/segment/runs/segment/bridge_hazard/weights/best.pt",
-    "ship": "runs/segment/runs/segment/ship_hazard/weights/best.pt",
+    "railway": "runs/segment/railway_hazard/weights/best.pt",
+    "bridge": "runs/segment/bridge_hazard/weights/best.pt",
+    "ship": "runs/segment/ship_hazard/weights/best.pt",
 }
 
 

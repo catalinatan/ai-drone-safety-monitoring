@@ -1,5 +1,5 @@
 # Model Settings
-# MODEL_PATH = "runs/segment/runs/segment/human_detection/weights/best.pt"
+# MODEL_PATH = "runs/segment/human_detection/weights/best.pt"
 MODEL_PATH = "yolo11n-seg.pt"
 CONFIDENCE_THRESHOLD = 0.25    # Lowered from 0.5 for small/distant humans in water
 CLASS_ID_PERSON = 0            # YOLO specific ID for 'person'
