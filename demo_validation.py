@@ -164,8 +164,8 @@ def process_video(video_path, scene_type, output_path=None, show=True, human_det
 
     # Hazard zone segmentation settings
     hazard_mask = None
-    last_hazard_detection_time = None
-    HAZARD_REFRESH_INTERVAL = 60.0  # Refresh every 60 seconds for ship scenes
+    last_hazard_frame = None
+    HAZARD_REFRESH_FRAMES = 60  # Re-segment every 60 frames for ship scenes
 
     while True:
         frame_start_time = time.time()
@@ -176,22 +176,22 @@ def process_video(video_path, scene_type, output_path=None, show=True, human_det
 
         # Run hazard zone detection:
         # - First frame: always detect
-        # - Ship scene: re-detect every 60 seconds (water movement, ship orientation changes)
+        # - Ship scene: re-detect every 60 frames (water movement, ship orientation changes)
         # - Bridge/Railway: only once (truly static)
         should_detect_hazard = (
             frame_count == 0 or
-            (scene_type == "ship" and last_hazard_detection_time is not None and
-             time.time() - last_hazard_detection_time >= HAZARD_REFRESH_INTERVAL)
+            (scene_type == "ship" and last_hazard_frame is not None and
+             frame_count - last_hazard_frame >= HAZARD_REFRESH_FRAMES)
         )
 
         if should_detect_hazard:
             if frame_count == 0:
                 print(f"    Detecting hazard zones (first frame)...")
             else:
-                print(f"    Re-detecting hazard zones (ship scene, 60s refresh)...")
+                print(f"    Re-detecting hazard zones (ship scene, every {HAZARD_REFRESH_FRAMES} frames)...")
             hazard_results = hazard_model(frame, conf=CONFIDENCE_THRESHOLD, imgsz=INFERENCE_IMGSZ, verbose=False)
             hazard_mask = get_hazard_mask_from_result(hazard_results[0], frame.shape)
-            last_hazard_detection_time = time.time()
+            last_hazard_frame = frame_count
 
         # Run human detection on every frame
         person_masks = human_detector.get_masks(frame)
@@ -302,7 +302,7 @@ def run_demo(scene_type, video_path=None, output_dir=None, show=True):
 
         # Determine output file path
         if output_path:
-            out_file = output_path / f"{scene_type}_{video.stem}_annotated.mp4"
+            out_file = output_path / f"{video.stem}_annotated.mp4"
         else:
             out_file = None
 
