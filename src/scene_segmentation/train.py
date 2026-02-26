@@ -149,7 +149,7 @@ if __name__ == '__main__':
                         choices=['railway', 'ship', 'bridge'],
                         help="Which dataset to train on")
     
-    parser.add_argument('--epochs', type=int, default=50, 
+    parser.add_argument('--epochs', type=int, default=100,
                         help="Number of training epochs")
     
     args = parser.parse_args()
