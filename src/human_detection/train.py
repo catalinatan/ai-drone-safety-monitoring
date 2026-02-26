@@ -129,19 +129,20 @@ def train_model(
             # Backbone freezing (critical for small datasets)
             freeze=freeze,
 
-            # Augmentations tuned for aerial water scenarios
+            # Conservative augmentations for finetuning (aggressive aug on small
+            # datasets causes the model to learn distorted patterns, not real ones)
             augment=True,
-            flipud=0.5,        # Vertical flip (aerial views have no fixed up)
-            fliplr=0.5,        # Horizontal flip
-            degrees=15.0,      # Rotation (drone orientation varies)
-            translate=0.2,     # Translation (humans can appear anywhere in frame)
-            scale=0.5,         # Scale variation (critical: humans range from tiny to medium)
-            mosaic=1.0,        # Mosaic augmentation (combines 4 images, great for small objects)
-            mixup=0.1,         # Light image blending for generalization
-            hsv_h=0.015,       # Hue shift (water color variation)
-            hsv_s=0.7,         # Saturation shift (water reflections, lighting)
-            hsv_v=0.4,         # Brightness shift (sunlight, shadows on water)
-            erasing=0.1,       # Random erasing (partial occlusion by waves)
+            flipud=0.0,        # Disabled — CCTV cameras have fixed orientation
+            fliplr=0.5,        # Horizontal flip — reasonable for all views
+            degrees=5.0,       # Mild rotation (slight camera tilt)
+            translate=0.1,     # Light translation
+            scale=0.2,         # Mild scale variation (was 0.5 — too aggressive for small people)
+            mosaic=0.5,        # 50% mosaic (was 1.0 — full mosaic shrinks objects too much)
+            mixup=0.0,         # Disabled — blending confuses small object detection
+            hsv_h=0.015,       # Hue shift — keep as-is
+            hsv_s=0.3,         # Saturation shift (was 0.7 — too aggressive)
+            hsv_v=0.3,         # Brightness shift (was 0.4 — slightly reduced)
+            erasing=0.0,       # Disabled — erasing small people makes them unlearnable
         )
 
         logger.info("Training complete!")
