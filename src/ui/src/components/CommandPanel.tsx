@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Shield, Radio, Eye, EyeOff, Scan, Loader2, Check, AlertTriangle, Settings } from 'lucide-react';
+import { Shield, Radio, Eye, EyeOff, Scan, Loader2, Check, AlertTriangle, Settings, LayoutGrid } from 'lucide-react';
 import { FeedCard } from './FeedCard';
 import { SettingsPanel } from './SettingsPanel';
 import type { Feed } from '../types';
@@ -18,6 +18,22 @@ export function CommandPanel({ feeds, onEditFeed, onExpandFeed, onAutoSegmentAll
   const [showZones, setShowZones] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [segState, setSegState] = useState<'idle' | 'loading' | 'success' | 'empty' | 'failed'>('idle');
+  const [gridSize, setGridSize] = useState<number | null>(null); // null = show all
+
+  // Compute visible feeds and grid layout
+  const visibleCount = gridSize ?? feeds.length;
+  const visibleFeeds = feeds.slice(0, visibleCount);
+
+  const getGridClass = (count: number) => {
+    if (count <= 1) return 'grid-cols-1';
+    if (count <= 2) return 'grid-cols-2 grid-rows-1';
+    if (count <= 4) return 'grid-cols-2 grid-rows-2';
+    if (count <= 6) return 'grid-cols-3 grid-rows-2';
+    return 'grid-cols-3 grid-rows-3';
+  };
+
+  // Grid size options based on total feed count
+  const gridOptions = [1, 2, 4, 6, 9].filter((n) => n <= feeds.length);
 
   const handleAutoSegmentAll = async () => {
     setSegState('loading');
@@ -100,17 +116,52 @@ export function CommandPanel({ feeds, onEditFeed, onExpandFeed, onAutoSegmentAll
           <div className="flex items-center gap-2 px-2 py-1 rounded border border-[var(--border-dim)] bg-[var(--bg-tertiary)]">
             <span className="text-[10px] text-[var(--text-muted)]">FEEDS:</span>
             <span className="text-xs font-mono text-[var(--accent-cyan)]">
-              {feeds.filter(f => f.isLive).length}/4
+              {feeds.filter(f => f.isLive).length}/{feeds.length}
             </span>
+          </div>
+          {/* Grid size selector */}
+          <div className="flex items-center gap-1 px-1.5 py-0.5 rounded border border-[var(--border-dim)] bg-[var(--bg-tertiary)]">
+            <LayoutGrid size={12} className="text-[var(--text-muted)]" />
+            {gridOptions.map((n) => (
+              <button
+                key={n}
+                onClick={() => setGridSize(n === feeds.length ? null : n)}
+                className={`
+                  w-6 h-6 rounded text-[10px] font-bold font-mono transition-all duration-150
+                  ${(gridSize === n || (gridSize === null && n === feeds.length))
+                    ? 'bg-[var(--accent-cyan)]/20 text-[var(--accent-cyan)] border border-[var(--accent-cyan)]/50'
+                    : 'text-[var(--text-muted)] hover:text-[var(--accent-cyan)] hover:bg-[var(--accent-cyan)]/10'
+                  }
+                `}
+                title={`Show ${n} feed${n > 1 ? 's' : ''}`}
+              >
+                {n}
+              </button>
+            ))}
+            {feeds.length > 1 && (
+              <button
+                onClick={() => setGridSize(null)}
+                className={`
+                  px-1.5 h-6 rounded text-[10px] font-bold font-mono transition-all duration-150
+                  ${gridSize === null
+                    ? 'bg-[var(--accent-cyan)]/20 text-[var(--accent-cyan)] border border-[var(--accent-cyan)]/50'
+                    : 'text-[var(--text-muted)] hover:text-[var(--accent-cyan)] hover:bg-[var(--accent-cyan)]/10'
+                  }
+                `}
+                title="Show all feeds"
+              >
+                ALL
+              </button>
+            )}
           </div>
         </div>
       </header>
 
-      {/* Main Content - 4 Corner Grid */}
+      {/* Main Content - Dynamic Grid */}
       <main className="flex-1 min-h-0 p-2 relative overflow-hidden">
         {/* Grid container */}
-        <div className="h-full grid grid-cols-2 grid-rows-2 gap-2">
-          {feeds.slice(0, 4).map((feed) => (
+        <div className={`h-full grid ${getGridClass(visibleFeeds.length)} gap-2`}>
+          {visibleFeeds.map((feed) => (
             <FeedCard
               key={feed.id}
               feed={feed}

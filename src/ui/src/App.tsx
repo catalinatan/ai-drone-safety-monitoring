@@ -9,7 +9,7 @@ import type { Feed, ViewState, Zone } from './types';
 
 function App() {
   // Command Center specific state
-  const [feeds, setFeeds] = useState<Feed[]>(mockFeeds);
+  const [feeds, setFeeds] = useState<Feed[]>([]);
   const [commandViewState, setCommandViewState] = useState<ViewState>({ type: 'command' });
   const [sceneType, setSceneType] = useState('bridge');
   const [autoRefresh, setAutoRefresh] = useState(false);
@@ -52,40 +52,43 @@ function App() {
     });
   }, []);
 
-  // Load saved zones from backend on startup
+  // Load feeds from backend on startup (fallback to mockFeeds if unavailable)
   useEffect(() => {
-    const loadZones = async () => {
+    const loadFeeds = async () => {
       try {
         const response = await fetch(`${BACKEND_URL}/feeds`);
         if (response.ok) {
           const data = await response.json();
-          // Merge backend zones with local feed config
-          setFeeds((prevFeeds) =>
-            prevFeeds.map((feed) => {
-              const backendFeed = data.feeds?.find((f: Feed) => f.id === feed.id);
-              if (backendFeed) {
-                const updated = { ...feed };
-                if (Array.isArray(backendFeed.zones)) {
-                  console.log(`[INIT] Loaded ${backendFeed.zones.length} zones for ${feed.id}`);
-                  updated.zones = backendFeed.zones;
-                }
-                if (backendFeed.sceneType) updated.sceneType = backendFeed.sceneType;
-                if (backendFeed.autoSegActive != null) updated.autoSegActive = backendFeed.autoSegActive;
-                return updated;
-              }
-              return feed;
-            })
-          );
+          if (Array.isArray(data.feeds) && data.feeds.length > 0) {
+            const backendFeeds: Feed[] = data.feeds.map((f: Feed) => ({
+              id: f.id,
+              name: f.name || f.id.toUpperCase().replace('-', ' '),
+              location: f.location || 'Aerial Overview',
+              imageSrc: f.imageSrc || `${BACKEND_URL}/video_feed/${f.id}`,
+              zones: Array.isArray(f.zones) ? f.zones : [],
+              isLive: f.isLive ?? true,
+              sceneType: f.sceneType || null,
+              autoSegActive: f.autoSegActive ?? false,
+            }));
+            console.log(`[INIT] Loaded ${backendFeeds.length} feeds from backend`);
+            setFeeds(backendFeeds);
+          } else {
+            console.log('[INIT] No feeds from backend, using defaults');
+            setFeeds(mockFeeds);
+          }
           // Load global settings
           if (data.globalSceneType) setSceneType(data.globalSceneType);
           if (data.autoRefresh != null) setAutoRefresh(data.autoRefresh);
+        } else {
+          setFeeds(mockFeeds);
         }
       } catch (error) {
         console.log('[INIT] Backend not available, using default feeds');
+        setFeeds(mockFeeds);
       }
     };
 
-    loadZones();
+    loadFeeds();
   }, []);
 
   // Poll for zone updates from backend auto-segmentation (every 30s)
