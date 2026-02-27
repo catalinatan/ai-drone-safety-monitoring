@@ -24,6 +24,7 @@ interface DroneStatus {
   connected: boolean;
   is_navigating: boolean;
   returning_home: boolean;
+  grounded: boolean;
   target_position: [number, number, number] | null;
   pose: { x: number; y: number; z: number } | null;
 }
@@ -36,6 +37,7 @@ export function DroneControlPanel() {
     connected: false,
     is_navigating: false,
     returning_home: false,
+    grounded: true,
     target_position: null,
     pose: null,
   });
@@ -48,9 +50,8 @@ export function DroneControlPanel() {
   const [triggerImgKey, setTriggerImgKey] = useState(0);
   const videoRef = useRef<HTMLImageElement>(null);
   const lastVelocityRef = useRef({ vx: 0, vy: 0, vz: 0 });
-  const [missionStartTime, setMissionStartTime] = useState<number | null>(null);
-  const [missionEndTime, setMissionEndTime] = useState<number | null>(null);
-  const wasNavigatingRef = useRef(false);
+  const [airborneStart, setAirborneStart] = useState<number | null>(null);
+  const wasAirborneRef = useRef(false);
   const [flightTime, setFlightTime] = useState('--:--');
 
   // Fetch drone status periodically
@@ -63,15 +64,14 @@ export function DroneControlPanel() {
           setStatus(data);
           setIsConnected(true);
 
-          // Detect mission start/end transitions
-          const nowNavigating = data.is_navigating || data.returning_home;
-          if (!wasNavigatingRef.current && nowNavigating) {
-            setMissionStartTime(Date.now());
-            setMissionEndTime(null);
-          } else if (wasNavigatingRef.current && !nowNavigating) {
-            setMissionEndTime(Date.now());
+          // Detect airborne transitions (connected + not grounded = in the air)
+          const airborne = data.connected && !data.grounded;
+          if (!wasAirborneRef.current && airborne) {
+            setAirborneStart(Date.now());
+          } else if (wasAirborneRef.current && !airborne) {
+            setAirborneStart(null);
           }
-          wasNavigatingRef.current = nowNavigating;
+          wasAirborneRef.current = airborne;
         } else {
           setIsConnected(false);
         }
@@ -85,18 +85,17 @@ export function DroneControlPanel() {
     return () => clearInterval(interval);
   }, []);
 
-  // Flight time ticker (mission-based)
+  // Flight time ticker (airborne time)
   useEffect(() => {
-    if (!missionStartTime) { setFlightTime('--:--'); return; }
+    if (!airborneStart) { setFlightTime('--:--'); return; }
     const tick = setInterval(() => {
-      const end = missionEndTime ?? Date.now();
-      const elapsed = Math.floor((end - missionStartTime) / 1000);
+      const elapsed = Math.floor((Date.now() - airborneStart) / 1000);
       const mm = String(Math.floor(elapsed / 60)).padStart(2, '0');
       const ss = String(elapsed % 60).padStart(2, '0');
       setFlightTime(`${mm}:${ss}`);
     }, 1000);
     return () => clearInterval(tick);
-  }, [missionStartTime, missionEndTime]);
+  }, [airborneStart]);
 
   // Poll trigger info from backend
   useEffect(() => {

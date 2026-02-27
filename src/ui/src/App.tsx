@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
+import { Plane, ChevronLeft, ChevronRight } from 'lucide-react';
 import { CommandPanel } from './components/CommandPanel';
 import { EditFeedPage } from './components/EditFeedPage';
 import { ExpandedFeedView } from './components/ExpandedFeedView';
@@ -12,6 +13,44 @@ function App() {
   const [commandViewState, setCommandViewState] = useState<ViewState>({ type: 'command' });
   const [sceneType, setSceneType] = useState('bridge');
   const [autoRefresh, setAutoRefresh] = useState(false);
+
+  // Drone panel expand/collapse state
+  const [droneExpanded, setDroneExpanded] = useState(false);
+  const [droneActive, setDroneActive] = useState(false);
+  const userCollapsedRef = useRef(false); // track if user manually collapsed
+
+  // Poll drone status to detect activity for auto-expand
+  useEffect(() => {
+    const DRONE_API = 'http://localhost:8000';
+    const pollDrone = async () => {
+      try {
+        const res = await fetch(`${DRONE_API}/status`);
+        if (res.ok) {
+          const data = await res.json();
+          const active = data.is_navigating || data.returning_home;
+          setDroneActive(active);
+          // Auto-expand when drone becomes active (unless user manually collapsed)
+          if (active && !userCollapsedRef.current) {
+            setDroneExpanded(true);
+          }
+        }
+      } catch {
+        // Drone API not available
+      }
+    };
+    pollDrone();
+    const interval = setInterval(pollDrone, 2000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const toggleDronePanel = useCallback(() => {
+    setDroneExpanded((prev) => {
+      const next = !prev;
+      // If user is collapsing, mark it so auto-expand doesn't override
+      userCollapsedRef.current = !next;
+      return next;
+    });
+  }, []);
 
   // Load saved zones from backend on startup
   useEffect(() => {
@@ -233,15 +272,47 @@ function App() {
 
   return (
     <div className="h-screen flex bg-[var(--bg-primary)]">
-      {/* Left: Command Center */}
-      <div className="flex-[6] min-w-0 h-full border-r border-[var(--border-dim)]">
+      {/* Left: Command Center — takes full width when drone panel collapsed */}
+      <div className="flex-1 min-w-0 h-full border-r border-[var(--border-dim)]">
         {renderCommandCenter()}
       </div>
 
-      {/* Right: Drone Control */}
-      <div className="flex-[4] min-w-0 h-full">
-        <DroneControlPanel />
-      </div>
+      {/* Right: Drone Control — collapsible */}
+      {droneExpanded ? (
+        <div className="w-[40%] min-w-0 h-full flex flex-col relative">
+          {/* Collapse button */}
+          <button
+            onClick={toggleDronePanel}
+            className="absolute top-3 left-0 -translate-x-1/2 z-10 w-6 h-10 flex items-center justify-center rounded-full border border-[var(--border-dim)] bg-[var(--bg-secondary)] text-[var(--text-muted)] hover:text-[var(--accent-cyan)] hover:border-[var(--accent-cyan)] transition-all"
+            title="Collapse drone panel"
+          >
+            <ChevronRight size={14} />
+          </button>
+          <DroneControlPanel />
+        </div>
+      ) : (
+        /* Collapsed tab */
+        <button
+          onClick={toggleDronePanel}
+          className={`
+            h-full w-12 flex flex-col items-center justify-center gap-3 border-l transition-all duration-300 cursor-pointer
+            ${droneActive
+              ? 'border-[var(--accent-cyan)] bg-[var(--accent-cyan)]/10 text-[var(--accent-cyan)]'
+              : 'border-[var(--border-dim)] bg-[var(--bg-secondary)] text-[var(--text-muted)] hover:text-[var(--accent-cyan)] hover:border-[var(--accent-cyan)]'
+            }
+          `}
+          title="Expand drone panel"
+        >
+          <ChevronLeft size={14} />
+          <Plane size={18} className={droneActive ? 'animate-pulse' : ''} />
+          <span className="text-[9px] font-bold font-mono uppercase tracking-widest" style={{ writingMode: 'vertical-rl' }}>
+            Drone
+          </span>
+          {droneActive && (
+            <div className="w-2 h-2 rounded-full bg-[var(--zone-green)] status-live" />
+          )}
+        </button>
+      )}
     </div>
   );
 }
