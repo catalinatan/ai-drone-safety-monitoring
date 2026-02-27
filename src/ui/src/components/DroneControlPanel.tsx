@@ -376,6 +376,7 @@ export function DroneControlPanel() {
 
   const isManual = status.mode === 'manual';
   const isAutomatic = status.mode === 'automatic';
+  const isDroneFlying = isConnected && !status.grounded;
 
   return (
     <div className="h-full flex flex-col bg-[var(--bg-primary)] tactical-grid relative overflow-hidden">
@@ -787,7 +788,7 @@ export function DroneControlPanel() {
               >
                 <Home size={16} className={isReturningHome ? 'animate-pulse' : ''} />
                 <span className="text-[9px] font-bold font-mono uppercase tracking-wider">
-                  {isReturningHome ? 'RTH...' : 'RTH'}
+                  {isReturningHome ? 'Returning...' : 'Return to Base'}
                 </span>
               </button>
 
@@ -806,7 +807,7 @@ export function DroneControlPanel() {
                   `}
                 >
                   <Plane size={12} />
-                  <span>Auto</span>
+                  <span>{isDroneFlying ? 'Auto Ctrl' : 'Auto Deploy'}</span>
                 </button>
                 <button
                   onClick={() => { if (!isManual) handleModeSwitch(); }}
@@ -821,7 +822,7 @@ export function DroneControlPanel() {
                   `}
                 >
                   <Hand size={12} />
-                  <span>Manual</span>
+                  <span>{isDroneFlying ? 'Manual Ctrl' : 'Manual Deploy'}</span>
                 </button>
               </div>
 
@@ -840,7 +841,7 @@ export function DroneControlPanel() {
               >
                 <Package size={16} className={equipmentDeployed ? 'animate-bounce' : ''} />
                 <span className="text-[9px] font-bold font-mono uppercase tracking-wider">
-                  {equipmentDeployed ? 'SENT' : 'DROP'}
+                  {equipmentDeployed ? 'Deployed' : 'Drop Equipment'}
                 </span>
               </button>
             </div>
