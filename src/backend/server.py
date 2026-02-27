@@ -34,6 +34,7 @@ import os
 import requests
 import queue
 import threading
+from collections import deque
 import time
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
@@ -254,6 +255,7 @@ class FeedState:
     last_detection_time: Optional[datetime] = None
     position: Optional[Tuple[float, float, float]] = None  # NED coordinates (x, y, z)
     frame_count: int = 0                                    # Total captured frames
+    replay_buffer: deque = field(default_factory=lambda: deque(maxlen=100))  # Ring buffer: (timestamp, jpeg_bytes) at ~10 FPS, ~10s
     lock: threading.Lock = field(default_factory=threading.Lock)
     # Auto-segmentation fields
     scene_type: Optional[str] = None          # "ship", "railway", "bridge", or None
@@ -285,6 +287,13 @@ class FeedManager:
         self.trigger_snapshot: Optional[bytes] = None   # JPEG bytes
         self.trigger_feed_id: Optional[str] = None
         self.trigger_timestamp: Optional[str] = None
+        # Trigger replay: ring buffer frames frozen at trigger time
+        self.trigger_replay_frames: List[Tuple[str, bytes]] = []  # [(timestamp, jpeg_bytes), ...]
+        self.trigger_replay_fps: int = 10
+        self.trigger_replay_trigger_index: int = 0  # Frame index where trigger occurred
+        # Post-trigger capture state
+        self._post_trigger: Optional[dict] = None  # {feed_id, remaining}
+        self._replay_capture_counter: int = 0  # Downsample counter for replay buffer
 
     def initialize(self):
         """Initialize AirSim connection and models."""
@@ -488,6 +497,11 @@ class FeedManager:
         if self.client is None:
             return
 
+        self._replay_capture_counter += 1
+        # Buffer replay frames at ~10 FPS (every 3rd capture at 30 FPS)
+        should_buffer_replay = (self._replay_capture_counter % 3 == 0)
+        now_iso = datetime.now().isoformat() if should_buffer_replay else ""
+
         with self._airsim_lock:
             for feed_id, feed in self.feeds.items():
                 try:
@@ -507,6 +521,31 @@ class FeedManager:
 
                     with feed.lock:
                         feed.last_frame = img_rgb
+
+                    # Append to replay ring buffer (downsampled to ~10 FPS)
+                    if should_buffer_replay:
+                        try:
+                            frame_bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
+                            _, buf = cv2.imencode('.jpg', frame_bgr, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                            feed.replay_buffer.append((now_iso, buf.tobytes()))
+                        except Exception:
+                            pass
+
+                    # Post-trigger: continue capturing into replay clip
+                    if (self._post_trigger
+                            and self._post_trigger["feed_id"] == feed_id
+                            and self._post_trigger["remaining"] > 0
+                            and should_buffer_replay):
+                        try:
+                            frame_bgr2 = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
+                            _, buf2 = cv2.imencode('.jpg', frame_bgr2, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                            self.trigger_replay_frames.append((now_iso, buf2.tobytes()))
+                            self._post_trigger["remaining"] -= 1
+                            if self._post_trigger["remaining"] <= 0:
+                                print(f"[TRIGGER] Post-trigger capture complete: {len(self.trigger_replay_frames)} total frames")
+                                self._post_trigger = None
+                        except Exception:
+                            pass
 
                 except Exception as e:
                     print(f"[ERROR] Failed to get frame for {feed_id}: {e}")
@@ -1247,6 +1286,15 @@ def depth_worker_loop():
                 feed_manager.trigger_feed_id = feed_id
                 feed_manager.trigger_timestamp = datetime.now().isoformat()
                 print(f"[TRIGGER] Captured snapshot from {feed_id}")
+
+                # Capture replay clip: copy pre-trigger buffer + start post-trigger capture
+                pre_frames = list(feed.replay_buffer)
+                feed_manager.trigger_replay_frames = pre_frames
+                feed_manager.trigger_replay_trigger_index = len(pre_frames)
+                feed_manager.trigger_replay_fps = 10
+                # Capture ~5 more seconds after trigger (50 frames at 10 FPS)
+                feed_manager._post_trigger = {"feed_id": feed_id, "remaining": 50}
+                print(f"[TRIGGER] Captured replay: {len(pre_frames)} pre-trigger frames, capturing 50 post-trigger")
             except Exception as snap_err:
                 print(f"[TRIGGER] Failed to capture snapshot: {snap_err}")
 
@@ -1788,12 +1836,27 @@ async def get_trigger_snapshot():
 
 @app.get("/trigger-info")
 async def get_trigger_info():
-    """Return metadata about the last trigger snapshot."""
+    """Return metadata about the last trigger snapshot and replay clip."""
     return {
         "has_snapshot": feed_manager.trigger_snapshot is not None,
         "feed_id": feed_manager.trigger_feed_id,
         "timestamp": feed_manager.trigger_timestamp,
+        "replay_frame_count": len(feed_manager.trigger_replay_frames),
+        "replay_fps": feed_manager.trigger_replay_fps,
+        "replay_trigger_index": feed_manager.trigger_replay_trigger_index,
     }
+
+
+@app.get("/trigger-replay/{frame_index}")
+async def get_trigger_replay_frame(frame_index: int):
+    """Return a single JPEG frame from the trigger replay clip."""
+    frames = feed_manager.trigger_replay_frames
+    if frame_index < 0 or frame_index >= len(frames):
+        raise HTTPException(status_code=404, detail="Frame index out of range")
+
+    from fastapi.responses import Response
+    _timestamp, jpeg_bytes = frames[frame_index]
+    return Response(content=jpeg_bytes, media_type="image/jpeg")
 
 
 # ============================================================================

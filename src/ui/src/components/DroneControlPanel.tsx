@@ -16,6 +16,9 @@ import {
   Battery,
   Wifi,
   Clock,
+  Play,
+  Pause,
+  SkipBack,
 } from 'lucide-react';
 import { BACKEND_URL } from '../data/mockFeeds';
 
@@ -46,8 +49,19 @@ export function DroneControlPanel() {
   const [isReturningHome, setIsReturningHome] = useState(false);
   const [equipmentDeployed, setEquipmentDeployed] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [triggerInfo, setTriggerInfo] = useState<{ has_snapshot: boolean; feed_id: string | null; timestamp: string | null }>({ has_snapshot: false, feed_id: null, timestamp: null });
+  const [triggerInfo, setTriggerInfo] = useState<{
+    has_snapshot: boolean;
+    feed_id: string | null;
+    timestamp: string | null;
+    replay_frame_count: number;
+    replay_fps: number;
+    replay_trigger_index: number;
+  }>({ has_snapshot: false, feed_id: null, timestamp: null, replay_frame_count: 0, replay_fps: 10, replay_trigger_index: 0 });
   const [triggerImgKey, setTriggerImgKey] = useState(0);
+  // Replay player state
+  const [replayFrame, setReplayFrame] = useState(0);
+  const [replayPlaying, setReplayPlaying] = useState(false);
+  const replayIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const videoRef = useRef<HTMLImageElement>(null);
   const lastVelocityRef = useRef({ vx: 0, vy: 0, vz: 0 });
   const [airborneStart, setAirborneStart] = useState<number | null>(null);
@@ -104,9 +118,13 @@ export function DroneControlPanel() {
         const response = await fetch(`${BACKEND_URL}/trigger-info`);
         if (response.ok) {
           const data = await response.json();
-          // If timestamp changed, bump key to reload image
+          // If timestamp changed, new trigger — reset replay and auto-play
           if (data.has_snapshot && data.timestamp !== triggerInfo.timestamp) {
             setTriggerImgKey((k) => k + 1);
+            setReplayFrame(0);
+            if (data.replay_frame_count > 0) {
+              setReplayPlaying(true);
+            }
           }
           setTriggerInfo(data);
         }
@@ -119,6 +137,34 @@ export function DroneControlPanel() {
     const interval = setInterval(fetchTriggerInfo, 2000);
     return () => clearInterval(interval);
   }, [triggerInfo.timestamp]);
+
+  // Replay playback — advance frames at replay FPS
+  useEffect(() => {
+    if (replayIntervalRef.current) {
+      clearInterval(replayIntervalRef.current);
+      replayIntervalRef.current = null;
+    }
+    if (!replayPlaying || triggerInfo.replay_frame_count <= 0) return;
+
+    const fps = triggerInfo.replay_fps || 10;
+    replayIntervalRef.current = setInterval(() => {
+      setReplayFrame((prev) => {
+        const next = prev + 1;
+        if (next >= triggerInfo.replay_frame_count) {
+          setReplayPlaying(false);
+          return prev; // Stay on last frame
+        }
+        return next;
+      });
+    }, 1000 / fps);
+
+    return () => {
+      if (replayIntervalRef.current) {
+        clearInterval(replayIntervalRef.current);
+        replayIntervalRef.current = null;
+      }
+    };
+  }, [replayPlaying, triggerInfo.replay_frame_count, triggerInfo.replay_fps]);
 
   // Show error with auto-dismiss
   const showError = useCallback((message: string) => {
@@ -377,36 +423,99 @@ export function DroneControlPanel() {
 
       {/* Main Content - CCTV Trigger + Drone Feeds */}
       <main className="flex-1 flex flex-col items-center px-4 py-3 gap-3 min-h-0 overflow-hidden">
-        {/* CCTV Trigger Feed - shows the frame that triggered drone deployment */}
-        <div className={`relative w-full max-w-sm aspect-video rounded-lg overflow-hidden border-2 ${triggerInfo.has_snapshot ? 'border-[var(--zone-red)]' : 'border-dashed border-[var(--border-dim)]'} corner-brackets flex-shrink-0`}>
-          {triggerInfo.has_snapshot ? (
-            <img
-              key={triggerImgKey}
-              src={`${BACKEND_URL}/trigger-snapshot?t=${triggerImgKey}`}
-              alt="CCTV Trigger"
-              className="w-full h-full object-cover"
-            />
-          ) : (
-            <div className="w-full h-full flex flex-col items-center justify-center bg-[var(--bg-card)] gap-2">
-              <Camera size={28} className="text-[var(--text-muted)]" />
-              <span className="text-xs font-mono text-[var(--text-secondary)] tracking-wider">CCTV TRIGGER FEED</span>
-              <span className="text-[10px] font-mono text-[var(--text-muted)]">Awaiting hazard detection...</span>
+        {/* CCTV Trigger Replay — shows replay footage around trigger event */}
+        <div className="w-full max-w-sm flex-shrink-0">
+          <div className={`relative aspect-video rounded-lg overflow-hidden border-2 ${triggerInfo.has_snapshot ? 'border-[var(--zone-red)]' : 'border-dashed border-[var(--border-dim)]'} corner-brackets`}>
+            {triggerInfo.has_snapshot && triggerInfo.replay_frame_count > 0 ? (
+              <img
+                src={`${BACKEND_URL}/trigger-replay/${replayFrame}`}
+                alt="Trigger Replay"
+                className="w-full h-full object-cover"
+              />
+            ) : triggerInfo.has_snapshot ? (
+              <img
+                key={triggerImgKey}
+                src={`${BACKEND_URL}/trigger-snapshot?t=${triggerImgKey}`}
+                alt="CCTV Trigger"
+                className="w-full h-full object-cover"
+              />
+            ) : (
+              <div className="w-full h-full flex flex-col items-center justify-center bg-[var(--bg-card)] gap-2">
+                <Camera size={28} className="text-[var(--text-muted)]" />
+                <span className="text-xs font-mono text-[var(--text-secondary)] tracking-wider">CCTV TRIGGER FEED</span>
+                <span className="text-[10px] font-mono text-[var(--text-muted)]">Awaiting hazard detection...</span>
+              </div>
+            )}
+            {/* Label overlay */}
+            <div className="absolute top-2 left-2 flex items-center gap-2 px-2 py-1 rounded bg-[var(--bg-primary)]/80 border border-[var(--border-dim)]">
+              <div className={`w-2 h-2 rounded-full ${triggerInfo.has_snapshot ? 'bg-[var(--zone-red)]' : 'bg-[var(--text-muted)]'}`} />
+              <span className="text-[10px] font-mono text-[var(--text-secondary)] tracking-wider">
+                {triggerInfo.has_snapshot && triggerInfo.feed_id ? triggerInfo.feed_id.toUpperCase().replace('-', ' ') + ' TRIGGER' : 'TRIGGER CAM'}
+              </span>
             </div>
-          )}
-          <div className="absolute top-3 left-3 flex items-center gap-2 px-2 py-1 rounded bg-[var(--bg-primary)]/80 border border-[var(--border-dim)]">
-            <div className={`w-2 h-2 rounded-full ${triggerInfo.has_snapshot ? 'bg-[var(--zone-red)]' : 'bg-[var(--text-muted)]'}`} />
-            <span className="text-[10px] font-mono text-[var(--text-secondary)] tracking-wider">
-              {triggerInfo.has_snapshot && triggerInfo.feed_id ? triggerInfo.feed_id.toUpperCase().replace('-', ' ') + ' TRIGGER' : 'TRIGGER CAM'}
-            </span>
+            {/* Timestamp */}
+            {triggerInfo.has_snapshot && triggerInfo.timestamp && (
+              <div className="absolute bottom-2 right-2 px-2 py-0.5 rounded bg-[var(--bg-primary)]/80 border border-[var(--border-dim)]">
+                <span className="text-[10px] font-mono text-[var(--text-muted)] tracking-wider">
+                  {new Date(triggerInfo.timestamp).toLocaleTimeString('en-US', { hour12: false })}
+                </span>
+              </div>
+            )}
+            <div className="absolute inset-0 scanlines pointer-events-none opacity-50" />
           </div>
-          {triggerInfo.has_snapshot && triggerInfo.timestamp && (
-            <div className="absolute bottom-3 right-3 px-2 py-1 rounded bg-[var(--bg-primary)]/80 border border-[var(--border-dim)]">
-              <span className="text-[10px] font-mono text-[var(--text-muted)] tracking-wider">
-                {new Date(triggerInfo.timestamp).toLocaleTimeString('en-US', { hour12: false })}
+
+          {/* Replay controls — shown when replay frames are available */}
+          {triggerInfo.has_snapshot && triggerInfo.replay_frame_count > 0 && (
+            <div className="mt-1.5 flex items-center gap-2">
+              {/* Play/Pause */}
+              <button
+                onClick={() => {
+                  if (!replayPlaying && replayFrame >= triggerInfo.replay_frame_count - 1) {
+                    setReplayFrame(0); // Restart from beginning
+                  }
+                  setReplayPlaying((p) => !p);
+                }}
+                className="p-1 rounded border border-[var(--border-dim)] bg-[var(--bg-secondary)] text-[var(--text-secondary)] hover:text-[var(--accent-cyan)] hover:border-[var(--accent-cyan)] transition-all"
+              >
+                {replayPlaying ? <Pause size={12} /> : <Play size={12} />}
+              </button>
+              {/* Restart */}
+              <button
+                onClick={() => { setReplayFrame(0); setReplayPlaying(true); }}
+                className="p-1 rounded border border-[var(--border-dim)] bg-[var(--bg-secondary)] text-[var(--text-secondary)] hover:text-[var(--accent-cyan)] hover:border-[var(--accent-cyan)] transition-all"
+                title="Restart"
+              >
+                <SkipBack size={12} />
+              </button>
+              {/* Progress bar */}
+              <div
+                className="flex-1 h-3 rounded bg-[var(--bg-tertiary)] border border-[var(--border-dim)] relative cursor-pointer overflow-hidden"
+                onClick={(e) => {
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+                  setReplayFrame(Math.round(pct * (triggerInfo.replay_frame_count - 1)));
+                }}
+              >
+                {/* Playback position */}
+                <div
+                  className="absolute top-0 left-0 h-full bg-[var(--accent-cyan)]/40 transition-[width] duration-75"
+                  style={{ width: `${(replayFrame / Math.max(1, triggerInfo.replay_frame_count - 1)) * 100}%` }}
+                />
+                {/* Trigger marker */}
+                {triggerInfo.replay_trigger_index > 0 && (
+                  <div
+                    className="absolute top-0 h-full w-0.5 bg-[var(--zone-red)]"
+                    style={{ left: `${(triggerInfo.replay_trigger_index / Math.max(1, triggerInfo.replay_frame_count - 1)) * 100}%` }}
+                    title="Trigger point"
+                  />
+                )}
+              </div>
+              {/* Frame counter */}
+              <span className="text-[9px] font-mono text-[var(--text-muted)] whitespace-nowrap">
+                {String(replayFrame + 1).padStart(2, '0')}/{triggerInfo.replay_frame_count}
               </span>
             </div>
           )}
-          <div className="absolute inset-0 scanlines pointer-events-none opacity-50" />
         </div>
 
         {/* Drone Feeds - Side by Side */}
