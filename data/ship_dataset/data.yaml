@@ -1,6 +1,6 @@
 names:
 - danger-zone
 nc: 1
-path: C:\Users\Jia Yi PC\PycharmProjects\ai-safety-monitoring\data\ship_dataset
+path: /vol/bitbucket/ba325/ai-safety-monitoring/data/ship_dataset
 train: images/train
 val: images/val
