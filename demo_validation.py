@@ -10,8 +10,8 @@ Usage:
     # Process all videos in data/test_videos/ship/
     python demo_validation.py --scene ship
 
-    # Process all videos in data/test_videos/railway/
-    python demo_validation.py --scene railway
+    # Use the sim model variant for human detection
+    python demo_validation.py --scene ship --model-variant sim
 
     # Process specific video file
     python demo_validation.py --scene bridge --video data/my_video.mp4
@@ -22,11 +22,11 @@ Usage:
 import argparse
 import cv2
 import numpy as np
+import os
 import time
 from pathlib import Path
 from ultralytics import YOLO
 
-from src.human_detection.detector import HumanDetector
 from src.human_detection.check_overlap import check_danger_zone_overlap
 from src.human_detection.config import CONFIDENCE_THRESHOLD, INFERENCE_IMGSZ
 
@@ -189,9 +189,26 @@ def process_video(video_path, scene_type, output_path=None, show=True, human_det
                 print(f"    Detecting hazard zones (first frame)...")
             else:
                 print(f"    Re-detecting hazard zones (ship scene, every {HAZARD_REFRESH_FRAMES} frames)...")
-            hazard_results = hazard_model(frame, conf=CONFIDENCE_THRESHOLD, imgsz=INFERENCE_IMGSZ, verbose=False)
+            hazard_results = hazard_model(frame, conf=CONFIDENCE_THRESHOLD, imgsz=INFERENCE_IMGSZ, verbose=False, save=False)
             hazard_mask = get_hazard_mask_from_result(hazard_results[0], frame.shape)
             last_hazard_frame = frame_count
+
+        # Save first frame with zone overlay for verification
+        if frame_count == 0:
+            out_dir = Path("demo_output") / scene_type / "first_frames"
+            out_dir.mkdir(parents=True, exist_ok=True)
+            first_frame_viz = frame.copy()
+            if hazard_mask is not None:
+                # Red overlay for detected hazard zones
+                overlay = first_frame_viz.copy()
+                overlay[hazard_mask > 0] = [0, 0, 255]  # Red in BGR
+                cv2.addWeighted(overlay, 0.4, first_frame_viz, 0.6, 0, first_frame_viz)
+                # Draw contour outlines
+                contours, _ = cv2.findContours(hazard_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                cv2.drawContours(first_frame_viz, contours, -1, (0, 0, 255), 2)
+            first_frame_path = out_dir / f"{video_path.stem}_first_frame_zones.jpg"
+            cv2.imwrite(str(first_frame_path), first_frame_viz)
+            print(f"    Saved first frame with zones: {first_frame_path}")
 
         # Run human detection on every frame
         person_masks = human_detector.get_masks(frame)
@@ -240,7 +257,7 @@ def process_video(video_path, scene_type, output_path=None, show=True, human_det
     print(f"    ✓ Processed {frame_count} frames | Alarms: {alarm_frames} ({100*alarm_frames/max(frame_count,1):.1f}%)")
 
 
-def run_demo(scene_type, video_path=None, output_dir=None, show=True):
+def run_demo(scene_type, video_path=None, output_dir=None, show=True, model_variant=None, base_model=None):
     """
     Main entry point - processes video(s) for a given scene type.
     """
@@ -255,12 +272,26 @@ def run_demo(scene_type, video_path=None, output_dir=None, show=True):
         print(f"Train the {scene_type} model first using: python -m src.scene-segmentation.train --dataset {scene_type}")
         return
 
+    # Override human model config if specified
+    if model_variant or base_model:
+        import src.human_detection.config as hd_config
+        import os
+        if model_variant:
+            hd_config.HUMAN_MODEL_VARIANT = model_variant
+        if base_model:
+            hd_config.HUMAN_BASE_MODEL = base_model
+        variant_suffix = f"_{hd_config.HUMAN_MODEL_VARIANT}" if hd_config.HUMAN_MODEL_VARIANT != "combined" else ""
+        finetuned_path = f"runs/segment/human_detection{variant_suffix}_{hd_config.HUMAN_BASE_MODEL}/weights/best.pt"
+        hd_config.MODEL_PATH = finetuned_path if os.path.exists(finetuned_path) else f"{hd_config.HUMAN_BASE_MODEL}.pt"
+
     # Load models once (reuse for multiple videos)
     print(f"\n{'='*60}")
     print(f"Loading models for {scene_type.upper()} scene validation")
     print(f"{'='*60}")
-    print(f"  Human detection: fine-tuned model")
-    print(f"  Scene hazard: {scene_model_path}")
+    from src.human_detection.config import MODEL_PATH as HUMAN_MODEL_PATH
+    from src.human_detection.detector import HumanDetector
+    print(f"  Human detection: {HUMAN_MODEL_PATH}")
+    print(f"  Scene hazard:    {scene_model_path}")
     print(f"  Confidence: {CONFIDENCE_THRESHOLD} | Image size: {INFERENCE_IMGSZ}")
 
     human_detector = HumanDetector()
@@ -316,18 +347,157 @@ def run_demo(scene_type, video_path=None, output_dir=None, show=True):
     print(f"{'='*60}\n")
 
 
+def compare_models(video_path, models=None, variant="sim", num_frames=100):
+    """
+    Benchmark multiple human detection models on the same video and print a
+    latency comparison table.
+
+    Args:
+        video_path: Path to a single test video.
+        models: List of base model names to compare (default: yolo11n-seg, yolo11s-seg).
+        variant: Model variant (sim/real/combined) — used to find finetuned weights.
+        num_frames: Number of frames to benchmark (default 100).
+    """
+    if models is None:
+        models = ["yolo11n-seg", "yolo11s-seg"]
+
+    video_path = Path(video_path)
+    if not video_path.exists():
+        print(f"Error: Video not found at {video_path}")
+        return
+
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        print(f"Error: Could not open video {video_path}")
+        return
+
+    # Read frames once into memory so disk I/O doesn't affect timing
+    frames = []
+    while len(frames) < num_frames:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        frames.append(frame)
+    cap.release()
+
+    actual_frames = len(frames)
+    if actual_frames == 0:
+        print("Error: No frames read from video")
+        return
+
+    print(f"\n{'='*60}")
+    print(f"MODEL LATENCY COMPARISON")
+    print(f"  Video: {video_path.name} | Frames: {actual_frames}")
+    print(f"  Variant: {variant}")
+    print(f"{'='*60}\n")
+
+    results = []
+
+    for model_name in models:
+        # Resolve model path (finetuned if exists, else pretrained)
+        variant_suffix = f"_{variant}" if variant != "combined" else ""
+        finetuned_path = f"runs/segment/human_detection{variant_suffix}_{model_name}/weights/best.pt"
+        if os.path.exists(finetuned_path):
+            model_path = finetuned_path
+            source = "finetuned"
+        else:
+            model_path = f"{model_name}.pt"
+            source = "pretrained"
+
+        print(f"  Benchmarking: {model_name} ({source}: {model_path})")
+
+        # Load model
+        from src.human_detection.detector import HumanDetector
+        import src.human_detection.config as hd_config
+        hd_config.MODEL_PATH = model_path
+        # Force re-creation of detector with new model path
+        detector = HumanDetector()
+
+        # Warmup (3 frames)
+        for frame in frames[:3]:
+            detector.get_masks(frame)
+
+        # Benchmark
+        times = []
+        total_detections = 0
+        for frame in frames:
+            t0 = time.time()
+            masks = detector.get_masks(frame)
+            t1 = time.time()
+            times.append(t1 - t0)
+            total_detections += len(masks)
+
+        avg_ms = np.mean(times) * 1000
+        min_ms = np.min(times) * 1000
+        max_ms = np.max(times) * 1000
+        fps = 1000.0 / avg_ms if avg_ms > 0 else 0
+
+        results.append({
+            "model": model_name,
+            "source": source,
+            "avg_ms": avg_ms,
+            "min_ms": min_ms,
+            "max_ms": max_ms,
+            "fps": fps,
+            "detections": total_detections,
+        })
+
+        print(f"    Avg: {avg_ms:.1f}ms | Min: {min_ms:.1f}ms | Max: {max_ms:.1f}ms | FPS: {fps:.1f} | Detections: {total_detections}")
+
+    # Summary table
+    print(f"\n{'='*60}")
+    print(f"{'Model':<20} {'Source':<12} {'Avg (ms)':<10} {'FPS':<8} {'Detections':<12}")
+    print(f"{'-'*60}")
+    for r in results:
+        print(f"{r['model']:<20} {r['source']:<12} {r['avg_ms']:<10.1f} {r['fps']:<8.1f} {r['detections']:<12}")
+    print(f"{'='*60}")
+
+    if len(results) >= 2:
+        diff = results[1]["avg_ms"] - results[0]["avg_ms"]
+        pct = (diff / results[0]["avg_ms"]) * 100
+        slower = results[1]["model"] if diff > 0 else results[0]["model"]
+        print(f"\n  {slower} is {abs(diff):.1f}ms ({abs(pct):.1f}%) {'slower' if diff > 0 else 'faster'} per frame")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Validate safety monitoring system on real-world videos")
-    parser.add_argument("--scene", type=str, required=True,
+    subparsers = parser.add_subparsers(dest="command")
+
+    # Default: run demo (backward compatible)
+    parser.add_argument("--scene", type=str, default=None,
                        choices=["railway", "bridge", "ship"],
                        help="Scene type (determines which hazard model to use)")
     parser.add_argument("--video", type=str, default=None,
                        help="Path to specific video file (optional - defaults to all videos in data/test_videos/{scene}/)")
     parser.add_argument("--output-dir", type=str, default=None,
                        help="Directory to save annotated output videos (optional)")
+    parser.add_argument("--model-variant", type=str, default=None,
+                       choices=["sim", "real", "combined"],
+                       help="Human detection model variant (overrides config.py setting)")
+    parser.add_argument("--base-model", type=str, default=None,
+                       help="Human detection base model, e.g. yolo11n-seg or yolo11s-seg (overrides config.py)")
     parser.add_argument("--no-show", action="store_true",
                        help="Don't display video in real-time")
 
+    # compare subcommand
+    compare_parser = subparsers.add_parser("compare", help="Compare latency between models")
+    compare_parser.add_argument("--video", type=str, required=True,
+                                help="Path to test video")
+    compare_parser.add_argument("--models", type=str, nargs="+",
+                                default=["yolo11n-seg", "yolo11s-seg"],
+                                help="Models to compare (default: yolo11n-seg yolo11s-seg)")
+    compare_parser.add_argument("--variant", type=str, default="sim",
+                                choices=["sim", "real", "combined"],
+                                help="Model variant (default: sim)")
+    compare_parser.add_argument("--frames", type=int, default=100,
+                                help="Number of frames to benchmark (default: 100)")
+
     args = parser.parse_args()
 
-    run_demo(args.scene, args.video, args.output_dir, show=not args.no_show)
+    if args.command == "compare":
+        compare_models(args.video, args.models, args.variant, args.frames)
+    else:
+        if not args.scene:
+            parser.error("--scene is required for demo mode")
+        run_demo(args.scene, args.video, args.output_dir, show=not args.no_show,
+                 model_variant=args.model_variant, base_model=args.base_model)

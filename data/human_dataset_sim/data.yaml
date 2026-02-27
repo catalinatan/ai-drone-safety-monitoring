@@ -1,0 +1,6 @@
+nc: 1
+names:
+- person
+path: data/human_dataset_sim
+train: images/train
+val: images/val

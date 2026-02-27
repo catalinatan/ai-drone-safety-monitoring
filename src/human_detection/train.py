@@ -1,11 +1,19 @@
 """
-Fine-tune YOLOv8m-seg for human detection in water/aerial scenarios.
-Modeled after src/scene-segmentation/train.py
+Fine-tune YOLO segmentation for human detection in water/aerial scenarios.
+Supports separate sim/real model variants.
 
 Usage:
+    # Train on combined dataset (default)
     python -m src.human_detection.train --epochs 100
-    python -m src.human_detection.train --epochs 100 --imgsz 1280 --model yolo11n-seg
-    python -m src.human_detection.train --epochs 100 --model yolov8l-seg --freeze 0
+
+    # Train sim-only variant
+    python -m src.human_detection.train --variant sim --epochs 100
+
+    # Train real-only variant
+    python -m src.human_detection.train --variant real --epochs 100
+
+    # Custom dataset path
+    python -m src.human_detection.train --variant sim --dataset data/human_dataset_sim --epochs 100
 """
 import logging
 import argparse
@@ -15,8 +23,13 @@ import yaml
 
 
 # --- Configuration ---
+VARIANT_DATASETS = {
+    "sim": "data/human_dataset_sim",
+    "real": "data/human_dataset_real",
+    "combined": "data/human_dataset",
+}
+
 DATASET_CONFIG = {
-    "path": "data/human_dataset",
     "nc": 1,
     "names": ["person"],
 }
@@ -37,9 +50,9 @@ def setup_logger():
     return logger
 
 
-def prepare_dataset_yaml(logger):
+def prepare_dataset_yaml(dataset_path, logger):
     """Generate data.yaml for the human detection dataset."""
-    dataset_path = Path(DATASET_CONFIG["path"])
+    dataset_path = Path(dataset_path)
 
     for split in ["train", "val"]:
         img_dir = dataset_path / "images" / split
@@ -55,7 +68,7 @@ def prepare_dataset_yaml(logger):
         "names": DATASET_CONFIG["names"],
     }
 
-    yaml_path = "data/human_dataset/data.yaml"
+    yaml_path = str(dataset_path / "data.yaml")
     with open(yaml_path, "w") as f:
         yaml.dump(data_yaml, f)
 
@@ -72,6 +85,7 @@ def train_model(
     patience=20,
     data_yaml_path="data/human_dataset/data.yaml",
     freeze=10,
+    variant="combined",
     logger=None,
 ):
     """
@@ -90,10 +104,12 @@ def train_model(
         logger: Logger instance.
     """
     project_name = "runs/segment"
-    experiment_name = "human_detection"
+    # e.g. human_detection_sim_yolo11n-seg, human_detection_real_yolo11s-seg
+    variant_suffix = f"_{variant}" if variant != "combined" else ""
+    experiment_name = f"human_detection{variant_suffix}_{model_name}"
 
     logger.info("=" * 40)
-    logger.info("HUMAN DETECTION FINE-TUNING")
+    logger.info(f"HUMAN DETECTION FINE-TUNING [{variant.upper()}]")
     logger.info(f"  Base Model: {model_name}")
     logger.info(f"  Epochs: {epochs} | Image Size: {imgsz}")
     logger.info(f"  Freeze Layers: {freeze} | Device: {device}")
@@ -129,20 +145,20 @@ def train_model(
             # Backbone freezing (critical for small datasets)
             freeze=freeze,
 
-            # Conservative augmentations for finetuning (aggressive aug on small
-            # datasets causes the model to learn distorted patterns, not real ones)
+            # Minimal augmentation — pretrained backbone already handles variation;
+            # only horizontal flip to double effective data without distortion
             augment=True,
-            flipud=0.0,        # Disabled — CCTV cameras have fixed orientation
-            fliplr=0.5,        # Horizontal flip — reasonable for all views
-            degrees=5.0,       # Mild rotation (slight camera tilt)
-            translate=0.1,     # Light translation
-            scale=0.2,         # Mild scale variation (was 0.5 — too aggressive for small people)
-            mosaic=0.5,        # 50% mosaic (was 1.0 — full mosaic shrinks objects too much)
-            mixup=0.0,         # Disabled — blending confuses small object detection
-            hsv_h=0.015,       # Hue shift — keep as-is
-            hsv_s=0.3,         # Saturation shift (was 0.7 — too aggressive)
-            hsv_v=0.3,         # Brightness shift (was 0.4 — slightly reduced)
-            erasing=0.0,       # Disabled — erasing small people makes them unlearnable
+            fliplr=0.5,
+            flipud=0.0,
+            degrees=0.0,
+            translate=0.0,
+            scale=0.0,
+            mosaic=0.0,
+            mixup=0.0,
+            hsv_h=0.0,
+            hsv_s=0.0,
+            hsv_v=0.0,
+            erasing=0.0,
         )
 
         logger.info("Training complete!")
@@ -161,6 +177,11 @@ def train_model(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Fine-tune YOLO for human detection in water")
+    parser.add_argument("--variant", type=str, default="combined",
+                        choices=["sim", "real", "combined"],
+                        help="Model variant: sim, real, or combined (default: combined)")
+    parser.add_argument("--dataset", type=str, default=None,
+                        help="Override dataset path (default: auto from variant)")
     parser.add_argument("--epochs", type=int, default=100,
                         help="Number of training epochs")
     parser.add_argument("--imgsz", type=int, default=1280,
@@ -176,10 +197,13 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
+    # Resolve dataset path from variant or explicit override
+    dataset_path = args.dataset or VARIANT_DATASETS[args.variant]
+
     logger = setup_logger()
 
     try:
-        yaml_file = prepare_dataset_yaml(logger)
+        yaml_file = prepare_dataset_yaml(dataset_path, logger)
         train_model(
             model_name=args.model,
             epochs=args.epochs,
@@ -188,6 +212,7 @@ if __name__ == "__main__":
             freeze=args.freeze,
             device=args.device,
             patience=args.patience,
+            variant=args.variant,
             logger=logger,
         )
     except Exception as e:

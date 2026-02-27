@@ -87,7 +87,7 @@ class HumanDetector:
         """
         results = self.model(
             frame, conf=CONFIDENCE_THRESHOLD, imgsz=INFERENCE_IMGSZ,
-            verbose=False, half=self._use_half,
+            verbose=False, half=self._use_half, save=False,
         )
         return self._extract_person_masks(results[0], frame.shape)
 
@@ -103,7 +103,7 @@ class HumanDetector:
 
         results = self.model(
             frames, conf=CONFIDENCE_THRESHOLD, imgsz=INFERENCE_IMGSZ,
-            verbose=False, half=self._use_half,
+            verbose=False, half=self._use_half, save=False,
         )
 
         batch_masks = []
