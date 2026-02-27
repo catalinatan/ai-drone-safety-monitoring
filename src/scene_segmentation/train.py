@@ -75,7 +75,7 @@ def prepare_dataset_yaml(dataset_type, logger):
 
 def train_model(
     dataset_type,      # 'railway', 'ship', or 'bridge'
-    model_name='yolo11n-seg',
+    model_name='yolo11s-seg',
     epochs=50,
     imgsz=640,
     batch_size=-1,
@@ -88,7 +88,7 @@ def train_model(
     """
     
     project_name = 'runs/segment'
-    experiment_name = f'{dataset_type}_hazard'
+    experiment_name = f'{dataset_type}_hazard_yolo11s-seg'
     
     logger.info(f"="*30)
     logger.info(f"Training Task: {dataset_type.upper()}")
@@ -163,7 +163,7 @@ if __name__ == '__main__':
         
         # Step 2: Train the Model 
         # Hardcoded imgsz=640 and patience=20 to keep things simple
-        logger.info(f"\nStarting YOLO11n-seg training for: {args.dataset}...")
+        logger.info(f"\nStarting YOLO11s-seg training for: {args.dataset}...")
         results = train_model(
             dataset_type=args.dataset,
             data_yaml_path=yaml_file,
