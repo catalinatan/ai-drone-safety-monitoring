@@ -263,6 +263,24 @@ class FeedState:
     manual_zones_set: bool = False            # True if user has manually edited zones (for railway/bridge)
     last_auto_seg_time: float = 0.0           # Timestamp of last auto-seg run
 
+@dataclass
+class TriggerEvent:
+    """A single trigger event — recorded when a RED zone intrusion is detected."""
+    id: int
+    feed_id: str
+    timestamp: str
+    coords: Tuple[float, float, float]  # NED deploy coordinates
+    snapshot: bytes                       # JPEG bytes
+    replay_frames: List[Tuple[str, bytes]] = field(default_factory=list)
+    replay_trigger_index: int = 0
+    deployed: bool = False
+
+
+MAX_TRIGGER_HISTORY = 10
+TRIGGER_REPLAY_FPS = 10
+TRIGGER_DEDUP_WINDOW = 30  # seconds — same-camera triggers within this window are merged
+
+
 class FeedManager:
     """Manages all feed states."""
 
@@ -283,17 +301,23 @@ class FeedManager:
         # Global settings (adjustable at runtime via PATCH /settings)
         self.global_scene_type: str = next(iter(FEED_SCENE_TYPE.values()), "bridge")
         self.auto_refresh: bool = False   # periodic auto-seg loop enabled?
-        # Trigger snapshot: the CCTV frame that caused drone deployment
-        self.trigger_snapshot: Optional[bytes] = None   # JPEG bytes
-        self.trigger_feed_id: Optional[str] = None
-        self.trigger_timestamp: Optional[str] = None
-        # Trigger replay: ring buffer frames frozen at trigger time
-        self.trigger_replay_frames: List[Tuple[str, bytes]] = []  # [(timestamp, jpeg_bytes), ...]
-        self.trigger_replay_fps: int = 10
-        self.trigger_replay_trigger_index: int = 0  # Frame index where trigger occurred
+        # Trigger history — stores last N trigger events
+        self.trigger_history: List[TriggerEvent] = []
+        self._trigger_id_counter: int = 0
         # Post-trigger capture state
-        self._post_trigger: Optional[dict] = None  # {feed_id, remaining}
+        self._post_trigger: Optional[dict] = None  # {trigger_id, remaining}
         self._replay_capture_counter: int = 0  # Downsample counter for replay buffer
+
+    def get_trigger_by_id(self, trigger_id: int) -> Optional[TriggerEvent]:
+        """Look up a trigger event by ID."""
+        for t in self.trigger_history:
+            if t.id == trigger_id:
+                return t
+        return None
+
+    def get_latest_trigger(self) -> Optional[TriggerEvent]:
+        """Get the most recent trigger event."""
+        return self.trigger_history[-1] if self.trigger_history else None
 
     def initialize(self):
         """Initialize AirSim connection and models."""
@@ -531,18 +555,21 @@ class FeedManager:
                         except Exception:
                             pass
 
-                    # Post-trigger: continue capturing into replay clip
+                    # Post-trigger: continue capturing into the trigger event's replay
                     if (self._post_trigger
                             and self._post_trigger["feed_id"] == feed_id
                             and self._post_trigger["remaining"] > 0
                             and should_buffer_replay):
                         try:
-                            frame_bgr2 = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
-                            _, buf2 = cv2.imencode('.jpg', frame_bgr2, [cv2.IMWRITE_JPEG_QUALITY, 70])
-                            self.trigger_replay_frames.append((now_iso, buf2.tobytes()))
+                            trigger_evt = self.get_trigger_by_id(self._post_trigger["trigger_id"])
+                            if trigger_evt:
+                                frame_bgr2 = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
+                                _, buf2 = cv2.imencode('.jpg', frame_bgr2, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                                trigger_evt.replay_frames.append((now_iso, buf2.tobytes()))
                             self._post_trigger["remaining"] -= 1
                             if self._post_trigger["remaining"] <= 0:
-                                print(f"[TRIGGER] Post-trigger capture complete: {len(self.trigger_replay_frames)} total frames")
+                                total = len(trigger_evt.replay_frames) if trigger_evt else 0
+                                print(f"[TRIGGER] Post-trigger capture complete: {total} total frames")
                                 self._post_trigger = None
                         except Exception:
                             pass
@@ -1278,25 +1305,55 @@ def depth_worker_loop():
             with feed.lock:
                 feed.target_coordinates = deploy_coords
 
-            # Capture trigger snapshot (the CCTV frame that caused the alarm)
+            # Create trigger event and add to history (with dedup)
+            trigger_event = None
             try:
                 frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
                 _, snap_buf = cv2.imencode('.jpg', frame_bgr, [cv2.IMWRITE_JPEG_QUALITY, 85])
-                feed_manager.trigger_snapshot = snap_buf.tobytes()
-                feed_manager.trigger_feed_id = feed_id
-                feed_manager.trigger_timestamp = datetime.now().isoformat()
-                print(f"[TRIGGER] Captured snapshot from {feed_id}")
+                snap_bytes = snap_buf.tobytes()
+                now = datetime.now()
 
-                # Capture replay clip: copy pre-trigger buffer + start post-trigger capture
-                pre_frames = list(feed.replay_buffer)
-                feed_manager.trigger_replay_frames = pre_frames
-                feed_manager.trigger_replay_trigger_index = len(pre_frames)
-                feed_manager.trigger_replay_fps = 10
-                # Capture ~5 more seconds after trigger (50 frames at 10 FPS)
-                feed_manager._post_trigger = {"feed_id": feed_id, "remaining": 50}
-                print(f"[TRIGGER] Captured replay: {len(pre_frames)} pre-trigger frames, capturing 50 post-trigger")
+                # Dedup: check if there's a recent trigger from the same camera
+                existing = None
+                for t in reversed(feed_manager.trigger_history):
+                    if t.feed_id == feed_id:
+                        age = (now - datetime.fromisoformat(t.timestamp)).total_seconds()
+                        if age < TRIGGER_DEDUP_WINDOW:
+                            existing = t
+                        break  # only check the most recent from this feed
+
+                if existing and not existing.deployed:
+                    # Merge: update existing trigger with latest snapshot/coords
+                    existing.coords = deploy_coords
+                    existing.snapshot = snap_bytes
+                    existing.timestamp = now.isoformat()
+                    trigger_event = existing
+                    # Restart post-trigger capture for updated event
+                    feed_manager._post_trigger = {"trigger_id": existing.id, "feed_id": feed_id, "remaining": 50}
+                    print(f"[TRIGGER] Merged into trigger #{existing.id} from {feed_id} (dedup)")
+                else:
+                    # New trigger
+                    pre_frames = list(feed.replay_buffer)
+                    feed_manager._trigger_id_counter += 1
+                    trigger_event = TriggerEvent(
+                        id=feed_manager._trigger_id_counter,
+                        feed_id=feed_id,
+                        timestamp=now.isoformat(),
+                        coords=deploy_coords,
+                        snapshot=snap_bytes,
+                        replay_frames=pre_frames,
+                        replay_trigger_index=len(pre_frames),
+                    )
+                    feed_manager.trigger_history.append(trigger_event)
+                    # Trim history to max size
+                    if len(feed_manager.trigger_history) > MAX_TRIGGER_HISTORY:
+                        feed_manager.trigger_history = feed_manager.trigger_history[-MAX_TRIGGER_HISTORY:]
+
+                    # Start post-trigger capture for this event
+                    feed_manager._post_trigger = {"trigger_id": trigger_event.id, "feed_id": feed_id, "remaining": 50}
+                    print(f"[TRIGGER] Added trigger #{trigger_event.id} from {feed_id} ({len(pre_frames)} pre-trigger frames)")
             except Exception as snap_err:
-                print(f"[TRIGGER] Failed to capture snapshot: {snap_err}")
+                print(f"[TRIGGER] Failed to capture trigger: {snap_err}")
 
             # Deploy drone — only when drone is at home in automatic mode
             # Lazy reconnect: if drone_api was None at startup, try connecting now
@@ -1337,6 +1394,8 @@ def depth_worker_loop():
                         if feed_manager.drone_api.goto_position(tx, ty, tz):
                             feed_manager.last_deployment_time = current_time
                             feed_manager.drone_is_navigating = True
+                            if trigger_event:
+                                trigger_event.deployed = True
                             print("[DRONE] Deployment command sent successfully")
                         else:
                             print("[DRONE] Deployment command failed")
@@ -1821,41 +1880,115 @@ def trigger_auto_segment(feed_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# --- Multi-trigger endpoints ---
+
+@app.get("/triggers")
+async def list_triggers():
+    """Return all trigger events (metadata only, no JPEG bytes)."""
+    return {
+        "triggers": [
+            {
+                "id": t.id,
+                "feed_id": t.feed_id,
+                "timestamp": t.timestamp,
+                "deployed": t.deployed,
+                "replay_frame_count": len(t.replay_frames),
+                "replay_trigger_index": t.replay_trigger_index,
+                "coords": list(t.coords),
+            }
+            for t in feed_manager.trigger_history
+        ],
+        "replay_fps": TRIGGER_REPLAY_FPS,
+    }
+
+
+@app.get("/triggers/{trigger_id}/snapshot")
+async def get_trigger_snapshot_by_id(trigger_id: int):
+    """Return the snapshot JPEG for a specific trigger."""
+    trigger = feed_manager.get_trigger_by_id(trigger_id)
+    if trigger is None:
+        raise HTTPException(status_code=404, detail="Trigger not found")
+
+    from fastapi.responses import Response
+    return Response(content=trigger.snapshot, media_type="image/jpeg")
+
+
+@app.get("/triggers/{trigger_id}/replay/{frame_index}")
+async def get_trigger_replay_by_id(trigger_id: int, frame_index: int):
+    """Return a replay frame for a specific trigger."""
+    trigger = feed_manager.get_trigger_by_id(trigger_id)
+    if trigger is None:
+        raise HTTPException(status_code=404, detail="Trigger not found")
+    if frame_index < 0 or frame_index >= len(trigger.replay_frames):
+        raise HTTPException(status_code=404, detail="Frame index out of range")
+
+    from fastapi.responses import Response
+    _timestamp, jpeg_bytes = trigger.replay_frames[frame_index]
+    return Response(content=jpeg_bytes, media_type="image/jpeg")
+
+
+@app.post("/triggers/{trigger_id}/deploy")
+async def deploy_to_trigger(trigger_id: int):
+    """Deploy drone to a specific trigger's coordinates."""
+    trigger = feed_manager.get_trigger_by_id(trigger_id)
+    if trigger is None:
+        raise HTTPException(status_code=404, detail="Trigger not found")
+
+    if feed_manager.drone_api is None:
+        raise HTTPException(status_code=503, detail="Drone API not connected")
+
+    tx, ty, tz = trigger.coords
+    if feed_manager.drone_api.goto_position(tx, ty, tz):
+        trigger.deployed = True
+        feed_manager.drone_is_navigating = True
+        feed_manager.last_deployment_time = time.time()
+        print(f"[DRONE] Manual deploy to trigger #{trigger_id} ({tx:.2f}, {ty:.2f}, {tz:.2f})")
+        return {"status": "deployed", "trigger_id": trigger_id, "coords": list(trigger.coords)}
+    else:
+        raise HTTPException(status_code=500, detail="Drone goto command failed")
+
+
+# --- Backward-compat endpoints (use latest trigger) ---
+
 @app.get("/trigger-snapshot")
 async def get_trigger_snapshot():
-    """Return the CCTV frame that triggered the last drone deployment as JPEG."""
-    if feed_manager.trigger_snapshot is None:
+    """Return the latest trigger snapshot as JPEG."""
+    latest = feed_manager.get_latest_trigger()
+    if latest is None:
         return JSONResponse(status_code=204, content=None)
 
     from fastapi.responses import Response
-    return Response(
-        content=feed_manager.trigger_snapshot,
-        media_type="image/jpeg",
-    )
+    return Response(content=latest.snapshot, media_type="image/jpeg")
 
 
 @app.get("/trigger-info")
 async def get_trigger_info():
-    """Return metadata about the last trigger snapshot and replay clip."""
+    """Return metadata about the latest trigger (backward compat)."""
+    latest = feed_manager.get_latest_trigger()
+    if latest is None:
+        return {
+            "has_snapshot": False, "feed_id": None, "timestamp": None,
+            "replay_frame_count": 0, "replay_fps": TRIGGER_REPLAY_FPS, "replay_trigger_index": 0,
+        }
     return {
-        "has_snapshot": feed_manager.trigger_snapshot is not None,
-        "feed_id": feed_manager.trigger_feed_id,
-        "timestamp": feed_manager.trigger_timestamp,
-        "replay_frame_count": len(feed_manager.trigger_replay_frames),
-        "replay_fps": feed_manager.trigger_replay_fps,
-        "replay_trigger_index": feed_manager.trigger_replay_trigger_index,
+        "has_snapshot": True,
+        "feed_id": latest.feed_id,
+        "timestamp": latest.timestamp,
+        "replay_frame_count": len(latest.replay_frames),
+        "replay_fps": TRIGGER_REPLAY_FPS,
+        "replay_trigger_index": latest.replay_trigger_index,
     }
 
 
 @app.get("/trigger-replay/{frame_index}")
 async def get_trigger_replay_frame(frame_index: int):
-    """Return a single JPEG frame from the trigger replay clip."""
-    frames = feed_manager.trigger_replay_frames
-    if frame_index < 0 or frame_index >= len(frames):
+    """Return a replay frame from the latest trigger (backward compat)."""
+    latest = feed_manager.get_latest_trigger()
+    if latest is None or frame_index < 0 or frame_index >= len(latest.replay_frames):
         raise HTTPException(status_code=404, detail="Frame index out of range")
 
     from fastapi.responses import Response
-    _timestamp, jpeg_bytes = frames[frame_index]
+    _timestamp, jpeg_bytes = latest.replay_frames[frame_index]
     return Response(content=jpeg_bytes, media_type="image/jpeg")
 
 

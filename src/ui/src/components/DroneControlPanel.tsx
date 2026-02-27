@@ -19,6 +19,8 @@ import {
   Play,
   Pause,
   SkipBack,
+  Crosshair,
+  Check,
 } from 'lucide-react';
 import { BACKEND_URL } from '../data/mockFeeds';
 
@@ -30,6 +32,16 @@ interface DroneStatus {
   grounded: boolean;
   target_position: [number, number, number] | null;
   pose: { x: number; y: number; z: number } | null;
+}
+
+interface TriggerMeta {
+  id: number;
+  feed_id: string;
+  timestamp: string;
+  deployed: boolean;
+  replay_frame_count: number;
+  replay_trigger_index: number;
+  coords: [number, number, number];
 }
 
 const DRONE_API_BASE = 'http://localhost:8000';
@@ -49,15 +61,11 @@ export function DroneControlPanel() {
   const [isReturningHome, setIsReturningHome] = useState(false);
   const [equipmentDeployed, setEquipmentDeployed] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [triggerInfo, setTriggerInfo] = useState<{
-    has_snapshot: boolean;
-    feed_id: string | null;
-    timestamp: string | null;
-    replay_frame_count: number;
-    replay_fps: number;
-    replay_trigger_index: number;
-  }>({ has_snapshot: false, feed_id: null, timestamp: null, replay_frame_count: 0, replay_fps: 10, replay_trigger_index: 0 });
-  const [triggerImgKey, setTriggerImgKey] = useState(0);
+  // Multi-trigger state
+  const [triggers, setTriggers] = useState<TriggerMeta[]>([]);
+  const [selectedTriggerId, setSelectedTriggerId] = useState<number | null>(null);
+  const [replayFps, setReplayFps] = useState(10);
+  const lastTriggerCountRef = useRef(0);
   // Replay player state
   const [replayFrame, setReplayFrame] = useState(0);
   const [replayPlaying, setReplayPlaying] = useState(false);
@@ -111,32 +119,40 @@ export function DroneControlPanel() {
     return () => clearInterval(tick);
   }, [airborneStart]);
 
-  // Poll trigger info from backend
+  // Poll triggers from backend
   useEffect(() => {
-    const fetchTriggerInfo = async () => {
+    const fetchTriggers = async () => {
       try {
-        const response = await fetch(`${BACKEND_URL}/trigger-info`);
+        const response = await fetch(`${BACKEND_URL}/triggers`);
         if (response.ok) {
           const data = await response.json();
-          // If timestamp changed, new trigger — reset replay and auto-play
-          if (data.has_snapshot && data.timestamp !== triggerInfo.timestamp) {
-            setTriggerImgKey((k) => k + 1);
+          const newTriggers: TriggerMeta[] = data.triggers || [];
+          setTriggers(newTriggers);
+          setReplayFps(data.replay_fps || 10);
+
+          // Auto-select latest trigger when new ones arrive
+          if (newTriggers.length > lastTriggerCountRef.current && newTriggers.length > 0) {
+            const latest = newTriggers[newTriggers.length - 1];
+            setSelectedTriggerId(latest.id);
             setReplayFrame(0);
-            if (data.replay_frame_count > 0) {
+            if (latest.replay_frame_count > 0) {
               setReplayPlaying(true);
             }
           }
-          setTriggerInfo(data);
+          lastTriggerCountRef.current = newTriggers.length;
         }
       } catch {
         // Backend unavailable
       }
     };
 
-    fetchTriggerInfo();
-    const interval = setInterval(fetchTriggerInfo, 2000);
+    fetchTriggers();
+    const interval = setInterval(fetchTriggers, 2000);
     return () => clearInterval(interval);
-  }, [triggerInfo.timestamp]);
+  }, []);
+
+  // Get selected trigger metadata
+  const selectedTrigger = triggers.find((t) => t.id === selectedTriggerId) || null;
 
   // Replay playback — advance frames at replay FPS
   useEffect(() => {
@@ -144,19 +160,19 @@ export function DroneControlPanel() {
       clearInterval(replayIntervalRef.current);
       replayIntervalRef.current = null;
     }
-    if (!replayPlaying || triggerInfo.replay_frame_count <= 0) return;
+    if (!replayPlaying || !selectedTrigger || selectedTrigger.replay_frame_count <= 0) return;
 
-    const fps = triggerInfo.replay_fps || 10;
+    const frameCount = selectedTrigger.replay_frame_count;
     replayIntervalRef.current = setInterval(() => {
       setReplayFrame((prev) => {
         const next = prev + 1;
-        if (next >= triggerInfo.replay_frame_count) {
+        if (next >= frameCount) {
           setReplayPlaying(false);
-          return prev; // Stay on last frame
+          return prev;
         }
         return next;
       });
-    }, 1000 / fps);
+    }, 1000 / replayFps);
 
     return () => {
       if (replayIntervalRef.current) {
@@ -164,13 +180,34 @@ export function DroneControlPanel() {
         replayIntervalRef.current = null;
       }
     };
-  }, [replayPlaying, triggerInfo.replay_frame_count, triggerInfo.replay_fps]);
+  }, [replayPlaying, selectedTrigger?.id, selectedTrigger?.replay_frame_count, replayFps]);
 
   // Show error with auto-dismiss
   const showError = useCallback((message: string) => {
     setErrorMessage(message);
     setTimeout(() => setErrorMessage(null), 4000);
   }, []);
+
+  // Deploy drone to selected trigger
+  const handleDeployToTrigger = useCallback(async () => {
+    if (!selectedTriggerId) return;
+    try {
+      const response = await fetch(`${BACKEND_URL}/triggers/${selectedTriggerId}/deploy`, {
+        method: 'POST',
+      });
+      if (response.ok) {
+        setTriggers((prev) =>
+          prev.map((t) => (t.id === selectedTriggerId ? { ...t, deployed: true } : t))
+        );
+        setStatus((prev) => ({ ...prev, is_navigating: true }));
+      } else {
+        const data = await response.json();
+        showError(data.detail || 'Failed to deploy');
+      }
+    } catch {
+      showError('Connection error: Failed to deploy');
+    }
+  }, [selectedTriggerId, showError]);
 
   // Handle mode switch (manual override)
   const handleModeSwitch = useCallback(async () => {
@@ -423,19 +460,59 @@ export function DroneControlPanel() {
 
       {/* Main Content - CCTV Trigger + Drone Feeds */}
       <main className="flex-1 flex flex-col items-center px-4 py-3 gap-3 min-h-0 overflow-hidden">
-        {/* CCTV Trigger Replay — shows replay footage around trigger event */}
+        {/* Multi-Trigger Section */}
         <div className="w-full max-w-sm flex-shrink-0">
-          <div className={`relative aspect-video rounded-lg overflow-hidden border-2 ${triggerInfo.has_snapshot ? 'border-[var(--zone-red)]' : 'border-dashed border-[var(--border-dim)]'} corner-brackets`}>
-            {triggerInfo.has_snapshot && triggerInfo.replay_frame_count > 0 ? (
+          {/* Trigger thumbnail list — horizontal scroll */}
+          {triggers.length > 0 && (
+            <div className="mb-2 flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-thin">
+              {triggers.map((t) => (
+                <button
+                  key={t.id}
+                  onClick={() => {
+                    setSelectedTriggerId(t.id);
+                    setReplayFrame(0);
+                    setReplayPlaying(t.replay_frame_count > 0);
+                  }}
+                  className={`
+                    flex-shrink-0 relative w-16 h-10 rounded border-2 overflow-hidden transition-all duration-200
+                    ${selectedTriggerId === t.id
+                      ? 'border-[var(--accent-cyan)] shadow-[0_0_8px_var(--accent-cyan-dim)]'
+                      : 'border-[var(--border-dim)] hover:border-[var(--text-muted)]'
+                    }
+                  `}
+                  title={`Trigger #${t.id} — ${t.feed_id.toUpperCase()} — ${new Date(t.timestamp).toLocaleTimeString('en-US', { hour12: false })}`}
+                >
+                  <img
+                    src={`${BACKEND_URL}/triggers/${t.id}/snapshot`}
+                    alt={`Trigger ${t.id}`}
+                    className="w-full h-full object-cover"
+                  />
+                  {/* Deployed indicator */}
+                  <div className={`absolute top-0.5 right-0.5 w-3 h-3 rounded-full flex items-center justify-center ${
+                    t.deployed ? 'bg-[var(--zone-green)]' : 'bg-[var(--zone-red)]'
+                  }`}>
+                    {t.deployed ? <Check size={8} className="text-white" /> : <Crosshair size={8} className="text-white" />}
+                  </div>
+                  {/* Trigger ID */}
+                  <div className="absolute bottom-0 left-0 right-0 bg-black/60 text-center">
+                    <span className="text-[8px] font-mono text-white">#{t.id}</span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Replay viewer */}
+          <div className={`relative aspect-video rounded-lg overflow-hidden border-2 ${selectedTrigger ? 'border-[var(--zone-red)]' : 'border-dashed border-[var(--border-dim)]'} corner-brackets`}>
+            {selectedTrigger && selectedTrigger.replay_frame_count > 0 ? (
               <img
-                src={`${BACKEND_URL}/trigger-replay/${replayFrame}`}
+                src={`${BACKEND_URL}/triggers/${selectedTrigger.id}/replay/${replayFrame}`}
                 alt="Trigger Replay"
                 className="w-full h-full object-cover"
               />
-            ) : triggerInfo.has_snapshot ? (
+            ) : selectedTrigger ? (
               <img
-                key={triggerImgKey}
-                src={`${BACKEND_URL}/trigger-snapshot?t=${triggerImgKey}`}
+                src={`${BACKEND_URL}/triggers/${selectedTrigger.id}/snapshot`}
                 alt="CCTV Trigger"
                 className="w-full h-full object-cover"
               />
@@ -448,30 +525,30 @@ export function DroneControlPanel() {
             )}
             {/* Label overlay */}
             <div className="absolute top-2 left-2 flex items-center gap-2 px-2 py-1 rounded bg-[var(--bg-primary)]/80 border border-[var(--border-dim)]">
-              <div className={`w-2 h-2 rounded-full ${triggerInfo.has_snapshot ? 'bg-[var(--zone-red)]' : 'bg-[var(--text-muted)]'}`} />
+              <div className={`w-2 h-2 rounded-full ${selectedTrigger ? 'bg-[var(--zone-red)]' : 'bg-[var(--text-muted)]'}`} />
               <span className="text-[10px] font-mono text-[var(--text-secondary)] tracking-wider">
-                {triggerInfo.has_snapshot && triggerInfo.feed_id ? triggerInfo.feed_id.toUpperCase().replace('-', ' ') + ' TRIGGER' : 'TRIGGER CAM'}
+                {selectedTrigger ? selectedTrigger.feed_id.toUpperCase().replace('-', ' ') + ' TRIGGER #' + selectedTrigger.id : 'TRIGGER CAM'}
               </span>
             </div>
             {/* Timestamp */}
-            {triggerInfo.has_snapshot && triggerInfo.timestamp && (
+            {selectedTrigger && (
               <div className="absolute bottom-2 right-2 px-2 py-0.5 rounded bg-[var(--bg-primary)]/80 border border-[var(--border-dim)]">
                 <span className="text-[10px] font-mono text-[var(--text-muted)] tracking-wider">
-                  {new Date(triggerInfo.timestamp).toLocaleTimeString('en-US', { hour12: false })}
+                  {new Date(selectedTrigger.timestamp).toLocaleTimeString('en-US', { hour12: false })}
                 </span>
               </div>
             )}
             <div className="absolute inset-0 scanlines pointer-events-none opacity-50" />
           </div>
 
-          {/* Replay controls — shown when replay frames are available */}
-          {triggerInfo.has_snapshot && triggerInfo.replay_frame_count > 0 && (
+          {/* Replay controls + Deploy button */}
+          {selectedTrigger && selectedTrigger.replay_frame_count > 0 && (
             <div className="mt-1.5 flex items-center gap-2">
               {/* Play/Pause */}
               <button
                 onClick={() => {
-                  if (!replayPlaying && replayFrame >= triggerInfo.replay_frame_count - 1) {
-                    setReplayFrame(0); // Restart from beginning
+                  if (!replayPlaying && replayFrame >= selectedTrigger.replay_frame_count - 1) {
+                    setReplayFrame(0);
                   }
                   setReplayPlaying((p) => !p);
                 }}
@@ -493,28 +570,59 @@ export function DroneControlPanel() {
                 onClick={(e) => {
                   const rect = e.currentTarget.getBoundingClientRect();
                   const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-                  setReplayFrame(Math.round(pct * (triggerInfo.replay_frame_count - 1)));
+                  setReplayFrame(Math.round(pct * (selectedTrigger.replay_frame_count - 1)));
                 }}
               >
                 {/* Playback position */}
                 <div
                   className="absolute top-0 left-0 h-full bg-[var(--accent-cyan)]/40 transition-[width] duration-75"
-                  style={{ width: `${(replayFrame / Math.max(1, triggerInfo.replay_frame_count - 1)) * 100}%` }}
+                  style={{ width: `${(replayFrame / Math.max(1, selectedTrigger.replay_frame_count - 1)) * 100}%` }}
                 />
                 {/* Trigger marker */}
-                {triggerInfo.replay_trigger_index > 0 && (
+                {selectedTrigger.replay_trigger_index > 0 && (
                   <div
                     className="absolute top-0 h-full w-0.5 bg-[var(--zone-red)]"
-                    style={{ left: `${(triggerInfo.replay_trigger_index / Math.max(1, triggerInfo.replay_frame_count - 1)) * 100}%` }}
+                    style={{ left: `${(selectedTrigger.replay_trigger_index / Math.max(1, selectedTrigger.replay_frame_count - 1)) * 100}%` }}
                     title="Trigger point"
                   />
                 )}
               </div>
               {/* Frame counter */}
               <span className="text-[9px] font-mono text-[var(--text-muted)] whitespace-nowrap">
-                {String(replayFrame + 1).padStart(2, '0')}/{triggerInfo.replay_frame_count}
+                {String(replayFrame + 1).padStart(2, '0')}/{selectedTrigger.replay_frame_count}
               </span>
             </div>
+          )}
+
+          {/* Deploy to trigger button */}
+          {selectedTrigger && (
+            <button
+              onClick={handleDeployToTrigger}
+              disabled={selectedTrigger.deployed || status.is_navigating}
+              className={`
+                mt-2 w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg border-2 transition-all duration-300 font-mono
+                ${selectedTrigger.deployed
+                  ? 'border-[var(--zone-green)]/50 bg-[var(--zone-green)]/10 text-[var(--zone-green)] cursor-default'
+                  : status.is_navigating
+                    ? 'border-[var(--border-dim)] bg-[var(--bg-tertiary)] text-[var(--text-muted)] cursor-not-allowed'
+                    : 'border-[var(--zone-red)]/80 bg-[var(--zone-red)]/15 text-[var(--zone-red)] hover:border-[var(--zone-red)] hover:bg-[var(--zone-red)]/25'
+                }
+              `}
+            >
+              {selectedTrigger.deployed ? (
+                <>
+                  <Check size={14} />
+                  <span className="text-[10px] font-bold uppercase tracking-wider">DEPLOYED</span>
+                </>
+              ) : (
+                <>
+                  <Crosshair size={14} />
+                  <span className="text-[10px] font-bold uppercase tracking-wider">
+                    {status.is_navigating ? 'DRONE BUSY' : 'DEPLOY TO TRIGGER'}
+                  </span>
+                </>
+              )}
+            </button>
           )}
         </div>
 
