@@ -33,7 +33,7 @@ def visualize_results(model_path, image_dir, num_samples=5, conf=0.5):
     for i, img_file in enumerate(samples):
         # 4. Run Inference
         # result is a list, we take the first element [0]
-        results = model.predict(source=str(img_file), conf=conf, save=False)[0]
+        results = model.predict(source=str(img_file), conf=conf, save=False, exist_ok=True)[0]
         
         # 5. Use the built-in plot() method
         # This handles the mask overlay, labels, and boxes automatically
@@ -62,15 +62,15 @@ if __name__ == "__main__":
     # ADJUST THESE PATHS AS NEEDED
     DATASET_CONFIGS = {
     "railway": {
-        "model": "runs/segment/railway_hazard/weights/best.pt",
+        "model": "runs/segment/runs/segment/railway_hazard/weights/best.pt",
         "images": "data/railway_dataset/images/val"
     },
     "ship": {
-        "model": "runs/segment/ship_hazard/weights/best.pt",
+        "model": "runs/segment/runs/segment/ship_hazard/weights/best.pt",
         "images": "data/ship_dataset/images/val"
     },
     "bridge": {
-        "model": "runs/segment/bridge_hazard/weights/best.pt",
+        "model": "runs/segment/runs/segment/bridge_hazard/weights/best.pt",
         "images": "data/bridge_dataset/images/val"
     }
 }
