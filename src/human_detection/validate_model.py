@@ -6,10 +6,26 @@ Saves results as side-by-side images (original | mask overlay) to an output dire
 and optionally displays them in a window.
 
 Usage:
+    # Run with default settings (uses model from config.py)
     python -m src.human_detection.validate_model
-    python -m src.human_detection.validate_model --images data/human_images --output data/validation_results --show
-    python -m src.human_detection.validate_model --images data/human_dataset/images/val --output data/validation_results
-    python -m src.human_detection.validate_model --model base --show   # use base YOLOv8 (no fine-tuning)
+
+    # Run on specific images directory
+    python -m src.human_detection.validate_model --images data/human_dataset_sim/images/val
+
+    # Save results to a specific output directory
+    python -m src.human_detection.validate_model --output data/validation_results
+
+    # Show results in a live window (press any key to advance)
+    python -m src.human_detection.validate_model --show
+
+    # Use the base pretrained model (no fine-tuning) for comparison
+    python -m src.human_detection.validate_model --model base --show
+
+Args:
+    --images        Directory of images to run inference on (default: data/human_images)
+    --output        Directory to save side-by-side result images (default: data/validation_output)
+    --model         'finetuned' (default, from config.py) or 'base' (pretrained yolo11n-seg)
+    --show          Display results in a live window
 """
 import argparse
 import cv2

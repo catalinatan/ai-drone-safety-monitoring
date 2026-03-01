@@ -6,18 +6,65 @@ Combines:
   - Scene-specific hazard zone segmentation (railway/bridge/ship)
   - Zone overlap detection with alarm visualization
 
+Has two modes: demo (default) and compare (latency benchmark).
+
+=== DEMO MODE ===
+Runs the full pipeline on video(s) with visualization. Press 'q' to stop.
+
 Usage:
     # Process all videos in data/test_videos/ship/
     python demo_validation.py --scene ship
 
-    # Use the sim model variant for human detection
-    python demo_validation.py --scene ship --model-variant sim
-
-    # Process specific video file
+    # Process a specific video file
     python demo_validation.py --scene bridge --video data/my_video.mp4
 
-    # Save outputs to file
-    python demo_validation.py --scene ship --output-dir outputs/
+    # Use a specific human detection model variant
+    python demo_validation.py --scene ship --model-variant sim
+
+    # Use a specific base model (e.g. yolo11s instead of default yolo11n)
+    python demo_validation.py --scene ship --base-model yolo11s-seg
+
+    # Combine variant + base model
+    python demo_validation.py --scene ship --model-variant real --base-model yolo11s-seg
+
+    # Save annotated output videos (no live display)
+    python demo_validation.py --scene ship --output-dir demo_output/ship/ --no-show
+
+Args (demo mode):
+    --scene             railway | bridge | ship (required)
+                        Determines which hazard zone segmentation model to use.
+    --video             Path to a specific video file (optional)
+                        Default: processes all videos in data/test_videos/{scene}/
+    --model-variant     sim | real | combined (optional, overrides config.py)
+                        Which human detection model variant to use.
+    --base-model        e.g. yolo11n-seg | yolo11s-seg (optional, overrides config.py)
+                        Which base model architecture to use.
+    --output-dir        Directory to save annotated output videos (optional)
+    --no-show           Don't display video in real-time (useful for headless/batch runs)
+
+=== COMPARE MODE ===
+Benchmarks multiple human detection models on the same video and prints a
+latency comparison table (avg/min/max ms, FPS, total detections).
+
+Usage:
+    # Compare yolo11n vs yolo11s (default) on a video
+    python demo_validation.py compare --video data/test_videos/ship/video.mp4
+
+    # Compare with more frames
+    python demo_validation.py compare --video data/test_videos/ship/video.mp4 --frames 200
+
+    # Compare on the real variant's finetuned weights
+    python demo_validation.py compare --video data/test_videos/ship/video.mp4 --variant real
+
+    # Compare specific models
+    python demo_validation.py compare --video data/test_videos/ship/video.mp4 --models yolo11n-seg yolo11s-seg
+
+Args (compare mode):
+    --video             Path to test video (required)
+    --models            Models to compare (default: yolo11n-seg yolo11s-seg)
+    --variant           sim | real | combined (default: sim)
+                        Used to find finetuned weights for each model.
+    --frames            Number of frames to benchmark (default: 100)
 """
 import argparse
 import cv2
@@ -33,9 +80,9 @@ from src.human_detection.config import CONFIDENCE_THRESHOLD, INFERENCE_IMGSZ
 
 # Model paths for scene segmentation
 SCENE_MODELS = {
-    "railway": "runs/segment/railway_hazard/weights/best.pt",
-    "bridge": "runs/segment/bridge_hazard/weights/best.pt",
-    "ship": "runs/segment/ship_hazard/weights/best.pt",
+    "railway": "runs/segment/runs/segment/railway_hazard_yolo11s-seg/weights/best.pt",
+    "bridge": "runs/segment/runs/segment/bridge_hazard_yolo11s-seg/weights/best.pt",
+    "ship": "runs/segment/runs/segment/ship_hazard_yolo11s-seg/weights/best.pt",
 }
 
 
@@ -273,24 +320,22 @@ def run_demo(scene_type, video_path=None, output_dir=None, show=True, model_vari
         return
 
     # Override human model config if specified
+    import src.human_detection.config as hd_config
     if model_variant or base_model:
-        import src.human_detection.config as hd_config
-        import os
         if model_variant:
             hd_config.HUMAN_MODEL_VARIANT = model_variant
         if base_model:
             hd_config.HUMAN_BASE_MODEL = base_model
         variant_suffix = f"_{hd_config.HUMAN_MODEL_VARIANT}" if hd_config.HUMAN_MODEL_VARIANT != "combined" else ""
-        finetuned_path = f"runs/segment/human_detection{variant_suffix}_{hd_config.HUMAN_BASE_MODEL}/weights/best.pt"
+        finetuned_path = f"runs/segment/runs/segment/human_detection{variant_suffix}_{hd_config.HUMAN_BASE_MODEL}/weights/best.pt"
         hd_config.MODEL_PATH = finetuned_path if os.path.exists(finetuned_path) else f"{hd_config.HUMAN_BASE_MODEL}.pt"
 
     # Load models once (reuse for multiple videos)
     print(f"\n{'='*60}")
     print(f"Loading models for {scene_type.upper()} scene validation")
     print(f"{'='*60}")
-    from src.human_detection.config import MODEL_PATH as HUMAN_MODEL_PATH
     from src.human_detection.detector import HumanDetector
-    print(f"  Human detection: {HUMAN_MODEL_PATH}")
+    print(f"  Human detection: {hd_config.MODEL_PATH}")
     print(f"  Scene hazard:    {scene_model_path}")
     print(f"  Confidence: {CONFIDENCE_THRESHOLD} | Image size: {INFERENCE_IMGSZ}")
 
@@ -396,7 +441,7 @@ def compare_models(video_path, models=None, variant="sim", num_frames=100):
     for model_name in models:
         # Resolve model path (finetuned if exists, else pretrained)
         variant_suffix = f"_{variant}" if variant != "combined" else ""
-        finetuned_path = f"runs/segment/human_detection{variant_suffix}_{model_name}/weights/best.pt"
+        finetuned_path = f"runs/segment/runs/segment/human_detection{variant_suffix}_{model_name}/weights/best.pt"
         if os.path.exists(finetuned_path):
             model_path = finetuned_path
             source = "finetuned"

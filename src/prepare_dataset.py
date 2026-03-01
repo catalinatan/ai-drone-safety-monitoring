@@ -16,9 +16,20 @@ Works with any dataset — auto-detects class info from an existing data.yaml
 (Roboflow includes one), or accepts --nc and --names overrides.
 
 Usage:
-    python -m src.human_detection.prepare_dataset --dataset data/human_dataset
-    python -m src.human_detection.prepare_dataset --dataset data/bridge_dataset --val-split 0.2
-    python -m src.human_detection.prepare_dataset --dataset data/my_dataset --nc 3 --names "cat,dog,bird"
+    # Prepare human dataset (auto-detects classes from existing data.yaml)
+    python -m src.prepare_dataset --dataset data/human_dataset
+
+    # Prepare with custom val split ratio
+    python -m src.prepare_dataset --dataset data/bridge_dataset --val-split 0.2
+
+    # Prepare with explicit class info (overrides data.yaml)
+    python -m src.prepare_dataset --dataset data/my_dataset --nc 3 --names "cat,dog,bird"
+
+Args:
+    --dataset       Path to the dataset directory (required)
+    --val-split     Fraction of data for validation (default: 0.2)
+    --nc            Number of classes (optional, auto-detected from data.yaml)
+    --names         Comma-separated class names (optional, auto-detected from data.yaml)
 """
 import argparse
 import random

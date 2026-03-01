@@ -5,9 +5,9 @@ HUMAN_MODEL_VARIANT = "sim"
 HUMAN_BASE_MODEL = "yolo11n-seg"
 
 import os
-# Resolves to e.g. runs/segment/human_detection_sim_yolo11n-seg/weights/best.pt
+# Resolves to e.g. runs/segment/runs/segment/human_detection_sim_yolo11n-seg/weights/best.pt
 _variant_suffix = f"_{HUMAN_MODEL_VARIANT}" if HUMAN_MODEL_VARIANT != "combined" else ""
-_finetuned_path = f"runs/segment/human_detection{_variant_suffix}_{HUMAN_BASE_MODEL}/weights/best.pt"
+_finetuned_path = f"runs/segment/runs/segment/human_detection{_variant_suffix}_{HUMAN_BASE_MODEL}/weights/best.pt"
 MODEL_PATH = _finetuned_path if os.path.exists(_finetuned_path) else f"{HUMAN_BASE_MODEL}.pt"
 CONFIDENCE_THRESHOLD = 0.25    # Lowered from 0.5 for small/distant humans in water
 CLASS_ID_PERSON = 0            # YOLO specific ID for 'person'

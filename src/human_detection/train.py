@@ -1,19 +1,40 @@
 """
 Fine-tune YOLO segmentation for human detection in water/aerial scenarios.
-Supports separate sim/real model variants.
+Supports separate sim/real model variants and different base model sizes.
+
+Output weights are saved to:
+    runs/segment/runs/segment/human_detection_{variant}_{model}/weights/best.pt
 
 Usage:
-    # Train on combined dataset (default)
+    # Train on combined dataset (default: yolo11n-seg, 100 epochs)
     python -m src.human_detection.train --epochs 100
 
-    # Train sim-only variant
+    # Train sim-only variant with yolo11n
     python -m src.human_detection.train --variant sim --epochs 100
+
+    # Train sim-only variant with yolo11s (heavier, more accurate)
+    python -m src.human_detection.train --variant sim --model yolo11s-seg --epochs 100
 
     # Train real-only variant
     python -m src.human_detection.train --variant real --epochs 100
 
-    # Custom dataset path
+    # Custom dataset path (overrides the variant's default dataset)
     python -m src.human_detection.train --variant sim --dataset data/human_dataset_sim --epochs 100
+
+    # Full control over training
+    python -m src.human_detection.train --variant sim --model yolo11s-seg --epochs 200 --patience 30 --freeze 0
+
+Args:
+    --variant       sim | real | combined (default: combined)
+                    Determines dataset and output folder name.
+    --dataset       Override dataset path (default: auto-resolved from variant)
+    --model         Base YOLO model to finetune (default: yolo11n-seg)
+                    Options: yolo11n-seg (fast), yolo11s-seg (balanced)
+    --epochs        Training epochs (default: 100)
+    --patience      Early stopping — stops if no improvement for N epochs (default: 20)
+    --imgsz         Training image size in pixels (default: 1280)
+    --freeze        Backbone layers to freeze (default: 10, set 0 to train all layers)
+    --device        Training device (default: 0 for GPU, or 'cpu')
 """
 import logging
 import argparse
@@ -92,7 +113,7 @@ def train_model(
     Fine-tune YOLO segmentation model for human detection.
 
     Args:
-        model_name: Base model name (e.g. yolo11n-seg, yolov8l-seg).
+        model_name: Base model name (e.g. yolo11n-seg, yolo11s-seg).
         epochs: Number of training epochs.
         imgsz: Training image size (should match inference size).
         batch_size: Batch size (-1 for auto).

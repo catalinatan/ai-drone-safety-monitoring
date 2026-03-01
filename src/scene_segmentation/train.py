@@ -1,3 +1,25 @@
+"""
+Train YOLO for scene-specific hazard zone segmentation.
+
+Supports three scene types: railway, ship, bridge. Each produces a model at:
+    runs/segment/runs/segment/{dataset}_hazard_{model}/weights/best.pt
+
+Usage:
+    # Train railway hazard zone model (default: yolo11s-seg)
+    python -m src.scene_segmentation.train --dataset railway --epochs 100
+
+    # Train ship hazard zone model with a different base model
+    python -m src.scene_segmentation.train --dataset ship --model yolo11n-seg --epochs 100
+
+    # Train bridge hazard zone model
+    python -m src.scene_segmentation.train --dataset bridge --epochs 100
+
+Args:
+    --dataset       railway | ship | bridge (required)
+                    Determines which dataset and output model folder to use.
+    --model         Base YOLO model to finetune (default: yolo11s-seg)
+    --epochs        Training epochs (default: 100)
+"""
 import logging
 import sys
 import argparse
@@ -88,7 +110,7 @@ def train_model(
     """
     
     project_name = 'runs/segment'
-    experiment_name = f'{dataset_type}_hazard_yolo11s-seg'
+    experiment_name = f'{dataset_type}_hazard_{model_name}'
     
     logger.info(f"="*30)
     logger.info(f"Training Task: {dataset_type.upper()}")
@@ -151,21 +173,23 @@ if __name__ == '__main__':
     
     parser.add_argument('--epochs', type=int, default=100,
                         help="Number of training epochs")
-    
+    parser.add_argument('--model', type=str, default='yolo11s-seg',
+                        help="Base model to finetune (default: yolo11s-seg)")
+
     args = parser.parse_args()
-    
+
     # Setup Logger based on the selected dataset name
     logger = setup_logger(args.dataset)
 
     try:
         # Step 1: Prepare the YAML (Dynamic based on dataset choice)
         yaml_file = prepare_dataset_yaml(args.dataset, logger)
-        
-        # Step 2: Train the Model 
-        # Hardcoded imgsz=640 and patience=20 to keep things simple
-        logger.info(f"\nStarting YOLO11s-seg training for: {args.dataset}...")
+
+        # Step 2: Train the Model
+        logger.info(f"\nStarting {args.model} training for: {args.dataset}...")
         results = train_model(
             dataset_type=args.dataset,
+            model_name=args.model,
             data_yaml_path=yaml_file,
             epochs=args.epochs,   # Taken from command line
             imgsz=640,            # Hardcoded default
