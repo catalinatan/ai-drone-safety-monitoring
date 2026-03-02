@@ -163,6 +163,9 @@ def train_model(
             exist_ok=True,
             verbose=True,
 
+            amp=True,             # Mixed precision (FP16) — halves GPU memory for activations
+            cache=True,           # Cache images in RAM — faster epochs, no repeated disk I/O
+
             # Backbone freezing (critical for small datasets)
             freeze=freeze,
 
