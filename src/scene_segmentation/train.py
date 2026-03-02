@@ -103,22 +103,45 @@ def train_model(
     batch_size=-1,
     device=0,
     patience=20,
-    data_yaml_path='data.yaml'
+    data_yaml_path='data.yaml',
+    resume=False,
 ):
     """
     Modular training function for multiple dataset types.
+    Pass resume=True to continue from the last saved checkpoint.
     """
-    
+
     project_name = 'runs/segment'
     experiment_name = f'{dataset_type}_hazard_{model_name}'
-    
+    last_ckpt = Path(project_name) / 'runs/segment' / experiment_name / 'weights' / 'last.pt'
+
     logger.info(f"="*30)
     logger.info(f"Training Task: {dataset_type.upper()}")
     logger.info(f"Configuration:")
     logger.info(f"  Model: {model_name} | Epochs: {epochs}")
     logger.info(f"  Image Size: {imgsz} | Device: {device}")
     logger.info(f"  Exp Name: {experiment_name}")
+    if resume:
+        logger.info(f"  Resuming from: {last_ckpt}")
     logger.info(f"="*30)
+
+    if resume:
+        if not last_ckpt.exists():
+            raise FileNotFoundError(
+                f"Cannot resume: checkpoint not found at {last_ckpt}\n"
+                f"Run without --resume to start fresh."
+            )
+        logger.info(f"Loading checkpoint: {last_ckpt}")
+        model = YOLO(str(last_ckpt))
+        logger.info(f"Starting {dataset_type} training session (resumed)...")
+        try:
+            results = model.train(resume=True)
+        except Exception as e:
+            logger.error(f"CRITICAL: {dataset_type} training failed: {e}")
+            raise
+        logger.info(f"SUCCESS: {dataset_type} training complete.")
+        logger.info(f"Best Weights: {project_name}/runs/segment/{experiment_name}/weights/best.pt")
+        return results
 
     if not Path(data_yaml_path).exists():
         logger.error(f"Configuration file {data_yaml_path} missing!")
@@ -178,6 +201,8 @@ if __name__ == '__main__':
                         help="Number of training epochs")
     parser.add_argument('--model', type=str, default='yolo11s-seg',
                         help="Base model to finetune (default: yolo11s-seg)")
+    parser.add_argument('--resume', action='store_true',
+                        help="Resume training from last checkpoint (last.pt)")
 
     args = parser.parse_args()
 
@@ -185,8 +210,8 @@ if __name__ == '__main__':
     logger = setup_logger(args.dataset)
 
     try:
-        # Step 1: Prepare the YAML (Dynamic based on dataset choice)
-        yaml_file = prepare_dataset_yaml(args.dataset, logger)
+        # Step 1: Prepare the YAML (skipped when resuming — checkpoint already has config)
+        yaml_file = None if args.resume else prepare_dataset_yaml(args.dataset, logger)
 
         # Step 2: Train the Model
         logger.info(f"\nStarting {args.model} training for: {args.dataset}...")
@@ -198,7 +223,8 @@ if __name__ == '__main__':
             imgsz=640,            # Hardcoded default
             patience=20,          # Hardcoded default
             device=0,             # Defaulting to GPU 0
-            batch_size=-1         # Keep AutoBatch for performance
+            batch_size=-1,        # Keep AutoBatch for performance
+            resume=args.resume,
         )
         
         logger.info(f"Training for {args.dataset} successful!")
