@@ -1,10 +1,21 @@
 """
 Verify human detection dataset labels by visualizing annotations overlaid on images.
-Modeled after src/scene-segmentation/verify_train_dataset.py
+Displays polygon annotations overlaid on random sample images to catch labeling errors.
 
 Usage:
+    # Verify the default combined dataset (train split, 5 samples)
     python -m src.human_detection.verify_dataset
-    python -m src.human_detection.verify_dataset --dataset data/human_dataset --split train --samples 5
+
+    # Verify a specific dataset variant
+    python -m src.human_detection.verify_dataset --dataset data/human_dataset_sim
+
+    # Verify the val split with more samples
+    python -m src.human_detection.verify_dataset --dataset data/human_dataset_real --split val --samples 10
+
+Args:
+    --dataset       Path to dataset directory (default: data/human_dataset)
+    --split         Which split to verify: train | val (default: train)
+    --samples       Number of random images to display (default: 5)
 """
 import cv2
 import random

@@ -1,6 +1,0 @@
-names:
-- person
-nc: 1
-path: /vol/bitbucket/jh1125/ai-safety-monitoring/data/human_dataset
-train: images/train
-val: images/val

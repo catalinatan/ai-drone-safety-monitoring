@@ -1,11 +1,40 @@
 """
-Fine-tune YOLOv8m-seg for human detection in water/aerial scenarios.
-Modeled after src/scene-segmentation/train.py
+Fine-tune YOLO segmentation for human detection in water/aerial scenarios.
+Supports separate sim/real model variants and different base model sizes.
+
+Output weights are saved to:
+    runs/segment/runs/segment/human_detection_{variant}_{model}/weights/best.pt
 
 Usage:
+    # Train on combined dataset (default: yolo11n-seg, 100 epochs)
     python -m src.human_detection.train --epochs 100
-    python -m src.human_detection.train --epochs 100 --imgsz 1280 --model yolov8m-seg
-    python -m src.human_detection.train --epochs 100 --model yolov8l-seg --freeze 0
+
+    # Train sim-only variant with yolo11n
+    python -m src.human_detection.train --variant sim --epochs 100
+
+    # Train sim-only variant with yolo11s (heavier, more accurate)
+    python -m src.human_detection.train --variant sim --model yolo11s-seg --epochs 100
+
+    # Train real-only variant
+    python -m src.human_detection.train --variant real --epochs 100
+
+    # Custom dataset path (overrides the variant's default dataset)
+    python -m src.human_detection.train --variant sim --dataset data/human_dataset_sim --epochs 100
+
+    # Full control over training
+    python -m src.human_detection.train --variant sim --model yolo11s-seg --epochs 200 --patience 30 --freeze 0
+
+Args:
+    --variant       sim | real | combined (default: combined)
+                    Determines dataset and output folder name.
+    --dataset       Override dataset path (default: auto-resolved from variant)
+    --model         Base YOLO model to finetune (default: yolo11n-seg)
+                    Options: yolo11n-seg (fast), yolo11s-seg (balanced)
+    --epochs        Training epochs (default: 100)
+    --patience      Early stopping — stops if no improvement for N epochs (default: 20)
+    --imgsz         Training image size in pixels (default: 1280)
+    --freeze        Backbone layers to freeze (default: 10, set 0 to train all layers)
+    --device        Training device (default: 0 for GPU, or 'cpu')
 """
 import logging
 import argparse
@@ -15,8 +44,13 @@ import yaml
 
 
 # --- Configuration ---
+VARIANT_DATASETS = {
+    "sim": "data/human_dataset_sim",
+    "real": "data/human_dataset_real",
+    "combined": "data/human_dataset",
+}
+
 DATASET_CONFIG = {
-    "path": "data/human_dataset",
     "nc": 1,
     "names": ["person"],
 }
@@ -37,9 +71,9 @@ def setup_logger():
     return logger
 
 
-def prepare_dataset_yaml(logger):
+def prepare_dataset_yaml(dataset_path, logger):
     """Generate data.yaml for the human detection dataset."""
-    dataset_path = Path(DATASET_CONFIG["path"])
+    dataset_path = Path(dataset_path)
 
     for split in ["train", "val"]:
         img_dir = dataset_path / "images" / split
@@ -55,7 +89,7 @@ def prepare_dataset_yaml(logger):
         "names": DATASET_CONFIG["names"],
     }
 
-    yaml_path = "data_human.yaml"
+    yaml_path = str(dataset_path / "data.yaml")
     with open(yaml_path, "w") as f:
         yaml.dump(data_yaml, f)
 
@@ -64,21 +98,22 @@ def prepare_dataset_yaml(logger):
 
 
 def train_model(
-    model_name="yolov8m-seg",
+    model_name="yolo11n-seg",
     epochs=100,
     imgsz=1280,
     batch_size=-1,
     device=0,
     patience=20,
-    data_yaml_path="data_human.yaml",
+    data_yaml_path="data/human_dataset/data.yaml",
     freeze=10,
+    variant="combined",
     logger=None,
 ):
     """
     Fine-tune YOLO segmentation model for human detection.
 
     Args:
-        model_name: Base model name (e.g. yolov8m-seg, yolov8l-seg).
+        model_name: Base model name (e.g. yolo11n-seg, yolo11s-seg).
         epochs: Number of training epochs.
         imgsz: Training image size (should match inference size).
         batch_size: Batch size (-1 for auto).
@@ -90,10 +125,12 @@ def train_model(
         logger: Logger instance.
     """
     project_name = "runs/segment"
-    experiment_name = "human_detection"
+    # e.g. human_detection_sim_yolo11n-seg, human_detection_real_yolo11s-seg
+    variant_suffix = f"_{variant}" if variant != "combined" else ""
+    experiment_name = f"human_detection{variant_suffix}_{model_name}"
 
     logger.info("=" * 40)
-    logger.info("HUMAN DETECTION FINE-TUNING")
+    logger.info(f"HUMAN DETECTION FINE-TUNING [{variant.upper()}]")
     logger.info(f"  Base Model: {model_name}")
     logger.info(f"  Epochs: {epochs} | Image Size: {imgsz}")
     logger.info(f"  Freeze Layers: {freeze} | Device: {device}")
@@ -126,22 +163,26 @@ def train_model(
             exist_ok=True,
             verbose=True,
 
+            amp=True,             # Mixed precision (FP16) — halves GPU memory for activations
+            cache=True,           # Cache images in RAM — faster epochs, no repeated disk I/O
+
             # Backbone freezing (critical for small datasets)
             freeze=freeze,
 
-            # Augmentations tuned for aerial water scenarios
+            # Minimal augmentation — pretrained backbone already handles variation;
+            # only horizontal flip to double effective data without distortion
             augment=True,
-            flipud=0.5,        # Vertical flip (aerial views have no fixed up)
-            fliplr=0.5,        # Horizontal flip
-            degrees=15.0,      # Rotation (drone orientation varies)
-            translate=0.2,     # Translation (humans can appear anywhere in frame)
-            scale=0.5,         # Scale variation (critical: humans range from tiny to medium)
-            mosaic=1.0,        # Mosaic augmentation (combines 4 images, great for small objects)
-            mixup=0.1,         # Light image blending for generalization
-            hsv_h=0.015,       # Hue shift (water color variation)
-            hsv_s=0.7,         # Saturation shift (water reflections, lighting)
-            hsv_v=0.4,         # Brightness shift (sunlight, shadows on water)
-            erasing=0.1,       # Random erasing (partial occlusion by waves)
+            fliplr=0.5,
+            flipud=0.0,
+            degrees=0.0,
+            translate=0.0,
+            scale=0.0,
+            mosaic=0.0,
+            mixup=0.0,
+            hsv_h=0.0,
+            hsv_s=0.0,
+            hsv_v=0.0,
+            erasing=0.0,
         )
 
         logger.info("Training complete!")
@@ -160,12 +201,17 @@ def train_model(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Fine-tune YOLO for human detection in water")
+    parser.add_argument("--variant", type=str, default="combined",
+                        choices=["sim", "real", "combined"],
+                        help="Model variant: sim, real, or combined (default: combined)")
+    parser.add_argument("--dataset", type=str, default=None,
+                        help="Override dataset path (default: auto from variant)")
     parser.add_argument("--epochs", type=int, default=100,
                         help="Number of training epochs")
     parser.add_argument("--imgsz", type=int, default=1280,
                         help="Training image size (default: 1280)")
-    parser.add_argument("--model", type=str, default="yolov8m-seg",
-                        help="Base model: yolov8m-seg, yolov8l-seg, or yolov8x-seg")
+    parser.add_argument("--model", type=str, default="yolo11n-seg",
+                        help="Base model: yolo11n-seg, yolov8l-seg, or yolov8x-seg")
     parser.add_argument("--freeze", type=int, default=10,
                         help="Number of backbone layers to freeze (0=train all, 10=freeze backbone)")
     parser.add_argument("--device", type=str, default="0",
@@ -175,10 +221,13 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
+    # Resolve dataset path from variant or explicit override
+    dataset_path = args.dataset or VARIANT_DATASETS[args.variant]
+
     logger = setup_logger()
 
     try:
-        yaml_file = prepare_dataset_yaml(logger)
+        yaml_file = prepare_dataset_yaml(dataset_path, logger)
         train_model(
             model_name=args.model,
             epochs=args.epochs,
@@ -187,6 +236,7 @@ if __name__ == "__main__":
             freeze=args.freeze,
             device=args.device,
             patience=args.patience,
+            variant=args.variant,
             logger=logger,
         )
     except Exception as e:

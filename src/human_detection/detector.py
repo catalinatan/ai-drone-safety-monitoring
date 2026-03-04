@@ -3,7 +3,7 @@ import cv2
 import numpy as np
 import os
 import torch
-from .config import MODEL_PATH, CONFIDENCE_THRESHOLD, CLASS_ID_PERSON, INFERENCE_IMGSZ
+from . import config as hd_config
 
 
 def _try_load_tensorrt(model_path):
@@ -34,7 +34,7 @@ def _try_load_tensorrt(model_path):
         base_model = YOLO(model_path)
         base_model.export(
             format="engine",
-            imgsz=INFERENCE_IMGSZ,
+            imgsz=hd_config.INFERENCE_IMGSZ,
             half=True,
             batch=4,
             dynamic=True,
@@ -51,10 +51,10 @@ def _try_load_tensorrt(model_path):
 
 class HumanDetector:
     def __init__(self):
-        print(f"Loading YOLO model: {MODEL_PATH}...")
+        print(f"Loading YOLO model: {hd_config.MODEL_PATH}...")
 
         self._use_half = torch.cuda.is_available()
-        self.model, self._is_tensorrt = _try_load_tensorrt(MODEL_PATH)
+        self.model, self._is_tensorrt = _try_load_tensorrt(hd_config.MODEL_PATH)
 
         if self._is_tensorrt:
             # TensorRT engine handles precision internally
@@ -72,7 +72,7 @@ class HumanDetector:
 
         if result.masks is not None:
             for i, box in enumerate(result.boxes):
-                if int(box.cls[0]) == CLASS_ID_PERSON:
+                if int(box.cls[0]) == hd_config.CLASS_ID_PERSON:
                     mask_raw = result.masks.data[i].cpu().numpy()
                     mask_resized = cv2.resize(mask_raw, (w, h))
                     mask_binary = (mask_resized > 0.5).astype(np.uint8)
@@ -86,8 +86,8 @@ class HumanDetector:
         Output: A list of binary masks (numpy arrays), one for each human found.
         """
         results = self.model(
-            frame, conf=CONFIDENCE_THRESHOLD, imgsz=INFERENCE_IMGSZ,
-            verbose=False, half=self._use_half,
+            frame, conf=hd_config.CONFIDENCE_THRESHOLD, imgsz=hd_config.INFERENCE_IMGSZ,
+            verbose=False, half=self._use_half, save=False,
         )
         return self._extract_person_masks(results[0], frame.shape)
 
@@ -102,8 +102,8 @@ class HumanDetector:
             return []
 
         results = self.model(
-            frames, conf=CONFIDENCE_THRESHOLD, imgsz=INFERENCE_IMGSZ,
-            verbose=False, half=self._use_half,
+            frames, conf=hd_config.CONFIDENCE_THRESHOLD, imgsz=hd_config.INFERENCE_IMGSZ,
+            verbose=False, half=self._use_half, save=False,
         )
 
         batch_masks = []
