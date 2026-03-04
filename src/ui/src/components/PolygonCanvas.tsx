@@ -38,6 +38,11 @@ export function PolygonCanvas({
   const [streamAttempt, setStreamAttempt] = useState(0);
   const [, setRetryCount] = useState(0);
 
+  // Vertex drag state
+  const [draggingVertex, setDraggingVertex] = useState<{ zoneId: string; pointIdx: number } | null>(null);
+  const draggingRef = useRef(draggingVertex);
+  draggingRef.current = draggingVertex;
+
   // Measure the rendered image rect relative to the container
   const updateImgRect = useCallback(() => {
     const img = imageRef.current;
@@ -124,10 +129,48 @@ export function PolygonCanvas({
     [imageLoaded, imgRect]
   );
 
+  // Vertex drag: mousedown on a vertex circle
+  const handleVertexMouseDown = useCallback(
+    (e: React.MouseEvent, zoneId: string, pointIdx: number) => {
+      if (readOnly) return;
+      e.stopPropagation();
+      e.preventDefault();
+      setDraggingVertex({ zoneId, pointIdx });
+      setSelectedZoneId(zoneId);
+    },
+    [readOnly]
+  );
+
+  // Vertex drag: mousemove
+  const handleMouseMove = useCallback(
+    (e: React.MouseEvent) => {
+      if (!draggingRef.current) return;
+      const coords = getRelativeCoords(e);
+      if (!coords) return;
+
+      const { zoneId, pointIdx } = draggingRef.current;
+      const updatedZones = zones.map((zone) => {
+        if (zone.id !== zoneId) return zone;
+        const newPoints = [...zone.points];
+        newPoints[pointIdx] = coords;
+        return { ...zone, points: newPoints };
+      });
+      onZonesChange(updatedZones);
+    },
+    [zones, onZonesChange, getRelativeCoords]
+  );
+
+  // Vertex drag: mouseup
+  const handleMouseUp = useCallback(() => {
+    setDraggingVertex(null);
+  }, []);
+
   // Handle canvas click
   const handleClick = useCallback(
     (e: React.MouseEvent) => {
       if (readOnly) return;
+      // Skip click if we were dragging a vertex
+      if (draggingRef.current) return;
 
       const coords = getRelativeCoords(e);
       if (!coords) return;
@@ -229,9 +272,12 @@ export function PolygonCanvas({
   return (
     <div
       ref={containerRef}
-      className="relative overflow-hidden cursor-crosshair w-full h-full flex items-center justify-center bg-[var(--bg-primary)]"
+      className={`relative overflow-hidden w-full h-full flex items-center justify-center bg-[var(--bg-primary)] ${draggingVertex ? 'cursor-grabbing' : 'cursor-crosshair'}`}
       onClick={handleClick}
       onDoubleClick={handleDoubleClick}
+      onMouseMove={handleMouseMove}
+      onMouseUp={handleMouseUp}
+      onMouseLeave={handleMouseUp}
     >
       {/* Background Image */}
       <img
@@ -295,16 +341,19 @@ export function PolygonCanvas({
                     filter: isSelected ? `drop-shadow(0 0 3px ${colors.stroke})` : 'none',
                   }}
                 />
-                {/* Zone vertices */}
+                {/* Zone vertices — draggable when not readOnly */}
                 {!readOnly &&
                   zone.points.map((point, idx) => (
                     <circle
                       key={idx}
                       cx={point.x}
                       cy={point.y}
-                      r={0.6}
+                      r={isSelected ? 1 : 0.6}
                       fill={colors.stroke}
-                      className="pointer-events-none"
+                      stroke={isSelected ? '#fff' : 'none'}
+                      strokeWidth={0.2}
+                      className="pointer-events-auto cursor-grab"
+                      onMouseDown={(e) => handleVertexMouseDown(e, zone.id, idx)}
                     />
                   ))}
               </g>
@@ -357,7 +406,12 @@ export function PolygonCanvas({
       {/* Drawing instructions */}
       {!readOnly && activeTool && activeTool !== 'delete' && currentPoints.length === 0 && (
         <div className="absolute bottom-3 left-3 px-2 py-1 rounded text-xs font-mono bg-[var(--bg-primary)]/80 border border-[var(--border-dim)] text-[var(--text-secondary)]">
-          Click to place points • Double-click or click first point to close
+          Click to place points • Double-click or click first point to close • Drag vertices to adjust
+        </div>
+      )}
+      {!readOnly && !activeTool && currentPoints.length === 0 && !draggingVertex && (
+        <div className="absolute bottom-3 left-3 px-2 py-1 rounded text-xs font-mono bg-[var(--bg-primary)]/80 border border-[var(--border-dim)] text-[var(--text-muted)]">
+          Drag zone vertices to adjust • Select a tool to draw new zones
         </div>
       )}
 

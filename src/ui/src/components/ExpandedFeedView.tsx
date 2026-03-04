@@ -288,7 +288,11 @@ export function ExpandedFeedView({ feed, onBack, onEdit }: ExpandedFeedViewProps
             </div>
 
             <span className="text-[10px] font-mono text-[var(--text-muted)]">
-              {hasTarget ? 'Auto-calculated from RED zone detection' : 'Deploy only for RED zones'}
+              {hasTarget
+                ? 'Auto-calculated from RED zone detection'
+                : isAlarmActive
+                  ? 'Calculating coordinates...'
+                  : 'Requires active RED zone alarm to deploy'}
             </span>
           </div>
 
@@ -314,6 +318,7 @@ export function ExpandedFeedView({ feed, onBack, onEdit }: ExpandedFeedViewProps
               className={`btn-tactical-filled flex items-center gap-2 ${
                 !hasTarget ? 'opacity-50 cursor-not-allowed' : ''
               } ${isAlarmActive && hasTarget ? 'bg-[var(--zone-red)] border-[var(--zone-red)] animate-pulse' : ''}`}
+              title={!hasTarget ? 'Deploy is only available when a person is detected in a RED zone' : 'Deploy drone to detected coordinates'}
             >
               {deployStatus === 'deploying' ? (
                 <>
@@ -323,7 +328,7 @@ export function ExpandedFeedView({ feed, onBack, onEdit }: ExpandedFeedViewProps
               ) : (
                 <>
                   <Navigation size={16} />
-                  <span>Deploy</span>
+                  <span>{!hasTarget ? 'No Target' : 'Deploy'}</span>
                 </>
               )}
             </button>

@@ -74,18 +74,10 @@ export function EditFeedPage({ feed, onSave, onCancel }: EditFeedPageProps) {
       {/* Main Content */}
       <main className="flex-1 p-6 flex flex-col gap-4 overflow-hidden">
         {/* Auto-segmentation info banner */}
-        {feed.sceneType === 'ship' && (
-          <div className="flex items-center gap-2 px-4 py-2 rounded border border-[var(--accent-cyan-dim)] bg-[var(--accent-cyan-glow)]">
-            <div className="w-1.5 h-1.5 rounded-full bg-[var(--accent-cyan)] animate-pulse" />
-            <span className="text-xs font-mono text-[var(--accent-cyan)]">
-              Ship feed — Zones auto-update every 60s. Manual edits will be overwritten.
-            </span>
-          </div>
-        )}
-        {(feed.sceneType === 'railway' || feed.sceneType === 'bridge') && (
+        {feed.sceneType && (
           <div className="flex items-center gap-2 px-4 py-2 rounded border border-[var(--border-dim)] bg-[var(--bg-tertiary)]">
             <span className="text-xs font-mono text-[var(--text-secondary)]">
-              {feed.sceneType.charAt(0).toUpperCase() + feed.sceneType.slice(1)} feed — Auto-segmented on startup. Manual edits will persist.
+              {feed.sceneType.charAt(0).toUpperCase() + feed.sceneType.slice(1)} feed — Drag zone vertices to adjust. Saved edits pause auto-segmentation.
             </span>
           </div>
         )}

@@ -79,6 +79,11 @@ class GotoRequest(BaseModel):
     y: float  # East (meters)
     z: Optional[float] = -10.0  # Down (meters, negative = above ground)
 
+class MoveRequest(BaseModel):
+    vx: float = 0.0  # North velocity (m/s)
+    vy: float = 0.0  # East velocity (m/s)
+    vz: float = 0.0  # Down velocity (m/s, negative = up)
+
 # ============================================================================
 # SHARED STATE (Thread-Safe)
 # ============================================================================
@@ -105,8 +110,10 @@ class DroneState:
         self.idle_hover_sent = False      # prevents issuing hover repeatedly when auto-mode has no target
         self.should_stop = False          # signals the control loop to land and exit
         self.returning_home = False       # True when executing RTH; triggers landing on arrival
-        self.grounded = False            # True after RTH drop; needs takeoff before next flight
+        self.grounded = True             # Starts grounded; set False on takeoff, True after RTH land
         self.current_pose = None         # (x, y, z) NED from simGetVehiclePose
+        # Manual velocity from UI /move endpoint
+        self.manual_velocity = (0.0, 0.0, 0.0)  # (vx, vy, vz) set by API
         # Camera frames for dual-view streaming
         self.frame_forward = None         # Camera 3: forward-looking view
         self.frame_down = None            # Camera 0: downward-looking view
@@ -246,6 +253,14 @@ class DroneState:
         with self.lock:
             return self.current_pose
 
+    def set_manual_velocity(self, vx: float, vy: float, vz: float):
+        with self.lock:
+            self.manual_velocity = (vx, vy, vz)
+
+    def get_manual_velocity(self):
+        with self.lock:
+            return self.manual_velocity
+
 # Global state instance
 drone_state = DroneState()
 
@@ -296,6 +311,14 @@ async def set_mode(request: ModeRequest):
     print(f"[API] Mode changed to: {mode}")
     
     return {"status": "success", "mode": mode}
+
+@app.post("/move")
+async def move_velocity(request: MoveRequest):
+    """Send velocity command to drone (Manual mode only)."""
+    if drone_state.get_mode() != "manual":
+        raise HTTPException(status_code=400, detail="Move commands only work in manual mode")
+    drone_state.set_manual_velocity(request.vx, request.vy, request.vz)
+    return {"status": "success"}
 
 @app.post("/goto")
 async def goto_position(request: GotoRequest):
@@ -622,6 +645,15 @@ def drone_control_loop():
                 # the key is released, since the next loop iteration will send
                 # zero velocity.
 
+                # Re-arm and take off if drone was grounded after RTH
+                if drone_state.is_grounded():
+                    print("[MANUAL] Drone is grounded — re-arming and taking off")
+                    client.enableApiControl(True)
+                    client.armDisarm(True)
+                    client.takeoffAsync().join()
+                    client.hoverAsync().join()
+                    drone_state.set_grounded(False)
+
                 if keyboard.is_pressed('q'):
                     drone_state.request_stop()
                     break
@@ -649,6 +681,12 @@ def drone_control_loop():
                     vz = 2
                 else:
                     vz = 0
+
+                # Merge with API velocity (UI WASD controls)
+                api_vx, api_vy, api_vz = drone_state.get_manual_velocity()
+                vx = vx or api_vx
+                vy = vy or api_vy
+                vz = vz or api_vz
 
                 client.moveByVelocityAsync(
                     vx, vy, vz,

@@ -137,11 +137,13 @@ FEED_METADATA = {
 # ============================================================================
 
 # Maps each feed to a scene type for auto-segmentation: "ship", "railway", "bridge", or None
+# Defaults to the follow target label if set (e.g. "ship"), otherwise "bridge"
+_default_scene = _follow_label if _follow_label in ("ship", "railway", "bridge") else "bridge"
 FEED_SCENE_TYPE = {
-    "cctv-1": "bridge",
-    "cctv-2": "bridge",
-    "cctv-3": "bridge",
-    "cctv-4": "bridge",
+    "cctv-1": _default_scene,
+    "cctv-2": _default_scene,
+    "cctv-3": _default_scene,
+    "cctv-4": _default_scene,
 }
 
 # ============================================================================

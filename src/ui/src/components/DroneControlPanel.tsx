@@ -21,6 +21,7 @@ import {
   SkipBack,
   Crosshair,
   Check,
+  X,
 } from 'lucide-react';
 import { BACKEND_URL } from '../data/mockFeeds';
 
@@ -75,6 +76,7 @@ export function DroneControlPanel() {
   const [airborneStart, setAirborneStart] = useState<number | null>(null);
   const wasAirborneRef = useRef(false);
   const [flightTime, setFlightTime] = useState('--:--');
+  const [deployedOnce, setDeployedOnce] = useState(false);
 
   // Fetch drone status periodically
   useEffect(() => {
@@ -94,6 +96,14 @@ export function DroneControlPanel() {
             setAirborneStart(null);
           }
           wasAirborneRef.current = airborne;
+
+          // Track deploy state: set once drone starts doing something, reset when idle at base
+          const isActive = data.is_navigating || data.returning_home || data.mode === 'manual';
+          if (isActive) {
+            setDeployedOnce(true);
+          } else if (data.grounded && data.mode === 'automatic') {
+            setDeployedOnce(false);
+          }
         } else {
           setIsConnected(false);
         }
@@ -206,6 +216,23 @@ export function DroneControlPanel() {
       }
     } catch {
       showError('Connection error: Failed to deploy');
+    }
+  }, [selectedTriggerId, showError]);
+
+  // Remove a trigger from the list
+  const handleRemoveTrigger = useCallback(async (triggerId: number) => {
+    try {
+      const response = await fetch(`${BACKEND_URL}/triggers/${triggerId}`, { method: 'DELETE' });
+      if (response.ok) {
+        setTriggers((prev) => prev.filter((t) => t.id !== triggerId));
+        if (selectedTriggerId === triggerId) {
+          setSelectedTriggerId(null);
+          setReplayPlaying(false);
+        }
+        lastTriggerCountRef.current = Math.max(0, lastTriggerCountRef.current - 1);
+      }
+    } catch {
+      showError('Failed to remove trigger');
     }
   }, [selectedTriggerId, showError]);
 
@@ -376,7 +403,7 @@ export function DroneControlPanel() {
 
   const isManual = status.mode === 'manual';
   const isAutomatic = status.mode === 'automatic';
-  const isDroneFlying = isConnected && !status.grounded;
+  const hasBeenDeployed = isConnected && deployedOnce;
 
   return (
     <div className="h-full flex flex-col bg-[var(--bg-primary)] tactical-grid relative overflow-hidden">
@@ -488,12 +515,20 @@ export function DroneControlPanel() {
                     alt={`Trigger ${t.id}`}
                     className="w-full h-full object-cover"
                   />
-                  {/* Deployed indicator */}
-                  <div className={`absolute top-0.5 right-0.5 w-3 h-3 rounded-full flex items-center justify-center ${
-                    t.deployed ? 'bg-[var(--zone-green)]' : 'bg-[var(--zone-red)]'
-                  }`}>
-                    {t.deployed ? <Check size={8} className="text-white" /> : <Crosshair size={8} className="text-white" />}
-                  </div>
+                  {/* Deployed indicator / Remove button */}
+                  {t.deployed ? (
+                    <div
+                      className="absolute top-0.5 right-0.5 w-4 h-4 rounded-full flex items-center justify-center bg-[var(--text-muted)]/80 hover:bg-[var(--zone-red)] transition-colors cursor-pointer z-10"
+                      title="Remove trigger"
+                      onClick={(e) => { e.stopPropagation(); handleRemoveTrigger(t.id); }}
+                    >
+                      <X size={10} className="text-white" />
+                    </div>
+                  ) : (
+                    <div className="absolute top-0.5 right-0.5 w-3 h-3 rounded-full flex items-center justify-center bg-[var(--zone-red)]">
+                      <Crosshair size={8} className="text-white" />
+                    </div>
+                  )}
                   {/* Trigger ID */}
                   <div className="absolute bottom-0 left-0 right-0 bg-black/60 text-center">
                     <span className="text-[8px] font-mono text-white">#{t.id}</span>
@@ -599,14 +634,12 @@ export function DroneControlPanel() {
           {selectedTrigger && (
             <button
               onClick={handleDeployToTrigger}
-              disabled={selectedTrigger.deployed || status.is_navigating}
+              disabled={selectedTrigger.deployed}
               className={`
                 mt-2 w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg border-2 transition-all duration-300 font-mono
                 ${selectedTrigger.deployed
                   ? 'border-[var(--zone-green)]/50 bg-[var(--zone-green)]/10 text-[var(--zone-green)] cursor-default'
-                  : status.is_navigating
-                    ? 'border-[var(--border-dim)] bg-[var(--bg-tertiary)] text-[var(--text-muted)] cursor-not-allowed'
-                    : 'border-[var(--zone-red)]/80 bg-[var(--zone-red)]/15 text-[var(--zone-red)] hover:border-[var(--zone-red)] hover:bg-[var(--zone-red)]/25'
+                  : 'border-[var(--zone-red)]/80 bg-[var(--zone-red)]/15 text-[var(--zone-red)] hover:border-[var(--zone-red)] hover:bg-[var(--zone-red)]/25'
                 }
               `}
             >
@@ -619,7 +652,7 @@ export function DroneControlPanel() {
                 <>
                   <Crosshair size={14} />
                   <span className="text-[10px] font-bold uppercase tracking-wider">
-                    {status.is_navigating ? 'DRONE BUSY' : 'DEPLOY TO TRIGGER'}
+                    {status.is_navigating ? 'REDIRECT DRONE' : 'DEPLOY TO TRIGGER'}
                   </span>
                 </>
               )}
@@ -807,7 +840,7 @@ export function DroneControlPanel() {
                   `}
                 >
                   <Plane size={12} />
-                  <span>{isDroneFlying ? 'Auto Ctrl' : 'Auto Deploy'}</span>
+                  <span>{hasBeenDeployed ? 'Auto Ctrl' : 'Auto Deploy'}</span>
                 </button>
                 <button
                   onClick={() => { if (!isManual) handleModeSwitch(); }}
@@ -822,7 +855,7 @@ export function DroneControlPanel() {
                   `}
                 >
                   <Hand size={12} />
-                  <span>{isDroneFlying ? 'Manual Ctrl' : 'Manual Deploy'}</span>
+                  <span>{hasBeenDeployed ? 'Manual Ctrl' : 'Manual Deploy'}</span>
                 </button>
               </div>
 

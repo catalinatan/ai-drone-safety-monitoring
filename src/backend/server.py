@@ -1216,8 +1216,8 @@ def detection_loop():
 def auto_segmentation_loop():
     """Background thread for periodic auto-segmentation.
 
-    - Ship feeds: Re-segment every AUTO_SEG_INTERVAL seconds, overwriting all zones.
-    - Railway/Bridge feeds: Segment once on first frame, respect manual edits after that.
+    All feed types: segment once on first frame, then periodically refresh.
+    Manual edits (user saves zones) pause auto-seg until user triggers 'Reset to Auto'.
     """
     print(f"[AUTO-SEG] Starting auto-segmentation loop (ship interval: {AUTO_SEG_INTERVAL}s)...")
 
@@ -1250,8 +1250,8 @@ def auto_segmentation_loop():
                             initial_seg_done.add(feed_id)
                             print(f"[AUTO-SEG] Initial segmentation done for {feed_id} ({feed.scene_type})")
 
-                # Periodic refresh: only when auto_refresh is enabled
-                elif feed_manager.auto_refresh and feed_id in initial_seg_done:
+                # Periodic refresh: only when auto_refresh is enabled and user hasn't manually edited
+                elif feed_manager.auto_refresh and feed_id in initial_seg_done and not feed.manual_zones_set:
                     current_time = time.time()
                     if current_time - feed.last_auto_seg_time >= AUTO_SEG_INTERVAL:
                         feed.auto_seg_active = True
@@ -1823,10 +1823,8 @@ async def update_zones(feed_id: str, request: ZonesUpdateRequest):
     try:
         feed = feed_manager.feeds[feed_id]
 
-        # Track manual edits: for railway/bridge this prevents auto-seg from overwriting
-        # For ship feeds, manual_zones_set stays False (ship always auto-overwrites)
-        if feed.scene_type not in ("ship",):
-            feed.manual_zones_set = True
+        # Track manual edits: prevents auto-seg from overwriting user-edited zones
+        feed.manual_zones_set = True
 
         # Try to get frame dimensions for immediate mask generation
         frame = feed_manager.get_frame(feed_id)
@@ -1866,9 +1864,8 @@ def trigger_auto_segment(feed_id: str):
     try:
         zones = feed_manager.run_auto_segmentation(feed_id)
 
-        # For railway/bridge, reset manual flag since user explicitly requested auto-seg
-        if feed.scene_type in ("railway", "bridge"):
-            feed.manual_zones_set = False
+        # Reset manual flag since user explicitly requested auto-seg
+        feed.manual_zones_set = False
 
         return {
             "status": "success",
@@ -1938,6 +1935,10 @@ async def deploy_to_trigger(trigger_id: int):
         raise HTTPException(status_code=503, detail="Drone API not connected")
 
     tx, ty, tz = trigger.coords
+
+    # Ensure drone is in automatic mode before sending goto
+    feed_manager.drone_api.set_mode("automatic")
+
     if feed_manager.drone_api.goto_position(tx, ty, tz):
         trigger.deployed = True
         feed_manager.drone_is_navigating = True
@@ -1946,6 +1947,17 @@ async def deploy_to_trigger(trigger_id: int):
         return {"status": "deployed", "trigger_id": trigger_id, "coords": list(trigger.coords)}
     else:
         raise HTTPException(status_code=500, detail="Drone goto command failed")
+
+
+@app.delete("/triggers/{trigger_id}")
+async def delete_trigger(trigger_id: int):
+    """Remove a trigger from the history."""
+    trigger = feed_manager.get_trigger_by_id(trigger_id)
+    if trigger is None:
+        raise HTTPException(status_code=404, detail="Trigger not found")
+    feed_manager.trigger_history = [t for t in feed_manager.trigger_history if t.id != trigger_id]
+    print(f"[TRIGGER] Removed trigger #{trigger_id}")
+    return {"status": "removed", "trigger_id": trigger_id}
 
 
 # --- Backward-compat endpoints (use latest trigger) ---
