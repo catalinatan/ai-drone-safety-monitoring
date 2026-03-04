@@ -150,9 +150,9 @@ FEED_SCENE_TYPE = {
 
 # YOLO segmentation model paths (per scene type)
 SEG_MODEL_PATHS = {
-    "railway": os.path.join(_REPO_ROOT, "runs", "segment", "railway_hazard", "weights", "best.pt"),
-    "ship": os.path.join(_REPO_ROOT, "runs", "segment", "ship_hazard", "weights", "best.pt"),
-    "bridge": os.path.join(_REPO_ROOT, "runs", "segment", "bridge_hazard", "weights", "best.pt"),
+    "railway": os.path.join(_REPO_ROOT, "runs", "segment", "runs", "segment""railway_hazard_yolo11s-seg", "weights", "best.pt"),
+    "ship": os.path.join(_REPO_ROOT, "runs", "segment", "runs", "segment", "ship_hazard_yolo11s-seg", "weights", "best.pt"),
+    "bridge": os.path.join(_REPO_ROOT, "runs", "segment", "runs", "segment", "bridge_hazard_yolo11s-seg", "weights", "best.pt"),
 }
 
 # How often to re-run auto-segmentation for ship feeds (seconds)
