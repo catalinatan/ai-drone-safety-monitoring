@@ -43,6 +43,7 @@ interface TriggerMeta {
   replay_frame_count: number;
   replay_trigger_index: number;
   coords: [number, number, number];
+  replay_fps?: number;
 }
 
 const DRONE_API_BASE = 'http://localhost:8000';
@@ -70,6 +71,7 @@ export function DroneControlPanel() {
   // Replay player state
   const [replayFrame, setReplayFrame] = useState(0);
   const [replayPlaying, setReplayPlaying] = useState(false);
+  const [frozenFrameCount, setFrozenFrameCount] = useState(0); // locked frame count for current replay
   const replayIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const videoRef = useRef<HTMLImageElement>(null);
   const lastVelocityRef = useRef({ vx: 0, vy: 0, vz: 0 });
@@ -145,6 +147,7 @@ export function DroneControlPanel() {
             const latest = newTriggers[newTriggers.length - 1];
             setSelectedTriggerId(latest.id);
             setReplayFrame(0);
+            setFrozenFrameCount(latest.replay_frame_count);
             if (latest.replay_frame_count > 0) {
               setReplayPlaying(true);
             }
@@ -164,25 +167,29 @@ export function DroneControlPanel() {
   // Get selected trigger metadata
   const selectedTrigger = triggers.find((t) => t.id === selectedTriggerId) || null;
 
-  // Replay playback — advance frames at replay FPS
+  // Replay playback — advance frames at replay FPS using frozen frame count
+  // frozenFrameCount is set ONLY when user selects a trigger or clicks play/restart.
+  // It is NOT kept in sync with the backend — that's the whole point of "frozen".
+  const frozenRef = useRef(frozenFrameCount);
+  frozenRef.current = frozenFrameCount;
+
   useEffect(() => {
     if (replayIntervalRef.current) {
       clearInterval(replayIntervalRef.current);
       replayIntervalRef.current = null;
     }
-    if (!replayPlaying || !selectedTrigger || selectedTrigger.replay_frame_count <= 0) return;
+    if (!replayPlaying || !selectedTrigger) return;
 
-    const frameCount = selectedTrigger.replay_frame_count;
     replayIntervalRef.current = setInterval(() => {
       setReplayFrame((prev) => {
         const next = prev + 1;
-        if (next >= frameCount) {
+        if (next >= frozenRef.current) {
           setReplayPlaying(false);
           return prev;
         }
         return next;
       });
-    }, 1000 / replayFps);
+    }, 1000 / (selectedTrigger.replay_fps || replayFps));
 
     return () => {
       if (replayIntervalRef.current) {
@@ -190,7 +197,10 @@ export function DroneControlPanel() {
         replayIntervalRef.current = null;
       }
     };
-  }, [replayPlaying, selectedTrigger?.id, selectedTrigger?.replay_frame_count, replayFps]);
+    // Intentionally NOT including frozenFrameCount — we use the ref so playback
+    // doesn't restart when the count updates.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [replayPlaying, selectedTrigger?.id, selectedTrigger?.replay_fps, replayFps]);
 
   // Show error with auto-dismiss
   const showError = useCallback((message: string) => {
@@ -499,6 +509,7 @@ export function DroneControlPanel() {
                   onClick={() => {
                     setSelectedTriggerId(t.id);
                     setReplayFrame(0);
+                    setFrozenFrameCount(t.replay_frame_count);
                     setReplayPlaying(t.replay_frame_count > 0);
                   }}
                   className={`
@@ -583,10 +594,14 @@ export function DroneControlPanel() {
               {/* Play/Pause */}
               <button
                 onClick={() => {
-                  if (!replayPlaying && replayFrame >= selectedTrigger.replay_frame_count - 1) {
-                    setReplayFrame(0);
+                  if (replayPlaying) {
+                    setReplayPlaying(false);
+                  } else {
+                    // Re-freeze to latest count so user gets full recording
+                    if (selectedTrigger) setFrozenFrameCount(selectedTrigger.replay_frame_count);
+                    if (replayFrame >= frozenFrameCount - 1) setReplayFrame(0);
+                    setReplayPlaying(true);
                   }
-                  setReplayPlaying((p) => !p);
                 }}
                 className="p-1 rounded border border-[var(--border-dim)] bg-[var(--bg-secondary)] text-[var(--text-secondary)] hover:text-[var(--accent-cyan)] hover:border-[var(--accent-cyan)] transition-all"
               >
@@ -594,31 +609,51 @@ export function DroneControlPanel() {
               </button>
               {/* Restart */}
               <button
-                onClick={() => { setReplayFrame(0); setReplayPlaying(true); }}
+                onClick={() => {
+                  if (selectedTrigger) setFrozenFrameCount(selectedTrigger.replay_frame_count);
+                  setReplayFrame(0);
+                  setReplayPlaying(true);
+                }}
                 className="p-1 rounded border border-[var(--border-dim)] bg-[var(--bg-secondary)] text-[var(--text-secondary)] hover:text-[var(--accent-cyan)] hover:border-[var(--accent-cyan)] transition-all"
                 title="Restart"
               >
                 <SkipBack size={12} />
               </button>
-              {/* Progress bar */}
+              {/* Progress bar — click or drag to scrub */}
               <div
                 className="flex-1 h-3 rounded bg-[var(--bg-tertiary)] border border-[var(--border-dim)] relative cursor-pointer overflow-hidden"
-                onClick={(e) => {
-                  const rect = e.currentTarget.getBoundingClientRect();
-                  const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-                  setReplayFrame(Math.round(pct * (selectedTrigger.replay_frame_count - 1)));
+                onMouseDown={(e) => {
+                  const bar = e.currentTarget;
+                  // Re-freeze to latest count when scrubbing
+                  const count = selectedTrigger?.replay_frame_count ?? frozenFrameCount;
+                  if (selectedTrigger) setFrozenFrameCount(count);
+                  const scrub = (ev: MouseEvent) => {
+                    const rect = bar.getBoundingClientRect();
+                    const pct = Math.max(0, Math.min(1, (ev.clientX - rect.left) / rect.width));
+                    const maxFrame = Math.max(1, count - 1);
+                    setReplayFrame(Math.round(pct * maxFrame));
+                  };
+                  setReplayPlaying(false);
+                  scrub(e.nativeEvent);
+                  const onMove = (ev: MouseEvent) => scrub(ev);
+                  const onUp = () => {
+                    window.removeEventListener('mousemove', onMove);
+                    window.removeEventListener('mouseup', onUp);
+                  };
+                  window.addEventListener('mousemove', onMove);
+                  window.addEventListener('mouseup', onUp);
                 }}
               >
                 {/* Playback position */}
                 <div
                   className="absolute top-0 left-0 h-full bg-[var(--accent-cyan)]/40 transition-[width] duration-75"
-                  style={{ width: `${(replayFrame / Math.max(1, selectedTrigger.replay_frame_count - 1)) * 100}%` }}
+                  style={{ width: `${(replayFrame / Math.max(1, frozenFrameCount - 1)) * 100}%` }}
                 />
                 {/* Trigger marker */}
                 {selectedTrigger.replay_trigger_index > 0 && (
                   <div
                     className="absolute top-0 h-full w-0.5 bg-[var(--zone-red)]"
-                    style={{ left: `${(selectedTrigger.replay_trigger_index / Math.max(1, selectedTrigger.replay_frame_count - 1)) * 100}%` }}
+                    style={{ left: `${(selectedTrigger.replay_trigger_index / Math.max(1, frozenFrameCount - 1)) * 100}%` }}
                     title="Trigger point"
                   />
                 )}

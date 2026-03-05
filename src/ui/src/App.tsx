@@ -19,17 +19,19 @@ function App() {
   const [droneActive, setDroneActive] = useState(false);
   const userCollapsedRef = useRef(false); // track if user manually collapsed
 
-  // Poll drone status to detect activity for auto-expand
+  // Track trigger count to detect new triggers
+  const lastTriggerCountRef = useRef(0);
+
+  // Poll drone status + triggers to detect activity for auto-expand
   useEffect(() => {
     const DRONE_API = 'http://localhost:8000';
-    const pollDrone = async () => {
+    const poll = async () => {
       try {
         const res = await fetch(`${DRONE_API}/status`);
         if (res.ok) {
           const data = await res.json();
           const active = data.is_navigating || data.returning_home;
           setDroneActive(active);
-          // Auto-expand when drone becomes active (unless user manually collapsed)
           if (active && !userCollapsedRef.current) {
             setDroneExpanded(true);
           }
@@ -37,9 +39,26 @@ function App() {
       } catch {
         // Drone API not available
       }
+
+      // Check for new triggers — auto-expand panel when a new trigger arrives
+      try {
+        const trigRes = await fetch(`${BACKEND_URL}/triggers`);
+        if (trigRes.ok) {
+          const trigData = await trigRes.json();
+          const count = trigData.triggers?.length ?? 0;
+          if (count > lastTriggerCountRef.current && lastTriggerCountRef.current > 0) {
+            if (!userCollapsedRef.current) {
+              setDroneExpanded(true);
+            }
+          }
+          lastTriggerCountRef.current = count;
+        }
+      } catch {
+        // Backend not available
+      }
     };
-    pollDrone();
-    const interval = setInterval(pollDrone, 2000);
+    poll();
+    const interval = setInterval(poll, 2000);
     return () => clearInterval(interval);
   }, []);
 

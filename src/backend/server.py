@@ -36,7 +36,7 @@ import queue
 import threading
 from collections import deque
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -255,7 +255,7 @@ class FeedState:
     last_detection_time: Optional[datetime] = None
     position: Optional[Tuple[float, float, float]] = None  # NED coordinates (x, y, z)
     frame_count: int = 0                                    # Total captured frames
-    replay_buffer: deque = field(default_factory=lambda: deque(maxlen=100))  # Ring buffer: (timestamp, jpeg_bytes) at ~10 FPS, ~10s
+    replay_buffer: deque = field(default_factory=lambda: deque(maxlen=200))  # Ring buffer: (timestamp, jpeg_bytes) — trimmed to 5s by time
     lock: threading.Lock = field(default_factory=threading.Lock)
     # Auto-segmentation fields
     scene_type: Optional[str] = None          # "ship", "railway", "bridge", or None
@@ -278,7 +278,7 @@ class TriggerEvent:
 
 MAX_TRIGGER_HISTORY = 10
 TRIGGER_REPLAY_FPS = 10
-TRIGGER_DEDUP_WINDOW = 30  # seconds — same-camera triggers within this window are merged
+TRIGGER_COOLDOWN = 15  # seconds — minimum gap between triggers from the same camera
 
 
 class FeedManager:
@@ -292,6 +292,7 @@ class FeedManager:
         self.drone_api: Optional[DroneAPIClient] = None
         self.drone_is_navigating = False
         self.last_deployment_time = 0.0
+        self._first_auto_deployed = False  # True after first auto-deploy; subsequent deploys are manual-only
         self.running = False
         self._init_lock = threading.Lock()
         self._airsim_lock = threading.Lock()
@@ -305,7 +306,7 @@ class FeedManager:
         self.trigger_history: List[TriggerEvent] = []
         self._trigger_id_counter: int = 0
         # Post-trigger capture state
-        self._post_trigger: Optional[dict] = None  # {trigger_id, remaining}
+        self._post_trigger: Optional[dict] = None  # {trigger_id, feed_id, end_time}
         self._replay_capture_counter: int = 0  # Downsample counter for replay buffer
 
     def get_trigger_by_id(self, trigger_id: int) -> Optional[TriggerEvent]:
@@ -522,9 +523,7 @@ class FeedManager:
             return
 
         self._replay_capture_counter += 1
-        # Buffer replay frames at ~10 FPS (every 3rd capture at 30 FPS)
-        should_buffer_replay = (self._replay_capture_counter % 3 == 0)
-        now_iso = datetime.now().isoformat() if should_buffer_replay else ""
+        now_iso = datetime.now().isoformat()
 
         with self._airsim_lock:
             for feed_id, feed in self.feeds.items():
@@ -546,31 +545,29 @@ class FeedManager:
                     with feed.lock:
                         feed.last_frame = img_rgb
 
-                    # Append to replay ring buffer (downsampled to ~10 FPS)
-                    if should_buffer_replay:
-                        try:
-                            frame_bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
-                            _, buf = cv2.imencode('.jpg', frame_bgr, [cv2.IMWRITE_JPEG_QUALITY, 70])
-                            feed.replay_buffer.append((now_iso, buf.tobytes()))
-                        except Exception:
-                            pass
+                    # Append to replay ring buffer
+                    try:
+                        frame_bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
+                        _, buf = cv2.imencode('.jpg', frame_bgr, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                        feed.replay_buffer.append((now_iso, buf.tobytes()))
+                    except Exception:
+                        pass
 
-                    # Post-trigger: continue capturing into the trigger event's replay
+                    # Post-trigger: continue capturing into the trigger event's replay (5s post-trigger)
                     if (self._post_trigger
-                            and self._post_trigger["feed_id"] == feed_id
-                            and self._post_trigger["remaining"] > 0
-                            and should_buffer_replay):
+                            and self._post_trigger["feed_id"] == feed_id):
                         try:
-                            trigger_evt = self.get_trigger_by_id(self._post_trigger["trigger_id"])
-                            if trigger_evt:
-                                frame_bgr2 = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
-                                _, buf2 = cv2.imencode('.jpg', frame_bgr2, [cv2.IMWRITE_JPEG_QUALITY, 70])
-                                trigger_evt.replay_frames.append((now_iso, buf2.tobytes()))
-                            self._post_trigger["remaining"] -= 1
-                            if self._post_trigger["remaining"] <= 0:
+                            if time.time() >= self._post_trigger["end_time"]:
+                                trigger_evt = self.get_trigger_by_id(self._post_trigger["trigger_id"])
                                 total = len(trigger_evt.replay_frames) if trigger_evt else 0
                                 print(f"[TRIGGER] Post-trigger capture complete: {total} total frames")
                                 self._post_trigger = None
+                            else:
+                                trigger_evt = self.get_trigger_by_id(self._post_trigger["trigger_id"])
+                                if trigger_evt:
+                                    frame_bgr2 = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
+                                    _, buf2 = cv2.imencode('.jpg', frame_bgr2, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                                    trigger_evt.replay_frames.append((now_iso, buf2.tobytes()))
                         except Exception:
                             pass
 
@@ -1305,35 +1302,28 @@ def depth_worker_loop():
             with feed.lock:
                 feed.target_coordinates = deploy_coords
 
-            # Create trigger event and add to history (with dedup)
+            # Create a new trigger event (each detection = separate ~10s recording)
+            # Cooldown prevents the same camera from spamming triggers
             trigger_event = None
-            try:
-                frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-                _, snap_buf = cv2.imencode('.jpg', frame_bgr, [cv2.IMWRITE_JPEG_QUALITY, 85])
-                snap_bytes = snap_buf.tobytes()
-                now = datetime.now()
+            now = datetime.now()
+            cooldown_ok = True
+            for t in reversed(feed_manager.trigger_history):
+                if t.feed_id == feed_id:
+                    age = (now - datetime.fromisoformat(t.timestamp)).total_seconds()
+                    if age < TRIGGER_COOLDOWN:
+                        cooldown_ok = False
+                    break
 
-                # Dedup: check if there's a recent trigger from the same camera
-                existing = None
-                for t in reversed(feed_manager.trigger_history):
-                    if t.feed_id == feed_id:
-                        age = (now - datetime.fromisoformat(t.timestamp)).total_seconds()
-                        if age < TRIGGER_DEDUP_WINDOW:
-                            existing = t
-                        break  # only check the most recent from this feed
+            if cooldown_ok:
+                try:
+                    frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                    _, snap_buf = cv2.imencode('.jpg', frame_bgr, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                    snap_bytes = snap_buf.tobytes()
 
-                if existing and not existing.deployed:
-                    # Merge: update existing trigger with latest snapshot/coords
-                    existing.coords = deploy_coords
-                    existing.snapshot = snap_bytes
-                    existing.timestamp = now.isoformat()
-                    trigger_event = existing
-                    # Restart post-trigger capture for updated event
-                    feed_manager._post_trigger = {"trigger_id": existing.id, "feed_id": feed_id, "remaining": 50}
-                    print(f"[TRIGGER] Merged into trigger #{existing.id} from {feed_id} (dedup)")
-                else:
-                    # New trigger
-                    pre_frames = list(feed.replay_buffer)
+                    # Take only the last 5 seconds of pre-trigger frames
+                    all_pre = list(feed.replay_buffer)
+                    cutoff = (now - timedelta(seconds=5)).isoformat()
+                    pre_frames = [(ts, data) for ts, data in all_pre if ts >= cutoff]
                     feed_manager._trigger_id_counter += 1
                     trigger_event = TriggerEvent(
                         id=feed_manager._trigger_id_counter,
@@ -1345,18 +1335,16 @@ def depth_worker_loop():
                         replay_trigger_index=len(pre_frames),
                     )
                     feed_manager.trigger_history.append(trigger_event)
-                    # Trim history to max size
                     if len(feed_manager.trigger_history) > MAX_TRIGGER_HISTORY:
                         feed_manager.trigger_history = feed_manager.trigger_history[-MAX_TRIGGER_HISTORY:]
 
                     # Start post-trigger capture for this event
-                    feed_manager._post_trigger = {"trigger_id": trigger_event.id, "feed_id": feed_id, "remaining": 50}
+                    feed_manager._post_trigger = {"trigger_id": trigger_event.id, "feed_id": feed_id, "end_time": time.time() + 5.0}
                     print(f"[TRIGGER] Added trigger #{trigger_event.id} from {feed_id} ({len(pre_frames)} pre-trigger frames)")
-            except Exception as snap_err:
-                print(f"[TRIGGER] Failed to capture trigger: {snap_err}")
+                except Exception as snap_err:
+                    print(f"[TRIGGER] Failed to capture trigger: {snap_err}")
 
-            # Deploy drone — only when drone is at home in automatic mode
-            # Lazy reconnect: if drone_api was None at startup, try connecting now
+            # Lazy reconnect: keep drone_api ready for deploy requests.
             if feed_manager.drone_api is None:
                 try:
                     candidate = DroneAPIClient()
@@ -1365,40 +1353,33 @@ def depth_worker_loop():
                         print("[DRONE] Lazy-connected to drone API")
                 except Exception:
                     pass
-            if feed_manager.drone_api is None:
-                print("[DRONE] Skipped deploy — drone API not connected")
-            else:
+
+            # Auto-deploy only for the very first trigger; after that it's manual-only.
+            if (feed_manager.drone_api is not None
+                    and not feed_manager._first_auto_deployed
+                    and trigger_event is not None
+                    and not trigger_event.deployed):
                 current_time = time.time()
-                cooldown_ok = (current_time - feed_manager.last_deployment_time
-                               > ALARM_COOLDOWN)
-                if not cooldown_ok:
-                    pass  # Cooldown active — silent skip (too frequent to log)
-                elif feed_manager.drone_is_navigating:
-                    pass  # Already navigating — silent skip
-                else:
-                    # Check drone is actually ready (auto mode + not navigating)
-                    drone_status = feed_manager.drone_api.get_status()
-                    drone_mode = drone_status.get("mode") if drone_status else None
-                    drone_nav = drone_status.get("is_navigating", True) if drone_status else True
-                    drone_ready = (
-                        drone_status is not None
-                        and drone_mode == "automatic"
-                        and not drone_nav
-                    )
-                    if not drone_ready:
-                        print(f"[DRONE] Skipped deploy — drone not ready: mode={drone_mode}, is_navigating={drone_nav}, status={'OK' if drone_status else 'UNREACHABLE'}")
+                drone_status = feed_manager.drone_api.get_status()
+                drone_mode = drone_status.get("mode") if drone_status else None
+                drone_nav = drone_status.get("is_navigating", True) if drone_status else True
+                drone_ready = (
+                    drone_status is not None
+                    and drone_mode == "automatic"
+                    and not drone_nav
+                )
+                if drone_ready:
+                    tx, ty, tz = deploy_coords
+                    print(f"[DRONE] First auto-deploy to ({tx:.2f}, {ty:.2f}, {tz:.2f}) for {feed_id}")
+                    feed_manager.drone_api.set_mode("automatic")
+                    if feed_manager.drone_api.goto_position(tx, ty, tz):
+                        feed_manager.last_deployment_time = current_time
+                        feed_manager.drone_is_navigating = True
+                        trigger_event.deployed = True
+                        feed_manager._first_auto_deployed = True
+                        print("[DRONE] First auto-deploy sent successfully — subsequent deploys are manual")
                     else:
-                        tx, ty, tz = deploy_coords
-                        print(f"[DRONE] Deploying to ({tx:.2f}, {ty:.2f}, {tz:.2f})"
-                              f" for {feed_id}")
-                        if feed_manager.drone_api.goto_position(tx, ty, tz):
-                            feed_manager.last_deployment_time = current_time
-                            feed_manager.drone_is_navigating = True
-                            if trigger_event:
-                                trigger_event.deployed = True
-                            print("[DRONE] Deployment command sent successfully")
-                        else:
-                            print("[DRONE] Deployment command failed")
+                        print("[DRONE] First auto-deploy command failed")
 
         except Exception as e:
             print(f"[DEPTH] Error processing {feed_id}: {e}")
@@ -1877,6 +1858,22 @@ def trigger_auto_segment(feed_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _compute_trigger_fps(trigger: TriggerEvent) -> int:
+    """Compute actual FPS from a trigger's replay frame timestamps."""
+    frames = trigger.replay_frames
+    if len(frames) < 2:
+        return TRIGGER_REPLAY_FPS
+    try:
+        first_ts = datetime.fromisoformat(frames[0][0])
+        last_ts = datetime.fromisoformat(frames[-1][0])
+        duration = (last_ts - first_ts).total_seconds()
+        if duration <= 0:
+            return TRIGGER_REPLAY_FPS
+        return max(1, round(len(frames) / duration))
+    except Exception:
+        return TRIGGER_REPLAY_FPS
+
+
 # --- Multi-trigger endpoints ---
 
 @app.get("/triggers")
@@ -1892,10 +1889,11 @@ async def list_triggers():
                 "replay_frame_count": len(t.replay_frames),
                 "replay_trigger_index": t.replay_trigger_index,
                 "coords": list(t.coords),
+                "replay_fps": _compute_trigger_fps(t),
             }
             for t in feed_manager.trigger_history
         ],
-        "replay_fps": TRIGGER_REPLAY_FPS,
+        "replay_fps": TRIGGER_REPLAY_FPS,  # default fallback
     }
 
 
