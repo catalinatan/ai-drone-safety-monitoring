@@ -269,6 +269,70 @@ def _auto_seg_loop(
         time.sleep(5.0)  # Check every 5 seconds
 
 
+def _follow_mode_loop(
+    fm: FeedManager,
+    cfg: Dict[str, Any],
+    drone_api,
+) -> None:
+    """Follow a moving target (ship, railway, bridge) with drones."""
+    from src.services.follow_mode import FollowModeController
+
+    follow_cfg = cfg.get("follow_mode", {})
+    target = follow_cfg.get("target", "")
+    if not target:
+        print("[FOLLOW] Follow mode disabled (no target configured)")
+        return
+
+    hover_drones = follow_cfg.get("hover_drones", False)
+    hover_alt = follow_cfg.get("hover_altitude", -15.0)
+
+    controller = FollowModeController(
+        target=target,
+        hover_altitude=hover_alt,
+        hover_drones=hover_drones,
+    )
+    print(f"[FOLLOW] Following '{target}' (hover_alt={hover_alt}m, hover={hover_drones})")
+
+    while getattr(fm, "_running", False):
+        if not drone_api:
+            time.sleep(1.0)
+            continue
+
+        # Get first feed (primary camera for target tracking)
+        feed_ids = fm.feed_ids()
+        if not feed_ids:
+            time.sleep(1.0)
+            continue
+
+        primary_feed = feed_ids[0]
+        frame = fm.get_frame(primary_feed)
+
+        if not controller.should_update() or frame is None:
+            time.sleep(0.1)
+            continue
+
+        try:
+            # Get target position from frame
+            state = fm.get_state(primary_feed)
+            camera_height = 10.0  # Default, could be read from state
+            target_pos = controller.get_target_position(frame, camera_height=camera_height)
+
+            if target_pos:
+                waypoint = controller.compute_waypoint(target_pos)
+                # Send waypoint to drone
+                if drone_api:
+                    try:
+                        drone_api.goto_position(waypoint[0], waypoint[1], waypoint[2])
+                        print(f"[FOLLOW] Updated target position: {target_pos}")
+                    except Exception as e:
+                        print(f"[FOLLOW] Drone command failed: {e}")
+
+        except Exception as e:
+            print(f"[FOLLOW] Error: {e}")
+
+        time.sleep(0.1)
+
+
 # ---------------------------------------------------------------------------
 # Lifespan
 # ---------------------------------------------------------------------------
@@ -432,6 +496,17 @@ async def lifespan(app: FastAPI):
             name="auto-seg",
         )
         auto_seg_thread.start()
+
+    # Start follow mode if target is configured
+    follow_target = cfg.get("follow_mode", {}).get("target", "")
+    if follow_target:
+        follow_thread = threading.Thread(
+            target=_follow_mode_loop,
+            args=(fm, cfg, deps.get_drone_api()),
+            daemon=True,
+            name="follow-mode",
+        )
+        follow_thread.start()
 
     print("[SERVER] Backend started")
     yield
