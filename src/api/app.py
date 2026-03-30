@@ -176,6 +176,9 @@ def _detection_loop(
                     feed_id,
                     alarm_active=result.alarm_active,
                     caution_active=result.caution_active,
+                    people_count=result.people_count,
+                    danger_count=result.danger_count,
+                    caution_count=result.caution_count,
                     mask_overlay=overlay,
                 )
 
