@@ -18,8 +18,7 @@ INFO:     connection rejected (403 Forbidden)
 The React UI (`src/ui/src/hooks/useDetectionStatus.ts`) expects a WebSocket endpoint at `/ws/status` to stream real-time detection updates, but **this endpoint was not implemented** during the Phase 5 API decomposition.
 
 ### Impact
-- UI cannot receive live detection status (alarm/caution/people count)
-- UI may fall back to polling HTTP endpoints (slower, higher latency)
+- ✅ FIXED: UI now receives live detection status via WebSocket
 
 ### Solution
 Implement `src/api/routes/status.py` with a WebSocket endpoint:
@@ -39,16 +38,19 @@ INFO:     127.0.0.1:49441 - "POST /feeds/cctv-1/auto-segment HTTP/1.1" 503 Servi
 ```
 
 ### Root Cause
-The scene segmentation models (YOLO11s-seg for ship/railway/bridge) are not loaded in the test environment. This is **correct behavior** — returning 503 (Service Unavailable) instead of crashing.
+~~The scene segmentation models are not loaded~~ **UPDATE**: The models ARE present in `runs/segment/runs/segment/<scene>_hazard_yolo11s-seg/weights/best.pt`, but the config was pointing to the wrong location. Now fixed to use actual model paths.
 
-### Validation
-Integration tests verify this behavior:
-```python
-# tests/integration/test_api_zones.py::test_auto_segment_with_scene_type_returns_503
-```
+**Models Available**:
+- 🎯 `runs/segment/runs/segment/ship_hazard_yolo11s-seg/weights/best.pt`
+- 🎯 `runs/segment/runs/segment/railway_hazard_yolo11s-seg/weights/best.pt`
+- 🎯 `runs/segment/runs/segment/bridge_hazard_yolo11s-seg/weights/best.pt`
+- 🎯 `runs/segment/runs/segment/human_detection_real_yolo11s-seg/weights/best.pt`
+
+### Solution
+Updated `config/default.yaml` to point to the correct model locations. Auto-segmentation should now work when `scene_type` is set.
 
 ### Impact
-None — this is working as designed.
+✅ Auto-segment endpoints will now work (load models correctly)
 
 ---
 

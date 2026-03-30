@@ -30,9 +30,9 @@ auto_segmentation:
   simplify_epsilon: 2.0
   min_contour_area: 40.0
   models:
-    railway: "models/scene_segmentation/railway/best.pt"
-    ship: "models/scene_segmentation/ship/best.pt"
-    bridge: "models/scene_segmentation/bridge/best.pt"
+    railway: "runs/segment/runs/segment/railway_hazard_yolo11s-seg/weights/best.pt"
+    ship: "runs/segment/runs/segment/ship_hazard_yolo11s-seg/weights/best.pt"
+    bridge: "runs/segment/runs/segment/bridge_hazard_yolo11s-seg/weights/best.pt"
 
 # Depth Estimation
 depth_estimation:

@@ -74,26 +74,27 @@ INFO:     127.0.0.1:49569 - "POST /feeds/cctv-4/auto-segment HTTP/1.1" 503 Servi
 ```
 
 ### Root Cause
-The auto-segmentation endpoint correctly returns 503 (Service Unavailable) when scene segmentation models are not loaded. This is **expected behavior** — not an error.
+The config was pointing to `models/scene_segmentation/` but the models are actually in `runs/segment/runs/segment/`. When the endpoint tried to load the models, they weren't found, so it returned 503.
 
-Scene models (YOLO11s-seg for ship/railway/bridge) require:
-1. `scene_type` to be set in feed configuration
-2. Model weights to be present in `models/` directory
+**Models Found** ✅:
+- `runs/segment/runs/segment/ship_hazard_yolo11s-seg/weights/best.pt`
+- `runs/segment/runs/segment/railway_hazard_yolo11s-seg/weights/best.pt`
+- `runs/segment/runs/segment/bridge_hazard_yolo11s-seg/weights/best.pt`
+- `runs/segment/runs/segment/human_detection_real_yolo11s-seg/weights/best.pt`
 
-In the test environment, these models are not available.
+### Fix Applied ✅
+Updated `config/default.yaml` to point to the correct model locations:
 
-### Why This is Correct (Not a Bug)
-The integration tests verify this behavior:
-```python
-# tests/integration/test_api_zones.py
-def test_auto_segment_with_scene_type_returns_503(client, feed_manager_with_feeds):
-    feed_manager_with_feeds.get_state("cam-1").scene_type = "ship"
-    resp = client.post("/feeds/cam-1/auto-segment")
-    assert resp.status_code == 503  # ✓ Expected
+```yaml
+auto_segmentation:
+  models:
+    railway: "runs/segment/runs/segment/railway_hazard_yolo11s-seg/weights/best.pt"
+    ship: "runs/segment/runs/segment/ship_hazard_yolo11s-seg/weights/best.pt"
+    bridge: "runs/segment/runs/segment/bridge_hazard_yolo11s-seg/weights/best.pt"
 ```
 
 ### What to Do
-To enable auto-segmentation in production:
+To enable auto-segmentation:
 
 1. **Set scene_type in config**:
    ```yaml
@@ -103,19 +104,12 @@ To enable auto-segmentation in production:
        scene_type: ship  # or "railway" or "bridge"
    ```
 
-2. **Place model weights in models directory**:
-   ```
-   models/
-   └── ship_hazard_yolo11s-seg/
-       └── weights/
-           └── best.pt
-   ```
-
-3. **Restart backend** — Model will load on startup
+2. **Restart backend** — Models will now load from the correct location on startup
 
 ### Result
-✅ 503 is correct behavior when models unavailable
-✅ No code change needed — feature works as designed
+✅ Models are now correctly located and configured
+✅ Auto-segment endpoints will work when `scene_type` is set
+✅ No more 503 Service Unavailable errors (unless models actually can't load)
 
 ---
 
