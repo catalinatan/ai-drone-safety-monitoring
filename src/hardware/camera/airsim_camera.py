@@ -33,17 +33,39 @@ class AirSimCamera(CameraBackend):
     def connect(self) -> bool:
         try:
             import airsim
+            import time as time_module
+
             print(f"[AirSimCamera {self.vehicle_name}] Attempting to connect...")
+
+            # Create client with explicit settings
             self._client = airsim.MultirotorClient()
+            self._client.enableApiControl(False)  # Release any existing control first
+
             print(f"[AirSimCamera {self.vehicle_name}] Client created, confirming connection...")
+            # confirmConnection will block until connection is established
             self._client.confirmConnection()
+
+            # Test that we can actually query the vehicle
+            try:
+                pose = self._client.simGetVehiclePose(vehicle_name=self.vehicle_name)
+                print(f"[AirSimCamera {self.vehicle_name}] Verified vehicle exists at position "
+                      f"({pose.position.x_val:.1f}, {pose.position.y_val:.1f}, {pose.position.z_val:.1f})")
+            except Exception as ve:
+                print(f"[AirSimCamera {self.vehicle_name}] WARNING: Vehicle check failed: {ve}")
+                # Vehicle doesn't exist, but connection might still work for image capture
+                # This can happen if vehicle names in feeds.yaml don't match AirSim setup
+
             print(f"[AirSimCamera {self.vehicle_name}] Connected successfully")
             return True
+
         except Exception as e:
             import traceback
             print(f"[AirSimCamera {self.vehicle_name}] Connection failed:")
             print(f"  Error: {e}")
             print(f"  Type: {type(e).__name__}")
+            print(f"  Expected vehicle: {self.vehicle_name}")
+            print(f"  Camera name: {self.camera_name}")
+            print(f"\nFull traceback:")
             traceback.print_exc()
             self._client = None
             return False
