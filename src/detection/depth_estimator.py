@@ -19,11 +19,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 # ---------------------------------------------------------------------------
-# Resolve Lite-Mono vendor path (stays in src/cctv_monitoring/Lite-Mono/)
+# Resolve Lite-Mono vendor path (in models/lite-mono/)
 # ---------------------------------------------------------------------------
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
-_LITEMONO_ROOT = str(_PROJECT_ROOT / "src" / "cctv_monitoring" / "Lite-Mono")
+_LITEMONO_ROOT = str(_PROJECT_ROOT / "models" / "lite-mono")
 if _LITEMONO_ROOT not in sys.path:
     sys.path.insert(0, _LITEMONO_ROOT)
 

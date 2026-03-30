@@ -36,8 +36,8 @@ auto_segmentation:
 
 # Depth Estimation
 depth_estimation:
-  encoder_path: "src/cctv_monitoring/lite_mono_weights/lite-mono-small_640x192/encoder.pth"
-  decoder_path: "src/cctv_monitoring/lite_mono_weights/lite-mono-small_640x192/depth.pth"
+  encoder_path: "models/depth_estimation/lite-mono-small_640x192/encoder.pth"
+  decoder_path: "models/depth_estimation/lite-mono-small_640x192/depth.pth"
 
 # Streaming
 streaming:
