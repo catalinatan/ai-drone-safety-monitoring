@@ -36,11 +36,12 @@ Args:
     --freeze        Backbone layers to freeze (default: 10, set 0 to train all layers)
     --device        Training device (default: 0 for GPU, or 'cpu')
 """
-import logging
 import argparse
 from pathlib import Path
 from ultralytics import YOLO
 import yaml
+
+from src.logger import get_logger
 
 
 # --- Configuration ---
@@ -55,20 +56,6 @@ DATASET_CONFIG = {
     "names": ["person"],
 }
 
-
-def setup_logger():
-    log_filename = "log_human_detection_train.log"
-    logger = logging.getLogger(__name__)
-    logger.setLevel(logging.DEBUG)
-
-    fh = logging.FileHandler(log_filename)
-    fh.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s", "%Y-%m-%d %H:%M:%S"))
-    logger.addHandler(fh)
-
-    ch = logging.StreamHandler()
-    ch.setFormatter(logging.Formatter("%(levelname)s - %(message)s"))
-    logger.addHandler(ch)
-    return logger
 
 
 def prepare_dataset_yaml(dataset_path, logger):
@@ -224,7 +211,7 @@ if __name__ == "__main__":
     # Resolve dataset path from variant or explicit override
     dataset_path = args.dataset or VARIANT_DATASETS[args.variant]
 
-    logger = setup_logger()
+    logger = get_logger(__name__, log_prefix="human_detection_train")
 
     try:
         yaml_file = prepare_dataset_yaml(dataset_path, logger)

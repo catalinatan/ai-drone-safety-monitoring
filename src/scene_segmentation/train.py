@@ -20,12 +20,13 @@ Args:
     --model         Base YOLO model to finetune (default: yolo11s-seg)
     --epochs        Training epochs (default: 100)
 """
-import logging
 import sys
 import argparse
 from pathlib import Path
 from ultralytics import YOLO
 import yaml
+
+from src.logger import get_logger
 
 # --- 1. Dataset Configurations ---
 DATASET_CONFIGS = {
@@ -46,22 +47,6 @@ DATASET_CONFIGS = {
     }
 }
 
-# --- 2. Setup Logging ---
-def setup_logger(name):
-    log_filename = f"log_{name}.log"
-    logger = logging.getLogger(__name__)
-    logger.setLevel(logging.DEBUG)
-    
-    # File Handler
-    fh = logging.FileHandler(log_filename)
-    fh.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s", "%Y-%m-%d %H:%M:%S"))
-    logger.addHandler(fh)
-    
-    # Console Handler
-    ch = logging.StreamHandler()
-    ch.setFormatter(logging.Formatter("%(levelname)s - %(message)s"))
-    logger.addHandler(ch)
-    return logger
 
 # --- 3. Modular Functions ---
 def prepare_dataset_yaml(dataset_type, logger):
@@ -207,7 +192,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     # Setup Logger based on the selected dataset name
-    logger = setup_logger(args.dataset)
+    logger = get_logger(__name__, log_prefix=args.dataset)
 
     try:
         # Step 1: Prepare the YAML (skipped when resuming — checkpoint already has config)
