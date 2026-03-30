@@ -47,6 +47,7 @@ from pydantic import BaseModel
 import uvicorn
 
 # --- CENTRALIZED CONFIGURATION ---
+# Legacy flat config — kept until server.py is decomposed into src/api/ (Phase 5).
 from src.backend.config import (
     FEED_CONFIG, FEED_METADATA,
     ENCODER_PATH, DECODER_PATH,
@@ -63,6 +64,8 @@ from src.backend.config import (
     CCTV_FOLLOW_INTERVAL,
     CCTV_HOVER_DRONES, CCTV_HOVER_ALTITUDE,
 )
+# New YAML-based config — used by new modules; will fully replace above in Phase 5.
+from src.core.config import get_config as _get_config, get_feeds_config as _get_feeds_config
 
 # --- DETECTION MODULES (optional — graceful fallback) ---
 # Human detection (YOLO) and depth estimation are imported separately so that
@@ -198,36 +201,18 @@ class DroneAPIClient:
             return None
 
 # ============================================================================
-# PYDANTIC MODELS
+# PYDANTIC MODELS (imported from src.core.models)
 # ============================================================================
 
-class Point(BaseModel):
-    x: float  # Percentage (0-100)
-    y: float  # Percentage (0-100)
+from src.core.models import (
+    Point,
+    Zone,
+    ZonesUpdateRequest,
+    TargetCoordinate,
+    DetectionStatus as _DetectionStatusBase,
+)
 
-class Zone(BaseModel):
-    id: str
-    level: str  # 'red', 'yellow', 'green'
-    points: List[Point]
-
-class ZonesUpdateRequest(BaseModel):
-    zones: List[Zone]
-
-class TargetCoordinate(BaseModel):
-    x: float  # North (meters)
-    y: float  # East (meters)
-    z: float  # Down (meters, negative = above ground)
-
-class DetectionStatus(BaseModel):
-    feed_id: str
-    alarm_active: bool           # RED zone intrusion - drone deployment
-    caution_active: bool         # YELLOW zone intrusion - highlight only
-    people_count: int
-    danger_count: int            # People in RED zones
-    caution_count: int           # People in YELLOW zones
-    target_coordinates: Optional[TargetCoordinate] = None
-    last_detection_time: Optional[str] = None
-    position: Optional[TargetCoordinate] = None  # CCTV camera position (NED)
+DetectionStatus = _DetectionStatusBase
 
 # ============================================================================
 # FEED STATE MANAGEMENT

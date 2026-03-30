@@ -1,0 +1,47 @@
+# AI Safety Monitoring — Camera Feed Definitions
+# Edit this file to configure camera sources per deployment site.
+# Change `camera.type` to swap hardware without touching application code:
+#   "airsim" → AirSim simulator
+#   "rtsp"   → Production IP camera
+#   "file"   → Video file (testing / demos)
+
+feeds:
+  cctv-1:
+    name: "CCTV CAM 1"
+    location: "Aerial Overview"
+    scene_type: "bridge"
+    camera:
+      type: "airsim"
+      params:
+        camera_name: "0"
+        vehicle_name: "Drone2"
+
+  cctv-2:
+    name: "CCTV CAM 2"
+    location: "Aerial Overview"
+    scene_type: "bridge"
+    camera:
+      type: "airsim"
+      params:
+        camera_name: "0"
+        vehicle_name: "Drone3"
+
+  cctv-3:
+    name: "CCTV CAM 3"
+    location: "Aerial Overview"
+    scene_type: "bridge"
+    camera:
+      type: "airsim"
+      params:
+        camera_name: "0"
+        vehicle_name: "Drone4"
+
+  cctv-4:
+    name: "CCTV CAM 4"
+    location: "Aerial Overview"
+    scene_type: "bridge"
+    camera:
+      type: "airsim"
+      params:
+        camera_name: "0"
+        vehicle_name: "Drone5"
