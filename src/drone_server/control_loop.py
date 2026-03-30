@@ -78,11 +78,12 @@ def drone_control_loop(state: DroneState, client, cfg: dict) -> None:
 
     try:
         while not state.get_should_stop():
-            # ----- Camera feeds (runs every iteration regardless of mode) -----
-            responses = client.simGetImages([
-                airsim.ImageRequest("0", airsim.ImageType.Scene, False, False),  # Down
-                airsim.ImageRequest("3", airsim.ImageType.Scene, False, False),  # Forward
-            ])
+            try:
+                # ----- Camera feeds (runs every iteration regardless of mode) -----
+                responses = client.simGetImages([
+                    airsim.ImageRequest("0", airsim.ImageType.Scene, False, False),  # Down
+                    airsim.ImageRequest("3", airsim.ImageType.Scene, False, False),  # Forward
+                ])
 
             # Downward camera (camera 0)
             if responses[0] and len(responses[0].image_data_uint8) > 0:
@@ -244,13 +245,21 @@ def drone_control_loop(state: DroneState, client, cfg: dict) -> None:
                     yaw_mode=airsim.YawMode(is_rate=False, yaw_or_rate=0),
                 )
 
-            # Consistent loop timing (~30 FPS)
-            time.sleep(0.03)
+                # Consistent loop timing (~30 FPS)
+                time.sleep(0.03)
+
+            except Exception as e:
+                print(f"[DRONE] Connection lost: {e.__class__.__name__}: {e}")
+                state.set_should_stop(True)
+                break
 
     finally:
         cv2.destroyAllWindows()
-        print("[DRONE] Landing...")
-        client.landAsync().join()
-        client.armDisarm(False)
-        client.enableApiControl(False)
+        try:
+            print("[DRONE] Landing...")
+            client.landAsync().join()
+            client.armDisarm(False)
+            client.enableApiControl(False)
+        except Exception as cleanup_err:
+            print(f"[DRONE] Cleanup failed (AirSim already disconnected?): {cleanup_err.__class__.__name__}")
         print("[DRONE] Shutdown complete")
