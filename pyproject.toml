@@ -48,6 +48,9 @@ airsim = [
     "airsim>=1.8.1",
     "keyboard>=0.13.5",
 ]
+mavlink = [
+    "pymavlink>=2.4.40",
+]
 
 [tool.ruff]
 line-length = 100

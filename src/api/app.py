@@ -23,7 +23,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.api import dependencies as deps
-from src.api.routes import drone, feeds, health, status, video, zones
+from src.api.routes import admin, drone, feeds, health, status, video, zones
 from src.core.config import get_config, get_feeds_config
 from src.hardware import create_camera_backend
 from src.services.feed_manager import FeedManager
@@ -153,6 +153,7 @@ def create_app() -> FastAPI:
     app.include_router(video.router)
     app.include_router(status.router)
     app.include_router(drone.router)
+    app.include_router(admin.router)
 
     return app
 

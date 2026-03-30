@@ -24,6 +24,7 @@ import numpy as np
 from src.core.models import Zone
 from src.core.zone_manager import ZoneManager
 from src.hardware.camera.base import CameraBackend
+from src.services.event_logger import log_event, AuditEventType
 
 
 # ---------------------------------------------------------------------------
@@ -176,6 +177,16 @@ class FeedManager:
         if feed is None:
             return
         with feed.lock:
+            # Log alarm transition (False → True)
+            if alarm_active and not feed.alarm_active:
+                log_event(
+                    AuditEventType.ALARM_FIRED,
+                    feed_id=feed_id,
+                    danger_count=danger_count,
+                    people_count=people_count,
+                    coordinates=target_coordinates,
+                )
+
             feed.alarm_active = alarm_active
             feed.caution_active = caution_active
             feed.people_count = people_count

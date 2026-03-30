@@ -106,3 +106,9 @@ def get_feeds_config() -> dict[str, Any]:
     if _feeds is None:
         _feeds = load_feeds_config()
     return _feeds
+
+
+def reset_feeds_config() -> None:
+    """Clear the feeds config cache so next call reloads from disk."""
+    global _feeds
+    _feeds = None

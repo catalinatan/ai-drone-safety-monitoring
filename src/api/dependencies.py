@@ -1,7 +1,7 @@
 """
 FastAPI dependency injection providers.
 
-Holds module-level singletons (FeedManager, config, trigger store) and
+Holds module-level singletons (FeedManager, config, trigger store, event logger) and
 exposes them as FastAPI `Depends()` callables so tests can override them.
 """
 
@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from src.services.feed_manager import FeedManager
+from src.services.event_logger import get_event_logger as _get_event_logger
 
 # ---------------------------------------------------------------------------
 # Trigger history (lives in app state, not in FeedManager)
@@ -105,3 +106,8 @@ def set_drone_api(api) -> None:
 def set_config(cfg: Dict[str, Any]) -> None:
     global _config
     _config = cfg
+
+
+def get_event_logger():
+    """Expose the event logger as a FastAPI dependency."""
+    return _get_event_logger()

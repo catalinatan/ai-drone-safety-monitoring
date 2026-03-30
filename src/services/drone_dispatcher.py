@@ -12,6 +12,8 @@ from __future__ import annotations
 import time
 from typing import Optional
 
+from src.services.event_logger import log_event, AuditEventType
+
 
 class DroneDispatcher:
     """
@@ -101,6 +103,12 @@ class DroneDispatcher:
             self._is_navigating = True
             self._first_auto_deployed = True
             print(f"[DroneDispatcher] First auto-deploy → ({x:.2f}, {y:.2f}, {z:.2f})")
+            log_event(
+                AuditEventType.DRONE_AUTO_DEPLOYED,
+                x=x,
+                y=y,
+                z=z,
+            )
         return success
 
     def manual_deploy(self, x: float, y: float, z: float) -> bool:
@@ -116,6 +124,12 @@ class DroneDispatcher:
             success = self._api.goto_position(x, y, z)
             if success:
                 self._is_navigating = True
+                log_event(
+                    AuditEventType.DRONE_MANUAL_DEPLOYED,
+                    x=x,
+                    y=y,
+                    z=z,
+                )
             return success
         except Exception as e:
             print(f"[DroneDispatcher] manual_deploy failed: {e}")
