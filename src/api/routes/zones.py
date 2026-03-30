@@ -75,21 +75,29 @@ def trigger_auto_segment(
             detail="No frame available yet",
         )
 
-    zone_dicts = segmenter.segment_frame(frame, state.scene_type)
-    if not zone_dicts:
+    try:
+        zone_dicts = segmenter.segment_frame(frame, state.scene_type)
+        if not zone_dicts:
+            return {
+                "status": "ok",
+                "zones_count": 0,
+                "message": "No zones detected",
+            }
+
+        # Convert dicts to Zone objects
+        zones = [Zone(**z) for z in zone_dicts]
+        fm.update_zones(feed_id, zones, frame.shape[1], frame.shape[0])
+        state.auto_seg_active = True
+        state.last_auto_seg_time = time.monotonic()
+        # Reset manual_zones_set so periodic auto-seg can resume
+        state.manual_zones_set = False
+
         return {
             "status": "ok",
-            "zones_count": 0,
-            "message": "No zones detected",
+            "zones_count": len(zones),
         }
-
-    # Convert dicts to Zone objects
-    zones = [Zone(**z) for z in zone_dicts]
-    fm.update_zones(feed_id, zones, frame.shape[1], frame.shape[0])
-    state.auto_seg_active = True
-    state.last_auto_seg_time = time.monotonic()
-
-    return {
-        "status": "ok",
-        "zones_count": len(zones),
-    }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Segmentation failed: {str(e)}",
+        )
