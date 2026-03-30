@@ -67,12 +67,14 @@ from src.backend.config import (
 # New YAML-based config — used by new modules; will fully replace above in Phase 5.
 from src.core.config import get_config as _get_config, get_feeds_config as _get_feeds_config
 
+# --- CORE MODULES ---
+from src.core.zone_manager import ZoneManager, check_overlap as check_danger_zone_overlap
+
 # --- DETECTION MODULES (optional — graceful fallback) ---
 # Human detection (YOLO) and depth estimation are imported separately so that
 # a failure in one does not disable the other.
 try:
     from src.human_detection.detector import HumanDetector
-    from src.human_detection.check_overlap import check_danger_zone_overlap
     import src.human_detection.config as config
     DETECTION_AVAILABLE = True
 except ImportError as e:
