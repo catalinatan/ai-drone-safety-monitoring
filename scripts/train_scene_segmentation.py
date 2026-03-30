@@ -2,7 +2,7 @@
 Train YOLO for scene-specific hazard zone segmentation.
 
 Supports three scene types: railway, ship, bridge. Each produces a model at:
-    runs/segment/{dataset}_hazard_{model}/weights/best.pt
+    models/scene_segmentation/{scene}/{scene}_hazard_{model}/weights/best.pt
 
 Usage:
     # Train railway hazard zone model (default: yolo11s-seg)
@@ -95,7 +95,7 @@ def train_model(
     Train YOLO for a specific scene type.
     Pass resume=True to continue from the last saved checkpoint.
     """
-    project_name = "runs/segment"
+    project_name = f"models/scene_segmentation/{dataset_type}"
     experiment_name = f"{dataset_type}_hazard_{model_name}"
     last_ckpt = Path(project_name) / experiment_name / "weights" / "last.pt"
 

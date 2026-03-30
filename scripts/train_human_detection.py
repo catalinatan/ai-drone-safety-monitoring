@@ -3,7 +3,7 @@ Fine-tune YOLO segmentation for human detection in water/aerial scenarios.
 Supports separate sim/real model variants and different base model sizes.
 
 Output weights are saved to:
-    runs/segment/human_detection_{variant}_{model}/weights/best.pt
+    models/human_detection/{model}/weights/best.pt
 
 Usage:
     # Train on combined dataset (default: yolo11n-seg, 100 epochs)
@@ -110,9 +110,8 @@ def train_model(
                 reduces overfitting with small datasets). Set to 0 for full training.
         logger: Logger instance.
     """
-    project_name = "runs/segment"
-    variant_suffix = f"_{variant}" if variant != "combined" else ""
-    experiment_name = f"human_detection{variant_suffix}_{model_name}"
+    project_name = "models/human_detection"
+    experiment_name = model_name
 
     logger.info("=" * 40)
     logger.info(f"HUMAN DETECTION FINE-TUNING [{variant.upper()}]")
