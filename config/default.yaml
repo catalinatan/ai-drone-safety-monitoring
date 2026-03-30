@@ -10,7 +10,7 @@ server:
 
 # Detection
 detection:
-  model_path: "models/human_detection/yolo11n-seg.pt"
+  model_path: "models/human_detection/yolo11s-seg/weights/best.pt"
   confidence_threshold: 0.25
   inference_imgsz: 1280
   fps: 30
@@ -30,9 +30,9 @@ auto_segmentation:
   simplify_epsilon: 2.0
   min_contour_area: 40.0
   models:
-    railway: "runs/segment/runs/segment/railway_hazard_yolo11s-seg/weights/best.pt"
-    ship: "runs/segment/runs/segment/ship_hazard_yolo11s-seg/weights/best.pt"
-    bridge: "runs/segment/runs/segment/bridge_hazard_yolo11s-seg/weights/best.pt"
+    railway: "models/scene_segmentation/railway/railway_hazard_yolo11s-seg/weights/best.pt"
+    ship: "models/scene_segmentation/ship/ship_hazard_yolo11s-seg/weights/best.pt"
+    bridge: "models/scene_segmentation/bridge/bridge_hazard_yolo11s-seg/weights/best.pt"
 
 # Depth Estimation
 depth_estimation:
