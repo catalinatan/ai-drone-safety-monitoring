@@ -20,6 +20,7 @@ class Zone(BaseModel):
     id: str
     level: str  # 'red' | 'yellow' | 'green'
     points: List[Point]
+    source: str = "manual"  # 'manual' | 'auto'
 
 
 class ZonesUpdateRequest(BaseModel):

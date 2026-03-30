@@ -138,11 +138,13 @@ def drone_control_loop(state: DroneState, client, cfg: dict) -> None:
                                 client.enableApiControl(True)
                                 client.armDisarm(True)
                                 client.takeoffAsync().join()
+                                client.hoverAsync().join()
                                 state.set_grounded(False)
                             else:
-                                client.enableApiControl(True)
-                                client.armDisarm(True)
-    
+                                # Already airborne — hover to stabilise before navigation.
+                                # Without this, moveToPositionAsync is ignored by AirSim.
+                                client.hoverAsync().join()
+
                             print(f"[AUTO] Navigating to ({target[0]:.1f}, {target[1]:.1f}, {target[2]:.1f}) "
                                   f"at {fly_speed:.0f} m/s")
                             task = client.moveToPositionAsync(

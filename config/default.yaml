@@ -56,6 +56,7 @@ follow_mode:
   hover_drones: false
   hover_altitude: -15.0
   follow_interval: 0.01
+  follow_speed: 5.0
   camera_mappings:
     Drone2: "CCTV1"
     Drone3: "CCTV2"

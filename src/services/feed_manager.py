@@ -39,8 +39,10 @@ class FeedState:
     location: str
     scene_type: Optional[str] = None
 
-    # Zone state
-    zones: List[Zone] = field(default_factory=list)
+    # Zone state — manual zones always take priority over auto-segmented zones
+    zones: List[Zone] = field(default_factory=list)          # effective zones (manual ▶ auto fallback)
+    manual_zones: List[Zone] = field(default_factory=list)   # set by user via UI
+    auto_zones: List[Zone] = field(default_factory=list)     # set by auto-segmentation
     zone_manager: ZoneManager = field(default_factory=ZoneManager)
 
     # Detection results
@@ -61,7 +63,6 @@ class FeedState:
 
     # Auto-segmentation
     auto_seg_active: bool = False
-    manual_zones_set: bool = False
     last_auto_seg_time: float = 0.0
 
     # Internal
@@ -210,16 +211,33 @@ class FeedManager:
         zones: List[Zone],
         image_width: int,
         image_height: int,
+        source: str = "manual",
     ) -> None:
         """
         Replace zones for a feed and regenerate binary masks.
+
+        Parameters
+        ----------
+        source : "manual" | "auto"
+            "manual" zones (set by the user) always take priority over "auto"
+            zones (produced by the scene segmenter).  When manual zones exist
+            the effective zone set used for detection is always the manual
+            ones; auto zones are only used as a fallback when no manual zones
+            have been defined.
         """
         feed = self._feeds.get(feed_id)
         if feed is None:
             raise ValueError(f"Feed {feed_id!r} not found")
         with feed.lock:
-            feed.zones = list(zones)
-            feed.zone_manager.update_zones(zones, image_width, image_height)
+            if source == "manual":
+                feed.manual_zones = list(zones)
+            else:
+                feed.auto_zones = list(zones)
+
+            # Effective zones: prefer manual when any are defined
+            effective = feed.manual_zones if feed.manual_zones else feed.auto_zones
+            feed.zones = effective
+            feed.zone_manager.update_zones(effective, image_width, image_height)
 
     def get_zones(self, feed_id: str) -> List[Zone]:
         feed = self._feeds.get(feed_id)

@@ -28,16 +28,13 @@ async def update_zones(
     if state is None:
         raise HTTPException(status_code=404, detail=f"Feed {feed_id!r} not found")
 
-    # Mark as manually edited so auto-seg won't overwrite
-    state.manual_zones_set = True
-
     frame = fm.get_frame(feed_id)
     if frame is not None:
-        fm.update_zones(feed_id, body.zones, frame.shape[1], frame.shape[0])
+        fm.update_zones(feed_id, body.zones, frame.shape[1], frame.shape[0], source="manual")
     else:
-        # No frame yet — store zones and defer mask generation until first frame
-        import threading
+        # No frame yet — store as manual zones and defer mask generation until first frame
         with state.lock:
+            state.manual_zones = list(body.zones)
             state.zones = list(body.zones)
             state._needs_mask_regen = True
 
@@ -84,17 +81,18 @@ def trigger_auto_segment(
                 "message": "No zones detected",
             }
 
-        # Convert dicts to Zone objects
+        # Convert dicts to Zone objects and store as auto zones.
+        # Manual zones (set by user) retain higher priority — auto zones are
+        # only used for detection when no manual zones exist.
         zones = [Zone(**z) for z in zone_dicts]
-        fm.update_zones(feed_id, zones, frame.shape[1], frame.shape[0])
+        fm.update_zones(feed_id, zones, frame.shape[1], frame.shape[0], source="auto")
         state.auto_seg_active = True
         state.last_auto_seg_time = time.monotonic()
-        # Reset manual_zones_set so periodic auto-seg can resume
-        state.manual_zones_set = False
 
         return {
             "status": "ok",
             "zones_count": len(zones),
+            "zones": [z.model_dump() for z in zones],
         }
     except Exception as e:
         raise HTTPException(

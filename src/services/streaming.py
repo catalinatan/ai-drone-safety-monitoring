@@ -6,7 +6,7 @@ No threading; these are pure transform functions used by the video route.
 
 from __future__ import annotations
 
-from typing import Iterator, Optional
+from typing import Iterator
 
 import cv2
 import numpy as np
@@ -40,32 +40,24 @@ def wrap_mjpeg_frame(jpeg_bytes: bytes) -> bytes:
 def render_overlay(
     frame: np.ndarray,
     person_masks: list[np.ndarray],
-    mask_overlay: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """
-    Compose the final display frame: base frame with optional mask overlay.
+    Build a colored overlay canvas from person masks.
 
     Parameters
     ----------
     frame : np.ndarray
-        Base BGR (or RGB) frame.
+        Base frame — used only for shape/dtype reference.
     person_masks : list
-        Raw binary person masks (used only if mask_overlay is None).
-    mask_overlay : np.ndarray or None
-        Pre-rendered RGB overlay (cyan silhouettes). If provided, composited
-        directly onto the frame — cheaper than re-rendering per request.
+        Raw binary (H, W) person masks. Each detected person is painted cyan.
 
     Returns
     -------
-    np.ndarray  BGR frame ready for JPEG encoding.
+    np.ndarray  RGB canvas (same H×W as frame, zeros where no mask).
+                Composited onto the live frame by the video route.
     """
-    display = frame.copy()
-
-    if mask_overlay is not None and np.any(mask_overlay):
-        # Blend pre-rendered overlay onto the frame
-        nonzero = mask_overlay.sum(axis=2) > 0
-        display[nonzero] = cv2.addWeighted(
-            display, 0.6, mask_overlay, 0.4, 0
-        )[nonzero]
-
-    return display
+    canvas = np.zeros_like(frame)
+    for mask in person_masks:
+        if mask is not None:
+            canvas[mask.astype(bool)] = [0, 255, 255]  # cyan
+    return canvas

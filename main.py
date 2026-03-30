@@ -7,6 +7,7 @@ Usage:
     python main.py --follow ship     # CCTV drones follow the ship object
     python main.py --hover           # CCTV drones take off and hover at altitude
     python main.py --no-mask         # disable human detection mask overlay on video feeds
+    python main.py --simulator       # use default yolo11n-seg model (no fine-tuning, for AirSim)
 
 Ctrl+C shuts down all processes cleanly.
 """
@@ -63,6 +64,7 @@ def main():
 
     no_mask = "--no-mask" in sys.argv
     hover = "--hover" in sys.argv
+    simulator = "--simulator" in sys.argv
 
     # Build env for subprocesses (pass flags to backend)
     env = os.environ.copy()
@@ -72,6 +74,8 @@ def main():
         env["CCTV_HOVER_DRONES"] = "1"
     if no_mask:
         env["DISABLE_MASK_OVERLAY"] = "1"
+    if simulator:
+        env["DETECTION_MODEL_PATH"] = "models/human_detection/yolo11n-seg.pt"
 
     # Launch Python services
     for name, svc in SERVICES.items():
@@ -88,6 +92,8 @@ def main():
         print(f"  [{'follow':8s}]  CCTV drones following '{follow_target}'")
     if hover:
         print(f"  [{'hover':8s}]  CCTV drones will hover at altitude")
+    if simulator:
+        print(f"  [{'model':8s}]  Human detection: yolo11n-seg (simulator, no fine-tuning)")
     print("=" * 60)
     print("  Press Ctrl+C to stop all services")
     print("=" * 60)

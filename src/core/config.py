@@ -64,6 +64,7 @@ def _apply_env_overrides(cfg: dict) -> dict:
         "CCTV_FOLLOW_TARGET":     (["follow_mode", "target"], str),
         "CCTV_HOVER_DRONES":      (["follow_mode", "hover_drones"], lambda v: v == "1"),
         "CCTV_HOVER_ALTITUDE":    (["follow_mode", "hover_altitude"], float),
+        "DETECTION_MODEL_PATH":   (["detection", "model_path"], str),
     }
     for env_key, (path, cast) in env_map.items():
         val = os.getenv(env_key)

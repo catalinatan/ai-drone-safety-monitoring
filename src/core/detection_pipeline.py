@@ -27,6 +27,7 @@ class DetectionResult:
     caution_active: bool = False   # YELLOW zone intrusion
     danger_count: int = 0          # People in RED zones
     caution_count: int = 0         # People in YELLOW zones
+    person_masks: List[np.ndarray] = field(default_factory=list)   # All detected people
     danger_masks: List[np.ndarray] = field(default_factory=list)
     caution_masks: List[np.ndarray] = field(default_factory=list)
     alarm_fired: bool = False      # True if alarm.trigger() returned True this cycle
@@ -89,16 +90,17 @@ class DetectionPipeline:
         if not warmed_up:
             return result
 
-        # No zones → nothing to check; skip expensive YOLO inference
-        if self._zone_manager.red_mask is None and self._zone_manager.yellow_mask is None:
-            return result
-
-        # --- Human detection ---
+        # --- Human detection (always run to get people count) ---
         person_masks = self._detector.get_masks(frame)
         result.people_count = len(person_masks)
+        result.person_masks = person_masks
 
         if not person_masks:
             self._alarm.clear()
+            return result
+
+        # No zone masks defined → people counted, but no zone checks needed
+        if self._zone_manager.red_mask is None and self._zone_manager.yellow_mask is None:
             return result
 
         # --- RED zone check (triggers alarm + drone dispatch) ---

@@ -14,6 +14,7 @@ Usage (development via main.py):
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -36,6 +37,9 @@ from src.services.feed_manager import FeedManager
 
 def _capture_loop(fm: FeedManager, cfg: Dict[str, Any]) -> None:
     """Continuously grab frames from all registered camera backends."""
+    import cv2
+    from datetime import datetime
+
     fps = cfg.get("streaming", {}).get("capture_fps", 30)
     interval = 1.0 / max(1, fps)
 
@@ -54,7 +58,13 @@ def _capture_loop(fm: FeedManager, cfg: Dict[str, Any]) -> None:
                 if hasattr(camera, "get_vehicle_position"):
                     position = camera.get_vehicle_position()
 
-                fm.store_frame(feed_id, frame, position=position)
+                # Encode JPEG for replay buffer (pre-refactor stored frames for replay)
+                _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                jpeg_bytes = buf.tobytes() if buf is not None else None
+                timestamp = datetime.utcnow().isoformat() + "Z"
+
+                fm.store_frame(feed_id, frame, position=position,
+                               jpeg_bytes=jpeg_bytes, timestamp=timestamp)
             except Exception as e:
                 print(f"[CAPTURE] {feed_id}: {e}")
         time.sleep(interval)
@@ -66,14 +76,38 @@ def _detection_loop(
     pipelines: Dict[str, Any],
     store: Any,
     depth_estimator: Any = None,
+    drone_api: Any = None,
 ) -> None:
     """Run human detection on every frame from all feeds."""
     from datetime import datetime
     from src.services.streaming import render_overlay
 
+    # Create a dedicated AirSim client for coordinate lookups (simGetCameraInfo).
+    # Using the camera's shared client from the lifespan context causes an
+    # "IOLoop is already running" error because that client was created inside
+    # uvicorn's asyncio loop. A client created here (in the background thread,
+    # outside asyncio) avoids the conflict — same pattern as the follow mode loop.
+    _depth_airsim_client = None
+    if depth_estimator is not None:
+        try:
+            import airsim as _airsim
+            _depth_airsim_client = _airsim.MultirotorClient()
+            _depth_airsim_client.confirmConnection()
+            print("[DETECTION] Dedicated AirSim client for depth coordinate lookup connected")
+        except Exception as _e:
+            print(f"[DETECTION] Could not create dedicated AirSim client: {_e} — will use camera position fallback")
+
     det_cfg = cfg.get("detection", {})
     fps = det_cfg.get("fps", 10)
     interval = 1.0 / max(1, fps)
+    cooldown = cfg.get("zones", {}).get("alarm_cooldown_seconds", 5.0)
+
+    # Drone navigation state — mirrors pre-refactor FeedManager.drone_is_navigating
+    nav = {
+        "is_navigating": False,
+        "last_deployment_time": 0.0,
+        "last_status_check": 0.0,
+    }
 
     def encode_frame_jpeg(frame):
         """Encode numpy array as JPEG bytes."""
@@ -91,18 +125,23 @@ def _detection_loop(
         """
         state = fm.get_state(feed_id)
         camera = fm.get_camera(feed_id)
+        safe_z = cfg.get("drone", {}).get("safe_altitude", -10.0)
+
+        def _fallback():
+            x, y, _ = state.position if state.position else (0.0, 0.0, 0.0)
+            return (x, y, safe_z)
 
         # Without depth estimator or camera that doesn't support AirSim, use camera position
         if not depth_estimator or not person_masks:
-            return state.position or (0.0, 0.0, -10.0)
+            return _fallback()
 
         # Only AirSim cameras can provide world coordinates
         if not hasattr(camera, "camera_name") or not hasattr(camera, "vehicle_name"):
-            return state.position or (0.0, 0.0, -10.0)
+            return _fallback()
 
         # If no AirSim client available, use camera position
         if not airsim_client:
-            return state.position or (0.0, 0.0, -10.0)
+            return _fallback()
 
         try:
             # Get depth map
@@ -112,7 +151,7 @@ def _detection_loop(
             person_mask = person_masks[0]
             y_indices, x_indices = person_mask.nonzero()
             if len(y_indices) == 0:
-                return state.position or (0.0, 0.0, -10.0)
+                return _fallback()
 
             center_x = float(np.mean(x_indices))
             center_y = float(np.mean(y_indices))
@@ -136,10 +175,14 @@ def _detection_loop(
                 cctv_height,
                 vehicle_name=vehicle_name,
             )
-            return (world_coord.x_val, world_coord.y_val, world_coord.z_val)
+            # Always use safe_altitude for z — pre-refactor always overrode z with
+            # SAFE_Z_ALTITUDE rather than the raw depth-estimated z (which can be
+            # positive / below-ground in AirSim NED coordinates)
+            safe_z = cfg.get("drone", {}).get("safe_altitude", -10.0)
+            return (world_coord.x_val, world_coord.y_val, safe_z)
         except Exception as e:
             print(f"[DETECTION] Depth estimation failed: {e}, using camera position")
-            return state.position or (0.0, 0.0, -10.0)
+            return _fallback()
 
     while getattr(fm, "_running", False):
         for feed_id in fm.feed_ids():
@@ -164,10 +207,10 @@ def _detection_loop(
             try:
                 result = pipeline.process_frame(frame)
 
-                # Render overlay if masks exist
-                all_masks = result.danger_masks + result.caution_masks
-                if all_masks:
-                    overlay = render_overlay(frame, all_masks)
+                # Render overlay for all detected people (unless --no-mask was passed)
+                disable_overlay = os.environ.get("DISABLE_MASK_OVERLAY") == "1"
+                if result.person_masks and not disable_overlay:
+                    overlay = render_overlay(frame, result.person_masks)
                 else:
                     overlay = None
 
@@ -182,24 +225,22 @@ def _detection_loop(
                     mask_overlay=overlay,
                 )
 
-                # If alarm fired, add to trigger store with 3D coordinates
+                # If alarm fired, record trigger and auto-deploy search drone
                 if result.alarm_fired:
                     snapshot_jpeg = encode_frame_jpeg(frame)
                     replay = list(state.replay_buffer)
                     trigger_idx = len(replay) - 1
 
-                    # Get AirSim client from camera if available
-                    camera = fm.get_camera(feed_id)
-                    airsim_client = getattr(camera, "client", None) if camera else None
-
-                    # Compute 3D coordinates using depth estimation
+                    # Compute 3D coordinates using depth estimation.
+                    # Use the dedicated AirSim client (created in this thread) to
+                    # avoid IOLoop conflicts with uvicorn's asyncio event loop.
                     coords = get_person_coords(
                         fm,
                         feed_id,
                         frame,
                         result.danger_masks,
                         depth_estimator,
-                        airsim_client,
+                        _depth_airsim_client,
                     )
 
                     event = deps.TriggerEvent(
@@ -213,8 +254,34 @@ def _detection_loop(
                     )
                     store.add(event)
 
+                    # Auto-deploy search drone (same as pre-refactor depth_worker_loop)
+                    if drone_api is not None and not nav["is_navigating"]:
+                        now = time.time()
+                        if now - nav["last_deployment_time"] > cooldown:
+                            tx, ty, tz = coords
+                            print(f"[DRONE] Auto-deploying to ({tx:.2f}, {ty:.2f}, {tz:.2f}) for {feed_id}")
+                            if drone_api.goto_position(tx, ty, tz):
+                                nav["last_deployment_time"] = now
+                                nav["is_navigating"] = True
+                                event.deployed = True
+                                print("[DRONE] Deployment command sent")
+                            else:
+                                print("[DRONE] Deployment command failed")
+
             except Exception as e:
                 print(f"[DETECTION] {feed_id}: {e}")
+
+        # Poll drone status once per second to detect navigation completion
+        now = time.time()
+        if nav["is_navigating"] and drone_api is not None and now - nav["last_status_check"] >= 1.0:
+            nav["last_status_check"] = now
+            try:
+                status = drone_api.get_status()
+                if status and not status.get("is_navigating", True):
+                    print("[DRONE] Drone reached target, mission complete")
+                    nav["is_navigating"] = False
+            except Exception as e:
+                print(f"[DRONE] Status check failed: {e}")
 
         time.sleep(interval)
 
@@ -224,47 +291,75 @@ def _auto_seg_loop(
     cfg: Dict[str, Any],
     segmenter: Any,
 ) -> None:
-    """Periodically auto-segment zones on every feed."""
+    """Periodically auto-segment zones on every feed.
+
+    Scene-type behaviour (matches pre-refactor auto_segmentation_loop):
+    - ship   : Re-segment every interval_seconds, always overwrite all zones
+               (ship deck changes as vessel moves — auto wins over manual).
+    - railway/bridge : Segment once on first available frame; afterwards
+               skip if user has saved manual zones.
+    """
     from src.core.models import Zone
 
     seg_cfg = cfg.get("auto_segmentation", {})
     interval_seconds = seg_cfg.get("interval_seconds", 60.0)
 
+    # Track which static-scene feeds have already had their initial segmentation
+    initial_seg_done: set = set()
+
+    # Wait for initial frames before starting
+    time.sleep(5.0)
+
     while getattr(fm, "_running", False):
         now = time.monotonic()
         for feed_id in fm.feed_ids():
             state = fm.get_state(feed_id)
-            if state is None:
+            if state is None or not state.scene_type:
                 continue
 
-            # Skip if user set zones manually
-            if state.manual_zones_set:
-                continue
+            if state.scene_type == "ship":
+                # Ship: always re-segment on interval, overwrite everything
+                last_seg_time = getattr(state, "last_auto_seg_time", 0)
+                if now - last_seg_time < interval_seconds:
+                    continue
 
-            # Skip if scene_type not configured
-            if not state.scene_type:
-                continue
+                frame = fm.get_frame(feed_id)
+                if frame is None:
+                    continue
 
-            # Skip if too soon since last auto-seg
-            last_seg_time = getattr(state, "last_auto_seg_time", 0)
-            if now - last_seg_time < interval_seconds:
-                continue
+                try:
+                    zone_dicts = segmenter.segment_frame(frame, state.scene_type)
+                    if zone_dicts:
+                        zones = [Zone(**z) for z in zone_dicts]
+                        # Clear manual zones so auto-seg always wins for ship
+                        with state.lock:
+                            state.manual_zones = []
+                        fm.update_zones(feed_id, zones, frame.shape[1], frame.shape[0], source="auto")
+                        state.auto_seg_active = True
+                        state.last_auto_seg_time = now
+                except Exception as e:
+                    print(f"[AUTO-SEG] {feed_id}: {e}")
 
-            # Get frame and segment
-            frame = fm.get_frame(feed_id)
-            if frame is None:
-                continue
+            else:
+                # Railway / Bridge: segment once initially; skip if manual zones exist
+                if feed_id in initial_seg_done or state.manual_zones:
+                    continue
 
-            try:
-                zone_dicts = segmenter.segment_frame(frame, state.scene_type)
-                if zone_dicts:
-                    # Convert dicts to Zone objects
-                    zones = [Zone(**z) for z in zone_dicts]
-                    fm.update_zones(feed_id, zones, frame.shape[1], frame.shape[0])
-                    state.auto_seg_active = True
-                    state.last_auto_seg_time = now
-            except Exception as e:
-                print(f"[AUTO-SEG] {feed_id}: {e}")
+                frame = fm.get_frame(feed_id)
+                if frame is None:
+                    continue
+
+                try:
+                    zone_dicts = segmenter.segment_frame(frame, state.scene_type)
+                    if zone_dicts:
+                        zones = [Zone(**z) for z in zone_dicts]
+                        fm.update_zones(feed_id, zones, frame.shape[1], frame.shape[0], source="auto")
+                        state.auto_seg_active = True
+                        state.last_auto_seg_time = now
+                        initial_seg_done.add(feed_id)
+                        print(f"[AUTO-SEG] Initial segmentation done for {feed_id} ({state.scene_type})")
+                except Exception as e:
+                    print(f"[AUTO-SEG] {feed_id}: {e}")
 
         time.sleep(5.0)  # Check every 5 seconds
 
@@ -274,8 +369,17 @@ def _follow_mode_loop(
     cfg: Dict[str, Any],
     drone_api,
 ) -> None:
-    """Follow a moving target (ship, railway, bridge) with drones."""
-    from src.services.follow_mode import FollowModeController
+    """Teleport CCTV drones to match Camera Actor positions in the UE scene.
+
+    Camera Actors (CCTV1-4) are placed in the Unreal Engine World Outliner
+    and move with the ship/target.  Each tick this loop reads each Camera
+    Actor's pose via simGetObjectPose() and teleports the corresponding drone
+    to that exact pose with simSetVehiclePose(), then zeroes its velocity so
+    the flight controller does not drift.
+
+    Only runs when follow_mode.target is non-empty (set via --follow <label>).
+    """
+    import math
 
     follow_cfg = cfg.get("follow_mode", {})
     target = follow_cfg.get("target", "")
@@ -283,54 +387,66 @@ def _follow_mode_loop(
         print("[FOLLOW] Follow mode disabled (no target configured)")
         return
 
-    hover_drones = follow_cfg.get("hover_drones", False)
-    hover_alt = follow_cfg.get("hover_altitude", -15.0)
+    # {vehicle_name: cam_actor_name} e.g. {"Drone2": "CCTV1", ...}
+    camera_mappings: dict = follow_cfg.get("camera_mappings", {})
+    if not camera_mappings:
+        print("[FOLLOW] No camera_mappings configured — follow mode skipped")
+        return
 
-    controller = FollowModeController(
-        target=target,
-        hover_altitude=hover_alt,
-        hover_drones=hover_drones,
-    )
-    print(f"[FOLLOW] Following '{target}' (hover_alt={hover_alt}m, hover={hover_drones})")
+    interval = follow_cfg.get("follow_interval", 0.01)
+
+    print(f"[FOLLOW] Following '{target}' — teleporting {list(camera_mappings.keys())} "
+          f"to Camera Actors {list(camera_mappings.values())} @ {interval:.3f}s interval")
+
+    # Dedicated AirSim client to avoid IOLoop conflicts with the capture thread
+    try:
+        import airsim
+        client = airsim.MultirotorClient()
+        client.confirmConnection()
+        print("[FOLLOW] Dedicated AirSim client connected")
+    except Exception as e:
+        print(f"[FOLLOW] Could not connect AirSim client: {e}")
+        return
+
+    # Arm and take off every CCTV drone, collecting futures so we can join all at once
+    takeoff_futures = []
+    for vehicle_name in camera_mappings:
+        try:
+            client.enableApiControl(True, vehicle_name=vehicle_name)
+            client.armDisarm(True, vehicle_name=vehicle_name)
+            future = client.takeoffAsync(vehicle_name=vehicle_name)
+            takeoff_futures.append((vehicle_name, future))
+            print(f"[FOLLOW] {vehicle_name} takeoff initiated")
+        except Exception as e:
+            print(f"[FOLLOW] {vehicle_name} arm/takeoff failed: {e}")
+
+    for vehicle_name, future in takeoff_futures:
+        try:
+            future.join()
+            print(f"[FOLLOW] {vehicle_name} takeoff complete")
+        except Exception as e:
+            print(f"[FOLLOW] {vehicle_name} takeoff join (may already be airborne): {e}")
+
+    print("[FOLLOW] All drones airborne — starting teleport loop")
 
     while getattr(fm, "_running", False):
-        if not drone_api:
-            time.sleep(1.0)
-            continue
-
-        # Get first feed (primary camera for target tracking)
-        feed_ids = fm.feed_ids()
-        if not feed_ids:
-            time.sleep(1.0)
-            continue
-
-        primary_feed = feed_ids[0]
-        frame = fm.get_frame(primary_feed)
-
-        if not controller.should_update() or frame is None:
-            time.sleep(0.1)
-            continue
-
         try:
-            # Get target position from frame
-            state = fm.get_state(primary_feed)
-            camera_height = 10.0  # Default, could be read from state
-            target_pos = controller.get_target_position(frame, camera_height=camera_height)
+            for vehicle_name, cam_actor_name in camera_mappings.items():
+                cam_pose = client.simGetObjectPose(cam_actor_name)
 
-            if target_pos:
-                waypoint = controller.compute_waypoint(target_pos)
-                # Send waypoint to drone
-                if drone_api:
-                    try:
-                        drone_api.goto_position(waypoint[0], waypoint[1], waypoint[2])
-                        print(f"[FOLLOW] Updated target position: {target_pos}")
-                    except Exception as e:
-                        print(f"[FOLLOW] Drone command failed: {e}")
+                if math.isnan(cam_pose.position.x_val):
+                    continue
+
+                # Teleport drone to the Camera Actor's exact pose
+                client.simSetVehiclePose(cam_pose, True, vehicle_name=vehicle_name)
+
+                # Zero out velocity so the flight controller doesn't fight back
+                client.moveByVelocityAsync(0, 0, 0, 0.1, vehicle_name=vehicle_name)
 
         except Exception as e:
             print(f"[FOLLOW] Error: {e}")
 
-        time.sleep(0.1)
+        time.sleep(interval)
 
 
 # ---------------------------------------------------------------------------
@@ -407,6 +523,28 @@ async def lifespan(app: FastAPI):
     else:
         print("[INIT] No cameras connected — running in limited mode (no AirSim)")
 
+    # Restore manually-saved zones from disk (without frame dimensions — masks
+    # are regenerated on first real frame via _needs_mask_regen flag)
+    try:
+        from src.core.models import Zone as _Zone
+        from src.services.zone_persistence import load_zones as _load_zones
+
+        zones_file = cfg.get("zones", {}).get("persistence_file", "data/zones.json")
+        persisted = _load_zones(zones_file)
+        for feed_id, zone_dicts in persisted.items():
+            state = fm.get_state(feed_id)
+            if state is None:
+                continue
+            zones = [_Zone(**z) for z in zone_dicts]
+            if zones:
+                with state.lock:
+                    state.manual_zones = zones
+                    state.zones = zones
+                    state._needs_mask_regen = True
+                print(f"[INIT] {feed_id}: restored {len(zones)} manual zone(s) from disk")
+    except Exception as e:
+        print(f"[INIT] Zone restore failed: {e}")
+
     # Connect to drone API
     try:
         from src.backend.drone_client import DroneAPIClient
@@ -482,7 +620,7 @@ async def lifespan(app: FastAPI):
     if pipelines:
         detection_thread = threading.Thread(
             target=_detection_loop,
-            args=(fm, cfg, pipelines, deps.get_trigger_store(), depth_estimator),
+            args=(fm, cfg, pipelines, deps.get_trigger_store(), depth_estimator, deps.get_drone_api()),
             daemon=True,
             name="detection",
         )

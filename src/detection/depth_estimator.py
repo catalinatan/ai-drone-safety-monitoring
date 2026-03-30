@@ -220,6 +220,10 @@ def run_lite_mono_inference(model: LiteMonoDepthSystem, img_rgb: np.ndarray) -> 
     img_tensor = torch.from_numpy(img_resized).float() / 255.0
     img_tensor = img_tensor.permute(2, 0, 1).unsqueeze(0)
 
+    # Move input to same device as model weights
+    device = next(model.parameters()).device
+    img_tensor = img_tensor.to(device)
+
     with torch.no_grad():
         pred_disp = model(img_tensor)
 

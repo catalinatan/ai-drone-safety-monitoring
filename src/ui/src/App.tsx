@@ -201,9 +201,13 @@ function App() {
       setFeeds((prev) =>
         prev.map((feed, i) => {
           const data = results[i];
-          if (data?.zones) {
+          if (data?.zones && Array.isArray(data.zones) && data.zones.length > 0) {
             totalZones += data.zones.length;
             return { ...feed, zones: data.zones };
+          }
+          if (data?.zones_count != null) {
+            // zones_count reported but no zone objects — count for reporting only
+            totalZones += data.zones_count;
           }
           return feed;
         })
