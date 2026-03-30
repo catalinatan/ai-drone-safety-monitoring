@@ -281,17 +281,30 @@ async def lifespan(app: FastAPI):
     deps.set_config(cfg)
 
     # Register feeds from feeds.yaml and attempt camera connections
+    # Retry logic for AirSim connections (may need time to start)
     connected_count = 0
     for feed_id, feed_def in feeds_cfg.items():
         camera_cfg = feed_def.get("camera", {})
+        camera = None
+
         try:
             camera = create_camera_backend(camera_cfg)
-            ok = camera.connect()
-            if ok:
-                connected_count += 1
+
+            # Retry up to 3 times with 1-second delays for AirSim connections
+            max_retries = 3 if camera_cfg.get("type") == "airsim" else 1
+            for attempt in range(max_retries):
+                ok = camera.connect()
+                if ok:
+                    connected_count += 1
+                    break
+                if attempt < max_retries - 1:
+                    time.sleep(1.0)
+
         except Exception as e:
             print(f"[INIT] {feed_id}: camera backend error — {e}")
-            # Use a stub (FileCamera with no path) so the feed exists in the API
+
+        # Use a stub if camera failed to connect
+        if camera is None or not camera.is_connected:
             from src.hardware.camera.file_camera import FileCamera
             camera = FileCamera("/dev/null")
 
