@@ -9,7 +9,7 @@ import os
 _variant_suffix = f"_{HUMAN_MODEL_VARIANT}" if HUMAN_MODEL_VARIANT != "combined" else ""
 _finetuned_path = f"runs/segment/runs/segment/human_detection{_variant_suffix}_{HUMAN_BASE_MODEL}/weights/best.pt"
 MODEL_PATH = "yolo11n-seg.pt"
-CONFIDENCE_THRESHOLD = 0.25    # Lowered from 0.5 for small/distant humans in water
+CONFIDENCE_THRESHOLD = 0.25     # Temporarily lowered to test bridge detection
 CLASS_ID_PERSON = 0            # YOLO specific ID for 'person'
 
 # Inference Settings
