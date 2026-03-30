@@ -75,6 +75,8 @@ _feed_manager: FeedManager = FeedManager()
 _trigger_store: TriggerStore = TriggerStore()
 _config: Dict[str, Any] = {}
 _drone_api = None      # DroneAPIClient or None
+_scene_segmenter = None  # SceneSegmenter or None
+_depth_estimator = None  # DepthEstimator or None
 
 
 def get_feed_manager() -> FeedManager:
@@ -111,3 +113,25 @@ def set_config(cfg: Dict[str, Any]) -> None:
 def get_event_logger():
     """Expose the event logger as a FastAPI dependency."""
     return _get_event_logger()
+
+
+def get_scene_segmenter():
+    """Get the shared SceneSegmenter instance (may be None if not loaded)."""
+    return _scene_segmenter
+
+
+def set_scene_segmenter(seg) -> None:
+    """Set the shared SceneSegmenter instance."""
+    global _scene_segmenter
+    _scene_segmenter = seg
+
+
+def get_depth_estimator():
+    """Get the shared DepthEstimator instance (may be None if not loaded)."""
+    return _depth_estimator
+
+
+def set_depth_estimator(estimator) -> None:
+    """Set the shared DepthEstimator instance."""
+    global _depth_estimator
+    _depth_estimator = estimator

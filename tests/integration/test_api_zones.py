@@ -48,8 +48,11 @@ def test_auto_segment_no_scene_type_returns_400(client):
     assert resp.status_code == 400
 
 
-def test_auto_segment_with_scene_type_returns_503(client, feed_manager_with_feeds):
-    """With scene_type set, the endpoint returns 503 (model unavailable)."""
+def test_auto_segment_with_scene_type_returns_200(client, feed_manager_with_feeds):
+    """With scene_type set and segmenter loaded, the endpoint returns 200."""
     feed_manager_with_feeds.get_state("cam-1").scene_type = "ship"
     resp = client.post("/feeds/cam-1/auto-segment")
-    assert resp.status_code == 503
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "status" in data
+    assert "zones_count" in data

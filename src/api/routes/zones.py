@@ -6,10 +6,12 @@ Zone routes:
 
 from __future__ import annotations
 
+import time
+
 from fastapi import APIRouter, Depends, HTTPException
 
-from src.api.dependencies import get_feed_manager
-from src.core.models import ZonesUpdateRequest
+from src.api.dependencies import get_feed_manager, get_scene_segmenter
+from src.core.models import Zone, ZonesUpdateRequest
 from src.services.feed_manager import FeedManager
 from src.services.zone_persistence import save_zones
 
@@ -52,6 +54,7 @@ async def update_zones(
 def trigger_auto_segment(
     feed_id: str,
     fm: FeedManager = Depends(get_feed_manager),
+    segmenter = Depends(get_scene_segmenter),
 ):
     state = fm.get_state(feed_id)
     if state is None:
@@ -59,9 +62,34 @@ def trigger_auto_segment(
     if not state.scene_type:
         raise HTTPException(status_code=400, detail=f"No scene type configured for {feed_id!r}")
 
-    # Auto-segmentation requires the scene segmenter — not available without model files.
-    # This endpoint is a hook; the actual segmentation runs when the segmenter is loaded.
-    raise HTTPException(
-        status_code=503,
-        detail="Auto-segmentation not available in this environment. Load scene models to enable.",
-    )
+    if segmenter is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Scene segmenter not loaded",
+        )
+
+    frame = fm.get_frame(feed_id)
+    if frame is None:
+        raise HTTPException(
+            status_code=503,
+            detail="No frame available yet",
+        )
+
+    zone_dicts = segmenter.segment_frame(frame, state.scene_type)
+    if not zone_dicts:
+        return {
+            "status": "ok",
+            "zones_count": 0,
+            "message": "No zones detected",
+        }
+
+    # Convert dicts to Zone objects
+    zones = [Zone(**z) for z in zone_dicts]
+    fm.update_zones(feed_id, zones, frame.shape[1], frame.shape[0])
+    state.auto_seg_active = True
+    state.last_auto_seg_time = time.monotonic()
+
+    return {
+        "status": "ok",
+        "zones_count": len(zones),
+    }
