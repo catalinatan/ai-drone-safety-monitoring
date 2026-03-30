@@ -18,12 +18,10 @@ WORKDIR /app
 # Upgrade pip and install build tools first (required for some packages)
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 
-# Install numpy first - required by airsim's broken setup.py which imports it during build
-RUN pip install --no-cache-dir numpy
-
 # Copy dependency files first for better layer caching
 COPY pyproject.toml .
 COPY src/ src/
+COPY config/ config/
 
 # Install Python dependencies (production only, no dev dependencies)
 RUN pip install --no-cache-dir -e .
@@ -32,9 +30,12 @@ RUN pip install --no-cache-dir -e .
 COPY main.py .
 COPY README.md .
 
-# Expose ports for backend and drone API
+# Create data directory for zones persistence
+RUN mkdir -p data
+
+# Expose ports for drone API and backend
 EXPOSE 8000 8001
 
 # Default command runs the backend server
 # For development with all services, override with: python main.py
-CMD ["python", "-m", "src.backend.server"]
+CMD ["python", "-m", "uvicorn", "src.api.app:app", "--host", "0.0.0.0", "--port", "8001"]

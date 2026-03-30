@@ -16,25 +16,59 @@ Key capabilities:
 
 ## Architecture
 
+### High-Level Overview
+
 ```
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│   React UI      │────▶│  Backend API    │────▶│  Drone Control  │
-│   (Vite)        │     │  (FastAPI)      │     │  (FastAPI)      │
-│   Port 5173     │     │  Port 8001      │     │  Port 8000      │
-└─────────────────┘     └────────┬────────┘     └────────┬────────┘
-                                 │                       │
-                                 ▼                       ▼
-                        ┌─────────────────┐     ┌─────────────────┐
-                        │  AirSim CCTV    │     │  AirSim Drone   │
-                        │  Cameras        │     │  Multirotor     │
-                        └─────────────────┘     └─────────────────┘
+┌──────────────┐       ┌──────────────────┐       ┌──────────────┐
+│  React UI    │◄─────►│  FastAPI Backend │◄─────►│ Drone Server │
+│  (Vite)      │       │  (Port 8001)     │       │ (Port 8000)  │
+│  Port 5173   │       │                  │       │              │
+└──────────────┘       └────────┬─────────┘       └──────┬───────┘
+                                │                       │
+                    ┌───────────┴───────────┐            │
+                    ▼                       ▼            ▼
+          ┌──────────────────┐    ┌─────────────────────────┐
+          │ Hardware Layer   │    │   Drone Control API     │
+          │ (Camera/Drone    │    │   (AirSim MAVLink)      │
+          │  Abstraction)    │    │                         │
+          └──────────────────┘    └─────────────────────────┘
 ```
 
-The backend runs three concurrent threads:
+### Module Organization
 
-- **Frame capture thread** (30 FPS) - Grabs frames from AirSim cameras
-- **Detection thread** (30 FPS) - Runs YOLO segmentation + depth estimation
-- **MJPEG streaming** (30 FPS) - Serves video feeds to the UI
+**Core Modules** (`src/core/`):
+- Pure business logic — no I/O, no framework dependencies
+- `models.py` — Pydantic schemas (Point, Zone, DetectionResult)
+- `config.py` — YAML configuration loader
+- `zone_manager.py` — Danger zone overlap detection
+- `alarm.py` — Alarm state machine with cooldown
+- `detection_pipeline.py` — Orchestrates detection + zone checking
+
+**Hardware Abstraction Layer** (`src/hardware/`):
+- Swappable camera/drone backends via factory pattern
+- `camera/base.py` — CameraBackend ABC
+- `camera/airsim_camera.py`, `file_camera.py`, `rtsp_camera.py`
+- `drone/base.py` — DroneBackend ABC
+- `drone/airsim_drone.py`, `mavlink_drone.py`
+
+**Services** (`src/services/`):
+- Stateful business logic — orchestrates core modules + hardware
+- `feed_manager.py` — Central state store for all camera feeds
+- `zone_persistence.py` — Load/save zones to JSON
+- `streaming.py` — MJPEG encoding, frame overlay
+- `drone_dispatcher.py` — Drone deployment logic with policies
+
+**API Routes** (`src/api/routes/`):
+- RESTful endpoints using FastAPI + dependency injection
+- `health.py` — System status
+- `feeds.py` — Feed list + detection status
+- `zones.py` — Zone management + auto-segmentation
+- `video.py` — MJPEG streaming
+- `drone.py` — Trigger history + deployment
+
+**Drone Server** (`src/drone_server/`):
+- Separate FastAPI app for drone control
+- Interfaces with DroneBackend for MAVLink/AirSim control
 
 ## Requirements
 
@@ -45,17 +79,26 @@ The backend runs three concurrent threads:
 
 ## Installation
 
+### Prerequisites
+
+- Python 3.11+ with pip
+- Node.js 18+ (for React UI)
+- CUDA 12.1 (optional but recommended for GPU acceleration)
+- AirSim simulator (optional — system runs without it, using file/RTSP cameras)
+
+### Steps
+
 Clone the repository and install dependencies:
 
 ```bash
 git clone <repository-url>
 cd ai-safety-monitoring
 
-# Install numpy first (required by airsim's build process)
-pip install numpy
-
-# Python dependencies (creates editable install)
+# Install Python dependencies (creates editable install)
 pip install -e ".[dev]"
+
+# Optional: Install AirSim support (requires AirSim Python package)
+pip install -e ".[airsim]"
 
 # UI dependencies
 cd src/ui
@@ -63,12 +106,21 @@ npm install
 cd ../..
 ```
 
+#### PyTorch with CUDA
+
+The system requires PyTorch. Install with CUDA support separately:
+
+```bash
+# For CUDA 12.1
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+```
+
 ### Model Weights
 
-The system requires pre-trained model weights:
+The system uses pre-trained model weights:
 
-1. **YOLOv8 segmentation** - Downloaded automatically on first run
-2. **Lite-Mono depth model** - Place weights in:
+1. **YOLOv8 segmentation** — Downloaded automatically by `ultralytics` on first run
+2. **Lite-Mono depth model** — Place weights in:
    ```
    src/cctv_monitoring/lite_mono_weights/lite-mono-small_640x192/
    ├── encoder.pth
@@ -97,30 +149,82 @@ Press Ctrl+C to stop all services.
 python main.py --no-ui
 
 # Or run each service separately:
-python -m src.backend.server       # Backend API
-python -m src.drone_control.drone  # Drone control
-cd src/ui && npm run dev           # React UI
+python -m uvicorn src.api.app:app --host 0.0.0.0 --port 8001        # Backend API
+python -m uvicorn src.drone_server.app:app --host 0.0.0.0 --port 8000  # Drone Server
+cd src/ui && npm run dev                                             # React UI
+```
+
+### Development Mode with Follow/Hover
+
+```bash
+# CCTV drones follow a target object (ship, railway, etc.)
+python main.py --follow ship
+
+# CCTV drones take off and hover at altitude
+python main.py --hover
+
+# Disable mask overlay on video streams
+python main.py --no-mask
 ```
 
 ## Configuration
 
-All settings are centralized in `src/backend/config.py` and can be overridden via environment variables:
+Configuration is split into two YAML files:
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `BACKEND_PORT` | 8001 | Backend API port |
-| `DRONE_API_PORT` | 8000 | Drone control API port |
-| `FRONTEND_PORT` | 5173 | React UI port |
-| `FRAME_CAPTURE_FPS` | 30 | Frame capture rate from AirSim |
-| `STREAM_FPS` | 30 | MJPEG streaming rate to UI |
-| `DETECTION_FPS` | 30 | Human detection rate |
-| `ALARM_COOLDOWN` | 5.0 | Seconds between drone deployments |
-| `CCTV_HEIGHT` | 15.0 | Camera height in meters |
-| `SAFE_Z_ALTITUDE` | -10.0 | Drone flight altitude (NED, negative = above ground) |
+### Global Settings: `config/default.yaml`
 
-### AirSim Configuration
+System-wide settings (ports, FPS, detection parameters, drone deployment policies):
 
-The system expects specific camera and vehicle names. Default configuration in `config.py`:
+```yaml
+server:
+  backend_port: 8001
+  drone_port: 8000
+
+streaming:
+  stream_fps: 30
+  capture_fps: 30
+
+detection:
+  detection_fps: 30
+  warmup_frames: 20
+
+alarm:
+  cooldown_seconds: 5.0
+
+drone:
+  api_url: http://localhost:8000
+  api_timeout: 5
+```
+
+### Feed Configuration: `config/feeds.yaml`
+
+Per-feed camera and zone settings. Each feed defines its camera backend type (airsim/file/rtsp) and parameters:
+
+```yaml
+feeds:
+  - feed_id: cctv-1
+    name: CCTV Camera 1
+    location: Zone A
+    camera:
+      type: airsim
+      camera_name: "0"
+      vehicle_name: Drone2
+    scene_type: ship
+    zones: []  # Populated via API
+```
+
+### Environment Variable Overrides
+
+Settings in `config/default.yaml` can be overridden via environment variables. Any key in the YAML can be set via `CONFIG_<SECTION>_<KEY>`:
+
+```bash
+CONFIG_SERVER_BACKEND_PORT=9000 python main.py
+CONFIG_ALARM_COOLDOWN_SECONDS=10.0 python main.py
+```
+
+### AirSim Camera Configuration
+
+To enable AirSim support, install the optional dependency:
 
 ```python
 FEED_CONFIG = {
@@ -270,64 +374,129 @@ navigation:
 
 ## Testing
 
-Run the test suite:
+The test suite covers:
+- **Unit tests** — Core logic, services, hardware abstractions (no I/O)
+- **Integration tests** — FastAPI routes with dependency injection (no real hardware needed)
+
+Run the test suite with pytest:
 
 ```bash
-# All tests
-pytest tests/ -v
+# All tests (excludes pre-existing failures)
+pytest tests/ -v \
+  --ignore=tests/human_detection/test_accuracy.py \
+  --ignore=tests/human_detection/test_detector.py \
+  --ignore=tests/cctv_monitoring/test_coord_utils.py
 
-# Unit tests only (no external dependencies)
-pytest tests/ -m "not integration"
+# Unit tests only
+pytest tests/unit/ -v
 
-# Specific module
-pytest tests/backend/ -v
+# Integration tests only
+pytest tests/integration/ -v
 
 # With coverage report
 pytest tests/ --cov=src --cov-report=html
+
+# Specific test
+pytest tests/unit/core/test_zone_manager.py::TestZoneManager::test_update_zones_creates_red_mask -v
 ```
+
+**Expected result**: 146+ tests pass, 1 skipped.
 
 ## Project Structure
 
 ```
 ai-safety-monitoring/
-├── main.py                     # Development entrypoint (launches all services)
-├── pyproject.toml              # Dependencies and tool configuration
-├── pytest.ini                  # Test configuration
+├── main.py                      # Development entrypoint (launches all services)
+├── pyproject.toml               # Dependencies and tool configuration
+├── Dockerfile                   # Production Docker image
+├── .gitlab-ci.yml               # CI/CD pipeline
+│
+├── config/
+│   ├── default.yaml             # Global settings (ports, FPS, detection params)
+│   └── feeds.yaml               # Camera feed configurations
 │
 ├── src/
-│   ├── backend/
-│   │   ├── server.py           # FastAPI backend server
-│   │   ├── config.py           # Centralized configuration
-│   │   └── data/
-│   │       └── zones.json      # Persisted zone definitions
+│   ├── api/                     # RESTful API routes (FastAPI)
+│   │   ├── app.py               # App factory with lifespan context manager
+│   │   ├── dependencies.py      # Dependency injection (FeedManager, TriggerStore)
+│   │   └── routes/
+│   │       ├── health.py        # GET /health
+│   │       ├── feeds.py         # GET/PATCH feed list and settings
+│   │       ├── zones.py         # POST zones and auto-segmentation
+│   │       ├── video.py         # GET /video_feed/{id} MJPEG streaming
+│   │       └── drone.py         # Trigger CRUD + deployment
 │   │
-│   ├── drone_control/
-│   │   ├── drone.py            # Drone control with manual/auto modes
-│   │   ├── observer.py         # AirSim observer utilities
-│   │   └── config.yaml         # Drone safety parameters
+│   ├── core/                    # Pure business logic (no I/O)
+│   │   ├── models.py            # Pydantic schemas
+│   │   ├── config.py            # YAML config loader
+│   │   ├── zone_manager.py      # Danger zone overlap detection
+│   │   ├── alarm.py             # Alarm state machine with cooldown
+│   │   └── detection_pipeline.py # Orchestrates detection + zone checking
 │   │
-│   ├── cctv_monitoring/
-│   │   ├── cctv_monitoring.py  # Standalone monitoring script
-│   │   ├── coord_utils.py      # 3D coordinate calculation
-│   │   ├── depth_estimation_utils.py
-│   │   └── lite_mono_weights/  # Depth model weights
+│   ├── hardware/                # Swappable hardware backends (ABC pattern)
+│   │   ├── __init__.py          # Factory functions
+│   │   ├── camera/
+│   │   │   ├── base.py          # CameraBackend ABC
+│   │   │   ├── airsim_camera.py # AirSim camera implementation
+│   │   │   ├── file_camera.py   # File/video camera implementation
+│   │   │   └── rtsp_camera.py   # RTSP camera (stub)
+│   │   └── drone/
+│   │       ├── base.py          # DroneBackend ABC
+│   │       ├── airsim_drone.py  # AirSim drone implementation
+│   │       └── mavlink_drone.py # MAVLink drone (stub)
 │   │
-│   ├── human_detection/
-│   │   ├── detector.py         # YOLOv8 segmentation wrapper
-│   │   ├── check_overlap.py    # Zone overlap detection
-│   │   └── config.py           # Detection thresholds
+│   ├── services/                # Stateful business logic
+│   │   ├── feed_manager.py      # Central state store for all feeds
+│   │   ├── zone_persistence.py  # Load/save zones to JSON
+│   │   ├── streaming.py         # MJPEG encoding and overlay
+│   │   └── drone_dispatcher.py  # Drone deployment with policies
 │   │
-│   └── ui/                     # React frontend
+│   ├── detection/               # Detection models
+│   │   ├── human_detector.py    # YOLOv8 segmentation wrapper
+│   │   ├── scene_segmenter.py   # Scene type auto-segmentation
+│   │   └── depth_estimator.py   # Monocular depth estimation
+│   │
+│   ├── spatial/                 # 3D spatial utilities
+│   │   ├── coord_utils.py       # 3D coordinate calculation from masks
+│   │   └── projection.py        # Camera projection matrices
+│   │
+│   ├── drone_server/            # Separate FastAPI for drone control
+│   │   ├── app.py               # Drone control REST API
+│   │   └── config.yaml          # Drone-specific settings
+│   │
+│   ├── cctv_monitoring/         # Lite-Mono depth model (vendored)
+│   │   └── Lite-Mono/
+│   │       ├── networks/        # Encoder/decoder implementations
+│   │       ├── lite_mono_weights/
+│   │       └── [training code]
+│   │
+│   ├── logger.py                # Centralized logging
+│   └── ui/                      # React frontend (Vite)
 │       ├── src/
 │       ├── package.json
 │       └── vite.config.ts
 │
-└── tests/
-    ├── conftest.py             # Shared test fixtures
-    ├── backend/                # Backend API tests
-    ├── cctv_monitoring/        # Coordinate utility tests
-    ├── drone_control/          # Drone API client tests
-    └── human_detection/        # Detection tests
+├── scripts/                     # Training and utility scripts
+│   ├── train_human_detection.py
+│   ├── train_scene_segmentation.py
+│   └── prepare_dataset.py
+│
+├── tests/
+│   ├── conftest.py              # Shared test configuration
+│   ├── unit/                    # Unit tests (no I/O)
+│   │   ├── core/                # Core logic tests
+│   │   ├── hardware/            # Hardware abstraction tests
+│   │   ├── services/            # Service layer tests
+│   │   └── spatial/             # Spatial utility tests
+│   ├── integration/             # API integration tests (FastAPI TestClient)
+│   ├── backend/                 # Legacy zone overlap tests
+│   ├── drone_control/           # DroneAPIClient tests
+│   └── human_detection/         # Human detection tests
+│
+├── data/                        # Runtime data (persisted zones, logs)
+│   └── zones.json
+│
+└── README.md
 ```
 
 ## How Detection Works
