@@ -45,7 +45,10 @@ class FileCamera(CameraBackend):
     def connect(self) -> bool:
         suffix = Path(self.path).suffix.lower()
         if suffix in {".jpg", ".jpeg", ".png", ".bmp"}:
-            self._still = cv2.imread(self.path)
+            try:
+                self._still = cv2.imread(self.path)
+            except Exception:
+                self._still = None
             if self._still is None:
                 return False
             self._is_image = True

@@ -21,7 +21,7 @@ REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
 UI_DIR = os.path.join(REPO_ROOT, "src", "ui")
 
 SERVICES = {
-    "drone":   {"cmd": [sys.executable, "-m", "src.drone_control.drone"],  "port": 8000},
+    "drone":   {"cmd": [sys.executable, "-m", "uvicorn", "src.drone_server.app:app", "--host", "0.0.0.0", "--port", "8000"], "port": 8000},
     "backend": {"cmd": [sys.executable, "-m", "src.backend.server"],       "port": 8001},
 }
 

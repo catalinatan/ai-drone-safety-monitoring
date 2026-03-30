@@ -3,7 +3,7 @@ import numpy as np
 import cv2
 import glob
 import os
-from src.human_detection.detector import HumanDetector
+from src.detection.human_detector import HumanDetector
 
 
 def calculate_iou(mask1, mask2):

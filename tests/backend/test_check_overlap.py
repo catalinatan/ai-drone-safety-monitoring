@@ -1,8 +1,7 @@
 """Unit tests for check_danger_zone_overlap — pure numpy, no models needed."""
 
 import numpy as np
-from src.human_detection.check_overlap import check_danger_zone_overlap
-from src.human_detection import config
+from src.core.zone_manager import check_overlap as check_danger_zone_overlap
 
 
 class TestCheckDangerZoneOverlap:

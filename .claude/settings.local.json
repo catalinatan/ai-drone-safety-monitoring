@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \":*)",
+      "Bash(\"c:/Users/Jia Yi PC/PycharmProjects/ai-safety-monitoring/src/human_detection/__init__.py\")",
+      "Bash(python -m pytest tests/unit/spatial/ tests/unit/detection/ tests/cctv_monitoring/ tests/backend/test_check_overlap.py tests/unit/core/test_zone_manager.py -x -q)",
+      "Bash(python -m pytest tests/integration/ -x -q)",
+      "Bash(python -m pytest tests/unit/ -x -q)",
+      "Bash(python -c \"import ast, sys; ast.parse\\(open\\(''src/drone_server/drone_state.py''\\).read\\(\\)\\); ast.parse\\(open\\(''src/drone_server/control_loop.py''\\).read\\(\\)\\); ast.parse\\(open\\(''src/drone_server/app.py''\\).read\\(\\)\\); print\\(''All files parse OK''\\)\")",
+      "Bash(python -m pytest tests/unit/ -q --tb=short)",
+      "Bash(python -m pytest tests/integration/ -q --tb=short)",
+      "Bash(mkdir -p models/human_detection models/scene_segmentation/railway models/scene_segmentation/ship models/scene_segmentation/bridge models/depth_estimation/lite-mono-small_640x192)",
+      "Bash(touch models/human_detection/.gitkeep models/scene_segmentation/railway/.gitkeep models/scene_segmentation/ship/.gitkeep models/scene_segmentation/bridge/.gitkeep models/depth_estimation/lite-mono-small_640x192/.gitkeep)",
+      "Bash(rm -rf src/scene_segmentation)",
+      "Bash(rm -rf src/drone_control)"
+    ]
+  }
+}

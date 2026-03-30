@@ -3,26 +3,26 @@ Fine-tune YOLO segmentation for human detection in water/aerial scenarios.
 Supports separate sim/real model variants and different base model sizes.
 
 Output weights are saved to:
-    runs/segment/runs/segment/human_detection_{variant}_{model}/weights/best.pt
+    runs/segment/human_detection_{variant}_{model}/weights/best.pt
 
 Usage:
     # Train on combined dataset (default: yolo11n-seg, 100 epochs)
-    python -m src.human_detection.train --epochs 100
+    python scripts/train_human_detection.py --epochs 100
 
     # Train sim-only variant with yolo11n
-    python -m src.human_detection.train --variant sim --epochs 100
+    python scripts/train_human_detection.py --variant sim --epochs 100
 
     # Train sim-only variant with yolo11s (heavier, more accurate)
-    python -m src.human_detection.train --variant sim --model yolo11s-seg --epochs 100
+    python scripts/train_human_detection.py --variant sim --model yolo11s-seg --epochs 100
 
     # Train real-only variant
-    python -m src.human_detection.train --variant real --epochs 100
+    python scripts/train_human_detection.py --variant real --epochs 100
 
     # Custom dataset path (overrides the variant's default dataset)
-    python -m src.human_detection.train --variant sim --dataset data/human_dataset_sim --epochs 100
+    python scripts/train_human_detection.py --variant sim --dataset data/human_dataset_sim --epochs 100
 
     # Full control over training
-    python -m src.human_detection.train --variant sim --model yolo11s-seg --epochs 200 --patience 30 --freeze 0
+    python scripts/train_human_detection.py --variant sim --model yolo11s-seg --epochs 200 --patience 30 --freeze 0
 
 Args:
     --variant       sim | real | combined (default: combined)
@@ -55,7 +55,6 @@ DATASET_CONFIG = {
     "nc": 1,
     "names": ["person"],
 }
-
 
 
 def prepare_dataset_yaml(dataset_path, logger):
@@ -112,7 +111,6 @@ def train_model(
         logger: Logger instance.
     """
     project_name = "runs/segment"
-    # e.g. human_detection_sim_yolo11n-seg, human_detection_real_yolo11s-seg
     variant_suffix = f"_{variant}" if variant != "combined" else ""
     experiment_name = f"human_detection{variant_suffix}_{model_name}"
 
@@ -150,14 +148,11 @@ def train_model(
             exist_ok=True,
             verbose=True,
 
-            amp=True,             # Mixed precision (FP16) — halves GPU memory for activations
-            cache=True,           # Cache images in RAM — faster epochs, no repeated disk I/O
+            amp=True,
+            cache=True,
 
-            # Backbone freezing (critical for small datasets)
             freeze=freeze,
 
-            # Minimal augmentation — pretrained backbone already handles variation;
-            # only horizontal flip to double effective data without distortion
             augment=True,
             fliplr=0.5,
             flipud=0.0,
@@ -175,9 +170,6 @@ def train_model(
         logger.info("Training complete!")
         best_weights = f"{project_name}/{experiment_name}/weights/best.pt"
         logger.info(f"Best Weights: {best_weights}")
-        logger.info("")
-        logger.info("To use the fine-tuned model, update src/human_detection/config.py:")
-        logger.info(f'  MODEL_PATH = "{best_weights}"')
 
         return results
 
@@ -193,24 +185,16 @@ if __name__ == "__main__":
                         help="Model variant: sim, real, or combined (default: combined)")
     parser.add_argument("--dataset", type=str, default=None,
                         help="Override dataset path (default: auto from variant)")
-    parser.add_argument("--epochs", type=int, default=100,
-                        help="Number of training epochs")
-    parser.add_argument("--imgsz", type=int, default=1280,
-                        help="Training image size (default: 1280)")
-    parser.add_argument("--model", type=str, default="yolo11n-seg",
-                        help="Base model: yolo11n-seg, yolov8l-seg, or yolov8x-seg")
-    parser.add_argument("--freeze", type=int, default=10,
-                        help="Number of backbone layers to freeze (0=train all, 10=freeze backbone)")
-    parser.add_argument("--device", type=str, default="0",
-                        help="Device: 0 (GPU), cpu, or mps")
-    parser.add_argument("--patience", type=int, default=20,
-                        help="Early stopping patience")
+    parser.add_argument("--epochs", type=int, default=100)
+    parser.add_argument("--imgsz", type=int, default=1280)
+    parser.add_argument("--model", type=str, default="yolo11n-seg")
+    parser.add_argument("--freeze", type=int, default=10)
+    parser.add_argument("--device", type=str, default="0")
+    parser.add_argument("--patience", type=int, default=20)
 
     args = parser.parse_args()
 
-    # Resolve dataset path from variant or explicit override
     dataset_path = args.dataset or VARIANT_DATASETS[args.variant]
-
     logger = get_logger(__name__, log_prefix="human_detection_train")
 
     try:

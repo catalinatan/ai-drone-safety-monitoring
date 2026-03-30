@@ -103,9 +103,8 @@ async def lifespan(app: FastAPI):
 
     # Connect to drone API
     try:
-        from src.backend.config import DRONE_API_URL, DRONE_API_TIMEOUT
         from src.backend.drone_client import DroneAPIClient
-        drone_api = DroneAPIClient(DRONE_API_URL, DRONE_API_TIMEOUT)
+        drone_api = DroneAPIClient()  # reads url/timeout from config/default.yaml
         if drone_api.check_connection():
             deps.set_drone_api(drone_api)
             print("[INIT] Drone API connected")

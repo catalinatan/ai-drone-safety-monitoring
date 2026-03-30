@@ -1,7 +1,7 @@
 """Unit tests for coord_utils.get_feet_from_mask — pure numpy, no AirSim needed."""
 
 import numpy as np
-from src.cctv_monitoring.coord_utils import get_feet_from_mask
+from src.spatial.coord_utils import get_feet_from_mask
 
 
 class TestGetFeetFromMask:

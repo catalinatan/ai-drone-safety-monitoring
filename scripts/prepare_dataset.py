@@ -17,13 +17,13 @@ Works with any dataset — auto-detects class info from an existing data.yaml
 
 Usage:
     # Prepare human dataset (auto-detects classes from existing data.yaml)
-    python -m src.prepare_dataset --dataset data/human_dataset
+    python scripts/prepare_dataset.py --dataset data/human_dataset
 
     # Prepare with custom val split ratio
-    python -m src.prepare_dataset --dataset data/bridge_dataset --val-split 0.2
+    python scripts/prepare_dataset.py --dataset data/bridge_dataset --val-split 0.2
 
     # Prepare with explicit class info (overrides data.yaml)
-    python -m src.prepare_dataset --dataset data/my_dataset --nc 3 --names "cat,dog,bird"
+    python scripts/prepare_dataset.py --dataset data/my_dataset --nc 3 --names "cat,dog,bird"
 
 Args:
     --dataset       Path to the dataset directory (required)
@@ -69,7 +69,6 @@ def prepare_dataset(dataset_dir, val_split=0.2, seed=42, nc=None, names=None):
         class_nc = nc
         class_names = names
     else:
-        # Try reading existing data.yaml (Roboflow exports include one)
         existing_yaml = dataset_path / "data.yaml"
         if existing_yaml.exists():
             with open(existing_yaml) as f:
@@ -80,9 +79,9 @@ def prepare_dataset(dataset_dir, val_split=0.2, seed=42, nc=None, names=None):
         else:
             class_nc = 1
             class_names = ["object"]
-            print(f"Warning: No data.yaml found and no --nc/--names provided. Using defaults: nc={class_nc}, names={class_names}")
+            print(f"Warning: No data.yaml found. Using defaults: nc={class_nc}, names={class_names}")
 
-    # Collect image files with matching labels (from flat directory)
+    # Collect image files with matching labels
     image_files = sorted(list(images_path.glob("*.jpg")) + list(images_path.glob("*.png")))
 
     paired = []
@@ -139,17 +138,12 @@ def prepare_dataset(dataset_dir, val_split=0.2, seed=42, nc=None, names=None):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Split Roboflow export into YOLO train/val format")
-    parser.add_argument("--dataset", type=str, default="data/human_dataset",
-                        help="Path to the dataset directory with images/ and labels/")
-    parser.add_argument("--val-split", type=float, default=0.2,
-                        help="Fraction of data to use for validation (default: 0.2)")
-    parser.add_argument("--nc", type=int, default=None,
-                        help="Number of classes (auto-detected from data.yaml if not provided)")
+    parser.add_argument("--dataset", type=str, default="data/human_dataset")
+    parser.add_argument("--val-split", type=float, default=0.2)
+    parser.add_argument("--nc", type=int, default=None)
     parser.add_argument("--names", type=str, default=None,
                         help="Comma-separated class names (e.g. 'person' or 'cat,dog,bird')")
     args = parser.parse_args()
 
-    # Parse comma-separated names if provided
     parsed_names = args.names.split(",") if args.names else None
-
     prepare_dataset(args.dataset, args.val_split, nc=args.nc, names=parsed_names)

@@ -8,15 +8,29 @@ from __future__ import annotations
 
 import requests
 
-from src.backend.config import DRONE_API_URL, DRONE_API_TIMEOUT
+
+def _default_drone_url() -> str:
+    try:
+        from src.core.config import get_config
+        return get_config().get("drone", {}).get("api_url", "http://localhost:8000")
+    except Exception:
+        return "http://localhost:8000"
+
+
+def _default_drone_timeout() -> int:
+    try:
+        from src.core.config import get_config
+        return int(get_config().get("drone", {}).get("api_timeout", 5))
+    except Exception:
+        return 5
 
 
 class DroneAPIClient:
     """Client for communicating with the drone control REST API."""
 
-    def __init__(self, base_url: str = DRONE_API_URL, timeout: int = DRONE_API_TIMEOUT):
-        self.base_url = base_url
-        self.timeout = timeout
+    def __init__(self, base_url: str = None, timeout: int = None):
+        self.base_url = base_url if base_url is not None else _default_drone_url()
+        self.timeout = timeout if timeout is not None else _default_drone_timeout()
 
     def check_connection(self) -> bool:
         """Return True if the drone API is reachable."""
