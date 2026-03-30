@@ -76,24 +76,37 @@ def test_get_config_feeds_returns_feeds(client):
 
 def test_put_config_feeds_writes_yaml(client, tmp_path):
     """PUT /config/feeds writes to feeds.yaml."""
-    # This test is a bit tricky because we need to mock the file write
-    # For now, just test that the endpoint accepts the request
-    feeds_payload = {
-        "feeds": {
-            "test-cam": {
-                "name": "Test Camera",
-                "location": "Test Location",
-                "scene_type": "ship",
-                "camera": {
-                    "type": "file",
-                    "params": {"path": "/tmp/test.mp4"},
-                },
+    import shutil
+    from pathlib import Path
+
+    # Backup original feeds.yaml before modifying
+    feeds_file = Path("config/feeds.yaml")
+    backup_file = tmp_path / "feeds.yaml.backup"
+    if feeds_file.exists():
+        shutil.copy(feeds_file, backup_file)
+
+    try:
+        # Test that the endpoint accepts the request
+        feeds_payload = {
+            "feeds": {
+                "test-cam": {
+                    "name": "Test Camera",
+                    "location": "Test Location",
+                    "scene_type": "ship",
+                    "camera": {
+                        "type": "file",
+                        "params": {"path": "/tmp/test.mp4"},
+                    },
+                }
             }
         }
-    }
-    resp = client.put("/config/feeds", json=feeds_payload)
-    # May succeed or fail depending on permissions, but should be a valid response
-    assert resp.status_code in [200, 500]
+        resp = client.put("/config/feeds", json=feeds_payload)
+        # May succeed or fail depending on permissions, but should be a valid response
+        assert resp.status_code in [200, 500]
+    finally:
+        # Restore original feeds.yaml
+        if backup_file.exists():
+            shutil.copy(backup_file, feeds_file)
 
 
 def test_get_events_returns_list(client):

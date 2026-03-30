@@ -311,13 +311,21 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             print(f"[INIT] {feed_id}: camera backend error — {e}")
 
-        # Raise exception instead of using stub - force real diagnosis
+        # If camera failed, use stub for now and log warning
         if camera is None or not camera.is_connected:
-            raise RuntimeError(
-                f"[INIT] Camera {feed_id} failed to connect to AirSim. "
-                f"Make sure AirSim is running and accessible. "
-                f"Check the detailed error messages above."
-            )
+            try:
+                import airsim
+                # airsim is installed but connection failed - this is a real problem
+                raise RuntimeError(
+                    f"[INIT] Camera {feed_id} failed to connect to AirSim. "
+                    f"Make sure AirSim is running and accessible. "
+                    f"Check the detailed error messages above."
+                )
+            except ImportError:
+                # airsim not installed - ok to use stub (tests or non-AirSim deployment)
+                print(f"[INIT] {feed_id}: Using stub camera (airsim not installed)")
+                from src.hardware.camera.file_camera import FileCamera
+                camera = FileCamera("/dev/null")
 
         fm.register_feed(
             feed_id=feed_id,
