@@ -290,23 +290,34 @@ async def lifespan(app: FastAPI):
         try:
             camera = create_camera_backend(camera_cfg)
 
-            # Retry up to 3 times with 1-second delays for AirSim connections
-            max_retries = 3 if camera_cfg.get("type") == "airsim" else 1
+            # Retry AirSim connections more aggressively
+            is_airsim = camera_cfg.get("type") == "airsim"
+            max_retries = 5 if is_airsim else 1
+            retry_delay = 2.0 if is_airsim else 0.5
+
             for attempt in range(max_retries):
+                print(f"[INIT] {feed_id}: connection attempt {attempt + 1}/{max_retries}...")
                 ok = camera.connect()
                 if ok:
                     connected_count += 1
+                    print(f"[INIT] {feed_id}: ✓ connected")
                     break
                 if attempt < max_retries - 1:
-                    time.sleep(1.0)
+                    print(f"[INIT] {feed_id}: waiting {retry_delay}s before retry...")
+                    time.sleep(retry_delay)
+                else:
+                    print(f"[INIT] {feed_id}: ✗ failed after {max_retries} attempts")
 
         except Exception as e:
             print(f"[INIT] {feed_id}: camera backend error — {e}")
 
-        # Use a stub if camera failed to connect
+        # Raise exception instead of using stub - force real diagnosis
         if camera is None or not camera.is_connected:
-            from src.hardware.camera.file_camera import FileCamera
-            camera = FileCamera("/dev/null")
+            raise RuntimeError(
+                f"[INIT] Camera {feed_id} failed to connect to AirSim. "
+                f"Make sure AirSim is running and accessible. "
+                f"Check the detailed error messages above."
+            )
 
         fm.register_feed(
             feed_id=feed_id,

@@ -33,11 +33,18 @@ class AirSimCamera(CameraBackend):
     def connect(self) -> bool:
         try:
             import airsim
+            print(f"[AirSimCamera {self.vehicle_name}] Attempting to connect...")
             self._client = airsim.MultirotorClient()
+            print(f"[AirSimCamera {self.vehicle_name}] Client created, confirming connection...")
             self._client.confirmConnection()
+            print(f"[AirSimCamera {self.vehicle_name}] Connected successfully")
             return True
         except Exception as e:
-            print(f"[AirSimCamera] Connection failed: {e}")
+            import traceback
+            print(f"[AirSimCamera {self.vehicle_name}] Connection failed:")
+            print(f"  Error: {e}")
+            print(f"  Type: {type(e).__name__}")
+            traceback.print_exc()
             self._client = None
             return False
 
