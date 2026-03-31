@@ -22,6 +22,28 @@ function ringToPoints(ring: [number, number][]): Point[] {
   return ring.map(([x, y]) => ({ x, y }));
 }
 
+// Bridge a hole into an outer ring, producing a single simple polygon.
+// Finds the closest point pair and inserts the hole via a thin slit.
+function bridgeHole(outer: [number, number][], hole: [number, number][]): [number, number][] {
+  let minDist = Infinity;
+  let oIdx = 0;
+  let hIdx = 0;
+  for (let i = 0; i < outer.length; i++) {
+    for (let j = 0; j < hole.length; j++) {
+      const dx = outer[i][0] - hole[j][0];
+      const dy = outer[i][1] - hole[j][1];
+      const d = dx * dx + dy * dy;
+      if (d < minDist) { minDist = d; oIdx = i; hIdx = j; }
+    }
+  }
+  return [
+    ...outer.slice(0, oIdx + 1),
+    ...hole.slice(hIdx),
+    ...hole.slice(0, hIdx + 1),
+    ...outer.slice(oIdx),
+  ];
+}
+
 export function EditFeedPage({ feed, onSave, onCancel }: EditFeedPageProps) {
   const [zones, setZones] = useState<Zone[]>(feed.zones);
   const [activeTool, setActiveTool] = useState<ToolType>(null);
@@ -99,13 +121,19 @@ export function EditFeedPage({ feed, onSave, onCancel }: EditFeedPageProps) {
         setZones(zones.filter((_, i) => i !== targetIdx));
         return;
       }
-      // Replace target with result polygon(s)
-      const replacements: Zone[] = result.map((poly, i) => ({
-        id: i === 0 ? target.id : `zone-cut-${Date.now()}-${i}`,
-        level: target.level,
-        points: ringToPoints(poly[0]),
-        source: target.source,
-      }));
+      // Replace target with result polygon(s), bridging any holes into simple polygons
+      const replacements: Zone[] = result.map((poly, i) => {
+        let ring = poly[0];
+        for (let h = 1; h < poly.length; h++) {
+          ring = bridgeHole(ring, poly[h]);
+        }
+        return {
+          id: i === 0 ? target.id : `zone-cut-${Date.now()}-${i}`,
+          level: target.level,
+          points: ringToPoints(ring),
+          source: target.source,
+        };
+      });
       const updated = [...zones];
       updated.splice(targetIdx, 1, ...replacements);
       setZones(updated);

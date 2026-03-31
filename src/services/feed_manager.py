@@ -231,6 +231,9 @@ class FeedManager:
         with feed.lock:
             if source == "manual":
                 feed.manual_zones = list(zones)
+                # User has taken explicit ownership — clear auto zones to
+                # prevent stacking (old auto + saved-as-manual duplicates).
+                feed.auto_zones = []
             else:
                 feed.auto_zones = list(zones)
 

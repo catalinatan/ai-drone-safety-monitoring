@@ -84,7 +84,7 @@ def trigger_auto_segment(
         # Convert dicts to Zone objects and store as auto zones.
         # Manual zones (set by user) retain higher priority — auto zones are
         # only used for detection when no manual zones exist.
-        zones = [Zone(**z) for z in zone_dicts]
+        zones = [Zone(**{**z, "source": "auto"}) for z in zone_dicts]
         fm.update_zones(feed_id, zones, frame.shape[1], frame.shape[0], source="auto")
         state.auto_seg_active = True
         state.last_auto_seg_time = time.monotonic()
