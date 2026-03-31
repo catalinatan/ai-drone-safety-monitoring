@@ -101,22 +101,52 @@ class HumanDetector:
         else:
             print("[HumanDetector] Running on CPU")
 
+        self._warmup()
+
+    def _warmup(self) -> None:
+        """Run dummy inference to trigger CUDA kernel compilation / TensorRT plan selection.
+
+        Without this, the first real inference is significantly slower
+        (500ms–2s extra) due to JIT compilation and memory allocation.
+        """
+        if not torch.cuda.is_available():
+            return
+        print("[HumanDetector] CUDA warmup inference...")
+        dummy = np.zeros((480, 640, 3), dtype=np.uint8)
+        self.model(dummy, conf=self._confidence, imgsz=self._imgsz,
+                   verbose=False, half=self._use_half, save=False)
+        print("[HumanDetector] Warmup complete")
+
     def _extract_person_masks(
         self, result, frame_shape: tuple
     ) -> List[np.ndarray]:
-        """Extract binary person masks from a single YOLO result."""
-        extracted: List[np.ndarray] = []
+        """Extract binary person masks from a single YOLO result.
+
+        Optimised: filters on GPU, batch-resizes with F.interpolate (GPU),
+        thresholds on GPU, then does a single CPU transfer.
+        """
+        if result.masks is None or len(result.boxes) == 0:
+            return []
+
         h, w = frame_shape[:2]
 
-        if result.masks is not None:
-            for i, box in enumerate(result.boxes):
-                if int(box.cls[0]) == CLASS_ID_PERSON:
-                    mask_raw = result.masks.data[i].cpu().numpy()
-                    mask_resized = cv2.resize(mask_raw, (w, h))
-                    mask_binary = (mask_resized > 0.5).astype(np.uint8)
-                    extracted.append(mask_binary)
+        # Filter person indices on GPU (avoids per-mask CPU roundtrips)
+        person_idx = [i for i, box in enumerate(result.boxes)
+                      if int(box.cls[0]) == CLASS_ID_PERSON]
+        if not person_idx:
+            return []
 
-        return extracted
+        import torch.nn.functional as F
+
+        masks_tensor = result.masks.data[person_idx].float()       # (N, mh, mw) GPU, ensure float
+        masks_resized = F.interpolate(
+            masks_tensor.unsqueeze(1),                             # (N, 1, mh, mw)
+            size=(h, w),
+            mode="bilinear",
+            align_corners=False,
+        ).squeeze(1)                                               # (N, h, w)
+        masks_np = (masks_resized > 0.5).byte().cpu().numpy()     # single transfer
+        return [masks_np[i] for i in range(masks_np.shape[0])]
 
     def get_masks(self, frame: np.ndarray) -> List[np.ndarray]:
         """

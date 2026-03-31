@@ -208,21 +208,24 @@ def drone_control_loop(state: DroneState, client, cfg: dict) -> None:
                                 print("[AUTO] Arrived at target position")
                                 state.clear_target()
                                 if is_rth:
-                                    # RTH complete — land and disarm
+                                    # RTH complete — land, disarm, switch to automatic
+                                    # so backend detects grounded+automatic → re-enables auto-deploy
                                     state.set_returning_home(False)
                                     client.hoverAsync(**vn_kw).join()
                                     client.landAsync(**vn_kw).join()
                                     client.armDisarm(False, **vn_kw)
                                     client.enableApiControl(False, **vn_kw)
                                     state.set_grounded(True)
+                                    state.set_mode("automatic")
                                     state.mark_idle_hover_sent()
-                                    print("[AUTO] Drone grounded — ready for next trigger")
+                                    print("[AUTO] Drone grounded in automatic mode — ready for next trigger")
                                 else:
-                                    # Normal arrival — hover and stay in automatic mode
-                                    # (pre-refactor: no mode switch; drone stays in automatic
-                                    # so the next alarm can deploy without switching modes)
+                                    # Normal arrival — hover and hand over to manual control.
+                                    # Matches pre-refactor: operator gets manual control at the
+                                    # scene. Auto-deploy is blocked until drone returns home.
+                                    print("[AUTO] Switching to manual mode — operator has control")
                                     client.hoverAsync(**vn_kw).join()
-                                    state.mark_idle_hover_sent()
+                                    state.set_mode("manual")
                     else:
                         # PHASE 3 — no target: hover once then idle
                         if not state.get_idle_hover_sent():

@@ -21,7 +21,10 @@ import {
   SkipBack,
   Crosshair,
   Check,
+  Navigation,
   X,
+  Trash2,
+  ShieldX,
 } from 'lucide-react';
 import { BACKEND_URL } from '../data/mockFeeds';
 
@@ -81,6 +84,9 @@ export function DroneControlPanel() {
   const wasAirborneRef = useRef(false);
   const [flightTime, setFlightTime] = useState('--:--');
   const [deployedOnce, setDeployedOnce] = useState(false);
+  const [flightBadge, setFlightBadge] = useState<'flying' | 'reached' | null>(null);
+  const wasNavigatingRef = useRef(false);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
 
   // Fetch drone status periodically
   useEffect(() => {
@@ -108,6 +114,17 @@ export function DroneControlPanel() {
           } else if (data.grounded && data.mode === 'automatic') {
             setDeployedOnce(false);
           }
+
+          // Flight badge: "Flying to Location" while navigating, "Location Reached!" for 5s after
+          const nowNav = data.is_navigating || data.returning_home;
+          if (nowNav) {
+            setFlightBadge('flying');
+          } else if (wasNavigatingRef.current && !nowNav) {
+            // Just finished navigating — show "Location Reached!" for 5 seconds
+            setFlightBadge('reached');
+            setTimeout(() => setFlightBadge(null), 5000);
+          }
+          wasNavigatingRef.current = nowNav;
         } else {
           setIsConnected(false);
         }
@@ -535,6 +552,7 @@ export function DroneControlPanel() {
                     setReplayFrame(0);
                     setFrozenFrameCount(t.replay_frame_count);
                     setReplayPlaying(t.replay_frame_count > 0);
+                    setConfirmDeleteId(null);
                   }}
                   className={`
                     flex-shrink-0 relative w-16 h-10 rounded border-2 overflow-hidden transition-all duration-200
@@ -550,14 +568,10 @@ export function DroneControlPanel() {
                     alt={`Trigger ${t.id}`}
                     className="w-full h-full object-cover"
                   />
-                  {/* Deployed indicator / Remove button */}
+                  {/* Status indicator */}
                   {t.deployed ? (
-                    <div
-                      className="absolute top-0.5 right-0.5 w-4 h-4 rounded-full flex items-center justify-center bg-[var(--text-muted)]/80 hover:bg-[var(--zone-red)] transition-colors cursor-pointer z-10"
-                      title="Remove trigger"
-                      onClick={(e) => { e.stopPropagation(); handleRemoveTrigger(t.id); }}
-                    >
-                      <X size={10} className="text-white" />
+                    <div className="absolute top-0.5 right-0.5 w-3 h-3 rounded-full flex items-center justify-center bg-[var(--zone-green)]">
+                      <Check size={8} className="text-white" />
                     </div>
                   ) : (
                     <div className="absolute top-0.5 right-0.5 w-3 h-3 rounded-full flex items-center justify-center bg-[var(--zone-red)]">
@@ -689,33 +703,68 @@ export function DroneControlPanel() {
             </div>
           )}
 
-          {/* Deploy to trigger button */}
+          {/* Action buttons: Deploy/Redirect + Dismiss/Resolve */}
           {selectedTrigger && (
-            <button
-              onClick={handleDeployToTrigger}
-              disabled={selectedTrigger.deployed}
-              className={`
-                mt-2 w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg border-2 transition-all duration-300 font-mono
-                ${selectedTrigger.deployed
-                  ? 'border-[var(--zone-green)]/50 bg-[var(--zone-green)]/10 text-[var(--zone-green)] cursor-default'
-                  : 'border-[var(--zone-red)]/80 bg-[var(--zone-red)]/15 text-[var(--zone-red)] hover:border-[var(--zone-red)] hover:bg-[var(--zone-red)]/25'
-                }
-              `}
-            >
+            <div className="mt-2 flex gap-2">
+              {/* Deploy / Redirect */}
+              <button
+                onClick={handleDeployToTrigger}
+                className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg border-2 transition-all duration-300 font-mono border-[var(--zone-red)]/80 bg-[var(--zone-red)]/15 text-[var(--zone-red)] hover:border-[var(--zone-red)] hover:bg-[var(--zone-red)]/25"
+              >
+                <Crosshair size={14} />
+                <span className="text-[10px] font-bold uppercase tracking-wider">
+                  {status.is_navigating || status.mode === 'manual' ? 'REDIRECT' : 'DEPLOY'}
+                </span>
+              </button>
+              {/* Dismiss / Resolve */}
               {selectedTrigger.deployed ? (
-                <>
-                  <Check size={14} />
-                  <span className="text-[10px] font-bold uppercase tracking-wider">DEPLOYED</span>
-                </>
-              ) : (
-                <>
-                  <Crosshair size={14} />
+                <button
+                  onClick={() => handleRemoveTrigger(selectedTrigger.id)}
+                  className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg border-2 transition-all duration-300 font-mono border-[var(--zone-green)]/80 bg-[var(--zone-green)]/15 text-[var(--zone-green)] hover:border-[var(--zone-green)] hover:bg-[var(--zone-green)]/25"
+                >
+                  <Trash2 size={14} />
                   <span className="text-[10px] font-bold uppercase tracking-wider">
-                    {status.is_navigating ? 'REDIRECT TO THIS LOCATION' : 'DEPLOY TO THIS LOCATION'}
+                    RESOLVED
                   </span>
-                </>
+                </button>
+              ) : (
+                <button
+                  onClick={() => setConfirmDeleteId(selectedTrigger.id)}
+                  className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg border-2 transition-all duration-300 font-mono border-[var(--zone-yellow)]/80 bg-[var(--zone-yellow)]/15 text-[var(--zone-yellow)] hover:border-[var(--zone-yellow)] hover:bg-[var(--zone-yellow)]/25"
+                >
+                  <ShieldX size={14} />
+                  <span className="text-[10px] font-bold uppercase tracking-wider">
+                    FALSE TRIGGER
+                  </span>
+                </button>
               )}
-            </button>
+            </div>
+          )}
+
+          {/* False trigger confirmation dialog */}
+          {confirmDeleteId !== null && (
+            <div className="mt-2 p-3 rounded-lg border-2 border-[var(--zone-yellow)] bg-[var(--zone-yellow)]/10 backdrop-blur-sm">
+              <p className="text-[11px] font-mono text-[var(--zone-yellow)] text-center mb-2">
+                Confirm this is a false trigger? Footage will be permanently deleted.
+              </p>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setConfirmDeleteId(null)}
+                  className="flex-1 px-3 py-1.5 rounded-lg border border-[var(--border-dim)] bg-[var(--bg-secondary)] text-[10px] font-bold font-mono uppercase tracking-wider text-[var(--text-secondary)] hover:border-[var(--text-muted)] transition-all"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => {
+                    handleRemoveTrigger(confirmDeleteId);
+                    setConfirmDeleteId(null);
+                  }}
+                  className="flex-1 px-3 py-1.5 rounded-lg border border-[var(--zone-yellow)] bg-[var(--zone-yellow)]/20 text-[10px] font-bold font-mono uppercase tracking-wider text-[var(--zone-yellow)] hover:bg-[var(--zone-yellow)]/30 transition-all"
+                >
+                  Yes, Delete
+                </button>
+              </div>
+            </div>
           )}
         </div>
 
@@ -780,12 +829,20 @@ export function DroneControlPanel() {
       <footer className="flex-shrink-0 px-3 py-3">
         <div className="relative rounded-xl border border-[var(--accent-cyan)]/30 bg-[var(--bg-primary)]/80 backdrop-blur-xl px-4 py-4 shadow-[0_0_20px_rgba(0,0,0,0.5),inset_0_1px_0_rgba(255,255,255,0.05)]">
 
-          {/* Auto-flight warning */}
-          {isAutomatic && (
-            <div className="absolute -top-3 left-1/2 -translate-x-1/2 flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-[var(--bg-primary)] border border-[var(--zone-yellow)] animate-pulse whitespace-nowrap">
-              <AlertTriangle size={10} className="text-[var(--zone-yellow)]" />
-              <span className="text-[10px] font-bold font-mono text-[var(--zone-yellow)]">
-                Auto flight active
+          {/* Flight status badge */}
+          {flightBadge === 'flying' && (
+            <div className="absolute -top-3 left-1/2 -translate-x-1/2 flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-[var(--bg-primary)] border border-[var(--accent-cyan)] animate-pulse whitespace-nowrap">
+              <Navigation size={10} className="text-[var(--accent-cyan)]" />
+              <span className="text-[10px] font-bold font-mono text-[var(--accent-cyan)]">
+                Flying to Location
+              </span>
+            </div>
+          )}
+          {flightBadge === 'reached' && (
+            <div className="absolute -top-3 left-1/2 -translate-x-1/2 flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-[var(--bg-primary)] border border-[var(--zone-green)] whitespace-nowrap">
+              <Check size={10} className="text-[var(--zone-green)]" />
+              <span className="text-[10px] font-bold font-mono text-[var(--zone-green)]">
+                Location Reached!
               </span>
             </div>
           )}

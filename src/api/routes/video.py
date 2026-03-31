@@ -54,16 +54,20 @@ def _generate_frames(feed_id: str, fm: FeedManager, stream_interval: float):
             if frame is not None:
                 frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
 
-                # Composite pre-rendered detection overlay
+                # Composite detection mask — overlay is a combined binary
+                # mask (H, W) uint8 with 1 = person pixel.  Paint cyan
+                # directly on masked pixels (much faster than full-frame
+                # addWeighted that the old RGB overlay path required).
                 if overlay is not None:
-                    ov_bgr = cv2.cvtColor(overlay, cv2.COLOR_RGB2BGR)
-                    if ov_bgr.shape[:2] != frame_bgr.shape[:2]:
-                        ov_bgr = cv2.resize(ov_bgr, (frame_bgr.shape[1], frame_bgr.shape[0]),
-                                            interpolation=cv2.INTER_NEAREST)
-                    mask_region = np.any(ov_bgr > 0, axis=2)
-                    frame_bgr[mask_region] = cv2.addWeighted(
-                        frame_bgr, 0.6, ov_bgr, 0.4, 0
-                    )[mask_region]
+                    if overlay.shape[:2] != frame_bgr.shape[:2]:
+                        overlay = cv2.resize(overlay, (frame_bgr.shape[1], frame_bgr.shape[0]),
+                                             interpolation=cv2.INTER_NEAREST)
+                    mask_bool = overlay.astype(bool)
+                    # Blend: 60% original + 40% cyan (0, 255, 255 in BGR)
+                    frame_bgr[mask_bool] = (
+                        frame_bgr[mask_bool] * 0.6 +
+                        np.array([255, 255, 0], dtype=np.float32) * 0.4
+                    ).astype(np.uint8)
 
                 h, w = frame_bgr.shape[:2]
                 if caution and not alarm:

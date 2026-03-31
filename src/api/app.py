@@ -17,6 +17,7 @@ from __future__ import annotations
 import os
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, Future
 from contextlib import asynccontextmanager
 from typing import Any, Dict
 
@@ -45,13 +46,13 @@ def _capture_loop(fm: FeedManager, cfg: Dict[str, Any]) -> None:
     _last_reconnect: dict = {}  # feed_id → monotonic time of last retry
 
     while getattr(fm, "_running", False):
-        now = time.monotonic()
+        loop_start = time.monotonic()
         for feed_id in fm.feed_ids():
             camera = fm.get_camera(feed_id)
             if camera is None or not camera.is_connected:
                 # Retry connection every 5s (AirSim may have started since last attempt)
-                if camera is not None and now - _last_reconnect.get(feed_id, 0) >= 5.0:
-                    _last_reconnect[feed_id] = now
+                if camera is not None and loop_start - _last_reconnect.get(feed_id, 0) >= 5.0:
+                    _last_reconnect[feed_id] = loop_start
                     try:
                         if camera.connect():
                             print(f"[CAPTURE] {feed_id}: reconnected to AirSim")
@@ -77,7 +78,11 @@ def _capture_loop(fm: FeedManager, cfg: Dict[str, Any]) -> None:
                                jpeg_bytes=jpeg_bytes, timestamp=timestamp)
             except Exception as e:
                 print(f"[CAPTURE] {feed_id}: {e}")
-        time.sleep(interval)
+        # Deadline-based sleep: account for time spent capturing
+        elapsed = time.monotonic() - loop_start
+        remaining = interval - elapsed
+        if remaining > 0:
+            time.sleep(remaining)
 
 
 def _detection_loop(
@@ -95,7 +100,6 @@ def _detection_loop(
     the pre-refactor design for maximum throughput.
     """
     from datetime import datetime
-    from src.services.streaming import render_overlay
 
     # Create a dedicated AirSim client for coordinate lookups (simGetCameraInfo).
     # Using the camera's shared client from the lifespan context causes an
@@ -128,6 +132,7 @@ def _detection_loop(
     # Drone navigation state — mirrors pre-refactor FeedManager.drone_is_navigating
     nav = {
         "is_navigating": False,
+        "first_auto_deployed": False,   # True after first auto-deploy; blocks further auto-deploys
         "last_deployment_time": 0.0,
         "last_status_check": 0.0,
     }
@@ -208,6 +213,8 @@ def _detection_loop(
             return _fallback()
 
     while getattr(fm, "_running", False):
+        loop_start = time.monotonic()
+
         # --- 1. Collect frames from all eligible feeds ---
         batch_feed_ids = []
         batch_frames = []
@@ -286,10 +293,14 @@ def _detection_loop(
                     else:
                         alarm.clear()
 
-                    # Render overlay
-                    overlay = None
+                    # Build combined binary mask (single uint8 array) instead of
+                    # a full RGB overlay canvas — cheaper to create here and to
+                    # composite in the video route.
+                    combined_mask = None
                     if person_masks and not disable_overlay:
-                        overlay = render_overlay(frame, person_masks)
+                        combined_mask = person_masks[0].copy()
+                        for m in person_masks[1:]:
+                            np.maximum(combined_mask, m, out=combined_mask)
 
                     fm.update_detection(
                         feed_id,
@@ -298,7 +309,7 @@ def _detection_loop(
                         people_count=people_count,
                         danger_count=danger_count,
                         caution_count=caution_count,
-                        mask_overlay=overlay,
+                        mask_overlay=combined_mask,
                     )
 
                     # If alarm fired, record trigger and auto-deploy search drone
@@ -323,16 +334,22 @@ def _detection_loop(
                         )
                         store.add(event)
 
-                        if drone_api is not None and not nav["is_navigating"]:
+                        # Auto-deploy only for the very first trigger.
+                        # After that, only manual "Redirect to this Location" can move the drone.
+                        # Auto-deploy re-enables only after RTH + landing (grounded + automatic).
+                        if (drone_api is not None
+                                and not nav["is_navigating"]
+                                and not nav["first_auto_deployed"]):
                             now = time.time()
                             if now - nav["last_deployment_time"] > cooldown:
                                 tx, ty, tz = coords
-                                print(f"[DRONE] Auto-deploying to ({tx:.2f}, {ty:.2f}, {tz:.2f}) for {feed_id}")
+                                print(f"[DRONE] First auto-deploy to ({tx:.2f}, {ty:.2f}, {tz:.2f}) for {feed_id}")
                                 if drone_api.goto_position(tx, ty, tz):
                                     nav["last_deployment_time"] = now
                                     nav["is_navigating"] = True
+                                    nav["first_auto_deployed"] = True
                                     event.deployed = True
-                                    print("[DRONE] Deployment command sent")
+                                    print("[DRONE] Deployment command sent — subsequent deploys are manual only")
                                 else:
                                     print("[DRONE] Deployment command failed")
 
@@ -341,17 +358,29 @@ def _detection_loop(
 
         # Poll drone status once per second to detect navigation completion
         now = time.time()
-        if nav["is_navigating"] and drone_api is not None and now - nav["last_status_check"] >= 1.0:
+        if drone_api is not None and now - nav["last_status_check"] >= 1.0:
             nav["last_status_check"] = now
             try:
                 status = drone_api.get_status()
-                if status and not status.get("is_navigating", True):
-                    print("[DRONE] Drone reached target, mission complete")
-                    nav["is_navigating"] = False
+                if status:
+                    if nav["is_navigating"] and not status.get("is_navigating", True):
+                        print("[DRONE] Drone reached target, mission complete")
+                        nav["is_navigating"] = False
+                    # Reset auto-deploy gate only when drone is grounded at home
+                    # (after RTH + landing). This is the ONLY path back to auto-deploy.
+                    if (nav["first_auto_deployed"]
+                            and status.get("grounded", False)
+                            and status.get("mode") == "automatic"):
+                        print("[DRONE] Drone grounded at home — auto-deploy re-enabled")
+                        nav["first_auto_deployed"] = False
             except Exception as e:
                 print(f"[DRONE] Status check failed: {e}")
 
-        time.sleep(interval)
+        # Deadline-based sleep: account for time spent on inference + processing
+        elapsed = time.monotonic() - loop_start
+        remaining = interval - elapsed
+        if remaining > 0:
+            time.sleep(remaining)
 
 
 def _auto_seg_loop(
@@ -570,6 +599,15 @@ async def lifespan(app: FastAPI):
 
     print(f"[INIT] {len(feeds_cfg)} feed(s) registered — connections deferred to background threads")
 
+    # Start capture thread EARLY so cameras connect and accumulate warmup
+    # frames while models load (models can take minutes on first run).
+    fm._running = True
+    capture_thread = threading.Thread(
+        target=_capture_loop, args=(fm, cfg), daemon=True, name="frame-capture"
+    )
+    capture_thread.start()
+    print("[INIT] Capture thread started (cameras connecting in background)")
+
     # Restore manually-saved zones from disk (without frame dimensions — masks
     # are regenerated on first real frame via _needs_mask_regen flag)
     try:
@@ -604,37 +642,59 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"[INIT] Drone API init failed: {e}")
 
-    # Load shared human detector
-    detector = None
-    try:
+    # Load all ML models in parallel — each model load is independent and
+    # the sequential loading was the main startup bottleneck.
+    print("[INIT] Loading ML models in parallel...")
+    _load_start = time.monotonic()
+
+    def _load_human_detector():
         from src.detection.human_detector import HumanDetector
-        detector = HumanDetector()
-        print("[INIT] Human detector loaded")
-    except Exception as e:
-        print(f"[INIT] Human detector failed to load: {e}")
+        return HumanDetector()
 
-    # Load shared scene segmenter
-    segmenter = None
-    try:
+    def _load_scene_segmenter():
         from src.detection.scene_segmenter import SceneSegmenter
-        segmenter = SceneSegmenter()
-        deps.set_scene_segmenter(segmenter)
-        print("[INIT] Scene segmenter loaded")
-    except Exception as e:
-        print(f"[INIT] Scene segmenter failed to load: {e}")
+        return SceneSegmenter()
 
-    # Load depth estimator (if configured)
-    depth_estimator = None
-    try:
+    def _load_depth_estimator():
         from src.detection.depth_estimator_wrapper import DepthEstimator
         enc_path = cfg.get("depth_estimation", {}).get("encoder_path")
         dec_path = cfg.get("depth_estimation", {}).get("decoder_path")
         if enc_path and dec_path:
-            depth_estimator = DepthEstimator(encoder_path=enc_path, decoder_path=dec_path)
-            deps.set_depth_estimator(depth_estimator)
-            print("[INIT] Depth estimator loaded")
-    except Exception as e:
-        print(f"[INIT] Depth estimator failed to load: {e}")
+            return DepthEstimator(encoder_path=enc_path, decoder_path=dec_path)
+        return None
+
+    detector = None
+    segmenter = None
+    depth_estimator = None
+
+    with ThreadPoolExecutor(max_workers=3, thread_name_prefix="model-load") as pool:
+        fut_detector: Future = pool.submit(_load_human_detector)
+        fut_segmenter: Future = pool.submit(_load_scene_segmenter)
+        fut_depth: Future = pool.submit(_load_depth_estimator)
+
+        try:
+            detector = fut_detector.result()
+            print("[INIT] Human detector loaded")
+        except Exception as e:
+            print(f"[INIT] Human detector failed to load: {e}")
+
+        try:
+            segmenter = fut_segmenter.result()
+            if segmenter is not None:
+                deps.set_scene_segmenter(segmenter)
+            print("[INIT] Scene segmenter loaded")
+        except Exception as e:
+            print(f"[INIT] Scene segmenter failed to load: {e}")
+
+        try:
+            depth_estimator = fut_depth.result()
+            if depth_estimator is not None:
+                deps.set_depth_estimator(depth_estimator)
+                print("[INIT] Depth estimator loaded")
+        except Exception as e:
+            print(f"[INIT] Depth estimator failed to load: {e}")
+
+    print(f"[INIT] All models loaded in {time.monotonic() - _load_start:.1f}s")
 
     # Create per-feed detection pipelines
     pipelines = {}
@@ -661,13 +721,7 @@ async def lifespan(app: FastAPI):
     # auto-segmentation threads (CUDA isn't thread-safe).
     gpu_lock = threading.Lock()
 
-    # Start background threads
-    fm._running = True
-    capture_thread = threading.Thread(
-        target=_capture_loop, args=(fm, cfg), daemon=True, name="frame-capture"
-    )
-    capture_thread.start()
-
+    # Start remaining background threads (capture thread already running)
     if pipelines:
         detection_thread = threading.Thread(
             target=_detection_loop,
