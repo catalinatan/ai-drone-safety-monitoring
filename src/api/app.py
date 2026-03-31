@@ -42,11 +42,21 @@ def _capture_loop(fm: FeedManager, cfg: Dict[str, Any]) -> None:
 
     fps = cfg.get("streaming", {}).get("capture_fps", 30)
     interval = 1.0 / max(1, fps)
+    _last_reconnect: dict = {}  # feed_id → monotonic time of last retry
 
     while getattr(fm, "_running", False):
+        now = time.monotonic()
         for feed_id in fm.feed_ids():
             camera = fm.get_camera(feed_id)
             if camera is None or not camera.is_connected:
+                # Retry connection every 5s (AirSim may have started since last attempt)
+                if camera is not None and now - _last_reconnect.get(feed_id, 0) >= 5.0:
+                    _last_reconnect[feed_id] = now
+                    try:
+                        if camera.connect():
+                            print(f"[CAPTURE] {feed_id}: reconnected to AirSim")
+                    except Exception:
+                        pass
                 continue
             try:
                 frame = camera.grab_frame()
@@ -494,21 +504,11 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             print(f"[INIT] {feed_id}: camera backend error — {e}")
 
-        # If camera failed, use stub for now and log warning
+        # If camera failed, continue in limited mode — matches old_server.py behavior
+        # where initialize() returned False and the lifespan yielded without crashing.
+        # The capture loop will retry the connection once AirSim becomes available.
         if camera is None or not camera.is_connected:
-            try:
-                import airsim
-                # airsim is installed but connection failed - this is a real problem
-                raise RuntimeError(
-                    f"[INIT] Camera {feed_id} failed to connect to AirSim. "
-                    f"Make sure AirSim is running and accessible. "
-                    f"Check the detailed error messages above."
-                )
-            except ImportError:
-                # airsim not installed - ok to use stub (tests or non-AirSim deployment)
-                print(f"[INIT] {feed_id}: Using stub camera (airsim not installed)")
-                from src.hardware.camera.file_camera import FileCamera
-                camera = FileCamera("/dev/null")
+            print(f"[INIT] {feed_id}: not connected — will retry in capture loop once AirSim is ready")
 
         fm.register_feed(
             feed_id=feed_id,

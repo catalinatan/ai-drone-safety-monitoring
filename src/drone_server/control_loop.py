@@ -2,7 +2,7 @@
 Drone control loop — runs as a background thread.
 
 Lifecycle:
-    1. Connect to AirSim via the injected client, arm, and take off.
+    1. Connect to AirSim, arm, and take off.
     2. Enter a ~30 FPS loop that:
        a) Grabs camera frames from both cameras and publishes them to DroneState.
        b) In *manual* mode: reads WASD/ZX keys and /move API velocity → velocity commands.
@@ -10,11 +10,12 @@ Lifecycle:
           then polls position until within POSITION_TOLERANCE.
     3. On exit (keyboard 'q' or should_stop flag): land, disarm, release API control.
 
-Dependency injection:
-    ``drone_control_loop`` receives a live ``airsim.MultirotorClient`` and the
-    shared ``DroneState`` singleton.  The caller (``app.py`` lifespan) is
-    responsible for establishing the AirSim connection before calling this
-    function, enabling the control loop to be tested with a mock client.
+Architecture note (IOLoop):
+    The AirSim client is created INSIDE this function (in the background thread),
+    not received from the lifespan.  Pre-refactor: the loop ran on the main thread
+    and created its own client — tornado's IOLoop is per-thread and .join() works
+    cleanly when created in the same thread.  Reusing a client created inside
+    uvicorn's asyncio lifespan causes .join() to hang (IOLoop conflict).
 """
 
 from __future__ import annotations
@@ -39,39 +40,63 @@ if TYPE_CHECKING:
 
 
 def drone_control_loop(state: DroneState, client, cfg: dict) -> None:
-    """Main control loop — intended to run on a dedicated background thread.
+    """Main control loop — runs on a dedicated background thread.
 
     Parameters
     ----------
-    state:
-        The shared ``DroneState`` singleton.
-    client:
-        A connected ``airsim.MultirotorClient`` instance.
-    cfg:
-        Parsed ``config.yaml`` dict (keys: safety, navigation).
+    state : DroneState
+        Shared thread-safe state singleton.
+    client : ignored
+        Kept for API compatibility. The loop creates its own AirSim client
+        internally to avoid tornado/asyncio IOLoop conflicts.
+    cfg : dict
+        Parsed config.yaml (keys: safety, navigation).
     """
-    import airsim  # noqa: PLC0415 (import inside function — airsim is optional)
+    import airsim  # noqa: PLC0415
 
     max_altitude: float = cfg["safety"]["max_altitude"]
     position_tolerance: float = cfg["navigation"]["position_tolerance"]
     navigation_speed: float = cfg["navigation"]["speed"]
+    vehicle_name: str = cfg.get("vehicle_name", "")  # "" = AirSim default vehicle
 
-    # --- Initial takeoff ---
-    client.enableApiControl(True)
-    client.armDisarm(True)
+    # --- AirSim connection (created in THIS thread — pre-refactor pattern) ---
+    # Retry because AirSim may still be starting up when this thread launches.
+    max_retries = 10
+    retry_delay = 3.0
+    client = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            client = airsim.MultirotorClient()
+            client.confirmConnection()
+            print(f"[DRONE] AirSim connected (attempt {attempt})")
+            break
+        except Exception as e:
+            print(f"[DRONE] AirSim connection attempt {attempt}/{max_retries} failed: {e}")
+            if attempt < max_retries:
+                time.sleep(retry_delay)
+    if client is None:
+        print("[DRONE] Could not connect to AirSim after all retries — control loop exiting")
+        return
+
+    vn = vehicle_name  # shorthand for all AirSim calls below
+    vn_kw = {"vehicle_name": vn} if vn else {}
+    print(f"[DRONE] Controlling vehicle: {vn or '(default)'}")
+
+    # --- Initial arm + takeoff (matches pre-refactor exactly) ---
+    client.enableApiControl(True, **vn_kw)
+    client.armDisarm(True, **vn_kw)
 
     print("[DRONE] Taking off...")
-    client.takeoffAsync().join()
-    client.hoverAsync().join()
+    client.takeoffAsync(**vn_kw).join()
+    client.hoverAsync(**vn_kw).join()
 
-    # Record takeoff position so /return_home can navigate back here
-    pose = client.simGetVehiclePose()
+    pose = client.simGetVehiclePose(**vn_kw)
     home_pos = (pose.position.x_val, pose.position.y_val, pose.position.z_val)
     state.set_home(home_pos)
     state.set_grounded(False)
     print(f"[DRONE] Home position set: {home_pos}")
 
-    last_distance_log: float = 0.0  # monotonic timestamp; throttles log spam to 1 Hz
+    last_distance_log: float = 0.0
 
     print("[DRONE] Control loop started")
     print("Manual Mode Controls: w/a/s/d = move, z/x = up/down, q = quit")
@@ -79,71 +104,69 @@ def drone_control_loop(state: DroneState, client, cfg: dict) -> None:
     try:
         while not state.get_should_stop():
             try:
-                # ----- Camera feeds (runs every iteration regardless of mode) -----
+                # --- Camera feeds (every iteration, both modes) ---
                 responses = client.simGetImages([
-                    airsim.ImageRequest("0", airsim.ImageType.Scene, False, False),  # Down
-                    airsim.ImageRequest("3", airsim.ImageType.Scene, False, False),  # Forward
-                ])
+                    airsim.ImageRequest("0", airsim.ImageType.Scene, False, False),
+                    airsim.ImageRequest("3", airsim.ImageType.Scene, False, False),
+                ], **vn_kw)
 
-                # Downward camera (camera 0)
                 if responses[0] and len(responses[0].image_data_uint8) > 0:
                     img1d = np.frombuffer(responses[0].image_data_uint8, dtype=np.uint8)
                     img_down = img1d.reshape(responses[0].height, responses[0].width, 3)
                     img_down = cv2.cvtColor(img_down, cv2.COLOR_RGB2BGR)
                     if img_down.size > 0:
                         state.set_frame_down(img_down.copy())
-    
-                # Forward camera (camera 3)
+
                 if responses[1] and len(responses[1].image_data_uint8) > 0:
                     img1d = np.frombuffer(responses[1].image_data_uint8, dtype=np.uint8)
                     img_forward = img1d.reshape(responses[1].height, responses[1].width, 3)
                     img_forward = cv2.cvtColor(img_forward, cv2.COLOR_RGB2BGR)
                     if img_forward.size > 0:
                         state.set_frame_forward(img_forward.copy())
-    
                         mode_text = f"Mode: {state.get_mode().upper()}"
                         cv2.putText(img_forward, mode_text, (10, 30),
                                     cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
                         cv2.imshow("Drone Camera", img_forward)
-    
+
                 cv2.waitKey(1)
-    
-                # ----- Update telemetry -----
-                pose = client.simGetVehiclePose()
+
+                # --- Telemetry ---
+                pose = client.simGetVehiclePose(**vn_kw)
                 state.set_pose((pose.position.x_val, pose.position.y_val, pose.position.z_val))
-    
-                # ----- Mode-specific control -----
+
+                # --- Mode-specific control ---
                 current_mode = state.get_mode()
-    
+
                 if current_mode == "automatic":
                     target, is_nav, cmd_sent = state.get_nav_snapshot()
-    
+
                     if target is not None and is_nav:
                         if not cmd_sent:
-                            # PHASE 1 — New target; validate and dispatch.
-                            if state.get_returning_home():
-                                print("[AUTO] RTH — safety check bypassed")
+                            # PHASE 1 — validate + dispatch (pre-refactor: no hover here)
+                            is_rth = state.get_returning_home()
+                            if is_rth:
                                 fly_speed = navigation_speed * 3
                             else:
                                 is_safe, reason = check_safety(target, max_altitude)
                                 if not is_safe:
                                     print(f"[AUTO] Navigation aborted: {reason}")
                                     state.clear_target()
+                                    time.sleep(0.03)
                                     continue
                                 fly_speed = navigation_speed
-    
-                            # Re-arm and take off if drone was grounded after RTH
+
+                            # Re-arm/takeoff if grounded, otherwise just re-assert
+                            # API control (old code did this EVERY dispatch — defensive
+                            # measure in case another client or AirSim itself released it)
                             if state.is_grounded():
-                                print("[AUTO] Drone is grounded — re-arming and taking off")
-                                client.enableApiControl(True)
-                                client.armDisarm(True)
-                                client.takeoffAsync().join()
-                                client.hoverAsync().join()
+                                print("[AUTO] Drone grounded — re-arming and taking off")
+                                client.enableApiControl(True, **vn_kw)
+                                client.armDisarm(True, **vn_kw)
+                                client.takeoffAsync(**vn_kw).join()
                                 state.set_grounded(False)
                             else:
-                                # Already airborne — hover to stabilise before navigation.
-                                # Without this, moveToPositionAsync is ignored by AirSim.
-                                client.hoverAsync().join()
+                                client.enableApiControl(True, **vn_kw)
+                                client.armDisarm(True, **vn_kw)
 
                             print(f"[AUTO] Navigating to ({target[0]:.1f}, {target[1]:.1f}, {target[2]:.1f}) "
                                   f"at {fly_speed:.0f} m/s")
@@ -152,15 +175,18 @@ def drone_control_loop(state: DroneState, client, cfg: dict) -> None:
                                 velocity=fly_speed,
                                 drivetrain=airsim.DrivetrainType.MaxDegreeOfFreedom,
                                 yaw_mode=airsim.YawMode(is_rate=False, yaw_or_rate=0),
+                                **vn_kw,
                             )
                             state.try_mark_nav_dispatched(target, task)
-    
+
                         else:
-                            # PHASE 2 — Command dispatched; poll position until arrival.
-                            pose = client.simGetVehiclePose()
+                            # PHASE 2 — poll until arrival
+                            pose = client.simGetVehiclePose(**vn_kw)
                             current = (pose.position.x_val, pose.position.y_val, pose.position.z_val)
-    
-                            if state.get_returning_home():
+
+                            is_rth = state.get_returning_home()
+                            if is_rth:
+                                # RTH: only 2D distance (altitude handled by takeoff)
                                 distance = math.sqrt(
                                     (current[0] - target[0]) ** 2 +
                                     (current[1] - target[1]) ** 2
@@ -171,87 +197,86 @@ def drone_control_loop(state: DroneState, client, cfg: dict) -> None:
                                     (current[1] - target[1]) ** 2 +
                                     (current[2] - target[2]) ** 2
                                 )
-    
+
                             now = time.monotonic()
                             if now - last_distance_log >= 1.0:
                                 print(f"[AUTO] Distance to target: {distance:.2f}m")
                                 last_distance_log = now
-    
-                            rth_tolerance = position_tolerance * 3 if state.get_returning_home() else position_tolerance
-                            if distance < rth_tolerance:
+
+                            tol = position_tolerance * 3 if is_rth else position_tolerance
+                            if distance < tol:
                                 print("[AUTO] Arrived at target position")
-                                is_rth = state.get_returning_home()
                                 state.clear_target()
                                 if is_rth:
-                                    print("[AUTO] Home reached — landing and disarming")
+                                    # RTH complete — land and disarm
                                     state.set_returning_home(False)
-                                    client.hoverAsync().join()
-                                    client.landAsync().join()
-                                    client.armDisarm(False)
-                                    client.enableApiControl(False)
+                                    client.hoverAsync(**vn_kw).join()
+                                    client.landAsync(**vn_kw).join()
+                                    client.armDisarm(False, **vn_kw)
+                                    client.enableApiControl(False, **vn_kw)
                                     state.set_grounded(True)
-                                    state.set_mode("automatic")
                                     state.mark_idle_hover_sent()
                                     print("[AUTO] Drone grounded — ready for next trigger")
                                 else:
-                                    print("[AUTO] Switching to manual mode — user has control")
-                                    client.hoverAsync().join()
-                                    state.set_mode("manual")
+                                    # Normal arrival — hover and stay in automatic mode
+                                    # (pre-refactor: no mode switch; drone stays in automatic
+                                    # so the next alarm can deploy without switching modes)
+                                    client.hoverAsync(**vn_kw).join()
+                                    state.mark_idle_hover_sent()
                     else:
-                        # PHASE 3 — Automatic mode with no target: hover in place (once).
+                        # PHASE 3 — no target: hover once then idle
                         if not state.get_idle_hover_sent():
-                            client.hoverAsync().join()
+                            client.hoverAsync(**vn_kw).join()
                             state.mark_idle_hover_sent()
-    
+
                 else:
-                    # --- Manual mode: keyboard + API velocity → velocity commands ---
+                    # --- Manual mode ---
+                    # Re-arm and take off if grounded after RTH (matches pre-refactor)
                     if state.is_grounded():
                         print("[MANUAL] Drone is grounded — re-arming and taking off")
-                        client.enableApiControl(True)
-                        client.armDisarm(True)
-                        client.takeoffAsync().join()
-                        client.hoverAsync().join()
+                        client.enableApiControl(True, **vn_kw)
+                        client.armDisarm(True, **vn_kw)
+                        client.takeoffAsync(**vn_kw).join()
+                        client.hoverAsync(**vn_kw).join()
                         state.set_grounded(False)
-    
+
                     if _KEYBOARD_AVAILABLE and keyboard.is_pressed('q'):
                         state.request_stop()
                         break
-    
+
                     vx = vy = vz = 0.0
                     if _KEYBOARD_AVAILABLE:
                         if keyboard.is_pressed('w'):
                             vx = 3.0
                         elif keyboard.is_pressed('s'):
                             vx = -3.0
-    
                         if keyboard.is_pressed('d'):
                             vy = 3.0
                         elif keyboard.is_pressed('a'):
                             vy = -3.0
-    
                         if keyboard.is_pressed('z'):
                             vz = -2.0
                         elif keyboard.is_pressed('x'):
                             vz = 2.0
-    
-                    # Merge with API velocity (from /move endpoint)
+
                     api_vx, api_vy, api_vz = state.get_manual_velocity()
                     vx = vx or api_vx
                     vy = vy or api_vy
                     vz = vz or api_vz
-    
+
                     client.moveByVelocityAsync(
                         vx, vy, vz,
                         duration=0.1,
                         drivetrain=airsim.DrivetrainType.MaxDegreeOfFreedom,
                         yaw_mode=airsim.YawMode(is_rate=False, yaw_or_rate=0),
+                        **vn_kw,
                     )
-    
-                    # Consistent loop timing (~30 FPS)
-                    time.sleep(0.03)
-    
+
+                # ~30 FPS for both modes (pre-refactor had this at loop bottom)
+                time.sleep(0.03)
+
             except Exception as e:
-                print(f"[DRONE] Connection lost: {e.__class__.__name__}: {e}")
+                print(f"[DRONE] Error: {e.__class__.__name__}: {e}")
                 state.set_should_stop(True)
                 break
 
@@ -259,9 +284,9 @@ def drone_control_loop(state: DroneState, client, cfg: dict) -> None:
         cv2.destroyAllWindows()
         try:
             print("[DRONE] Landing...")
-            client.landAsync().join()
-            client.armDisarm(False)
-            client.enableApiControl(False)
+            client.landAsync(**vn_kw).join()
+            client.armDisarm(False, **vn_kw)
+            client.enableApiControl(False, **vn_kw)
         except Exception as cleanup_err:
-            print(f"[DRONE] Cleanup failed (AirSim already disconnected?): {cleanup_err.__class__.__name__}")
+            print(f"[DRONE] Cleanup error: {cleanup_err.__class__.__name__}")
         print("[DRONE] Shutdown complete")

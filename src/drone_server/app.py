@@ -84,22 +84,20 @@ async def lifespan(app: FastAPI):
     control_thread = None
 
     try:
-        import airsim
-        client = airsim.MultirotorClient()
-        client.confirmConnection()
-        print("[DRONE SERVER] AirSim connected")
-
+        import airsim  # just verify airsim is installed; client created inside the loop thread
         control_thread = threading.Thread(
             target=drone_control_loop,
-            args=(drone_state, client, _cfg),
+            args=(drone_state, None, _cfg),  # None: loop creates its own client
             daemon=True,
             name="drone-control-loop",
         )
         control_thread.start()
         print("[DRONE SERVER] Control loop started")
 
-    except Exception as e:
+    except ImportError as e:
         print(f"[DRONE SERVER] AirSim not available — running in limited mode: {e}")
+    except Exception as e:
+        print(f"[DRONE SERVER] Failed to start control loop: {e}")
 
     print("[DRONE SERVER] API ready")
     yield
