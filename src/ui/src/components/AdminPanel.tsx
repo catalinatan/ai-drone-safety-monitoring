@@ -78,6 +78,14 @@ const CONFIG_SECTIONS: SectionDef[] = [
     ],
   },
   {
+    key: 'equipment',
+    label: 'Deploy Equipment',
+    fields: [
+      { key: 'enabled', label: 'Enable Button', type: 'boolean', hint: 'Show Deploy Equipment button on drone panel' },
+      { key: 'label', label: 'Equipment Name', type: 'string', hint: 'e.g. Lifevest, AED, First Aid Kit' },
+    ],
+  },
+  {
     key: 'follow_mode',
     label: 'Follow Mode',
     fields: [
@@ -178,6 +186,8 @@ export function AdminPanel({ onBack }: AdminPanelProps) {
         setConfig(data.config);
         setOriginalConfig(JSON.parse(JSON.stringify(data.config)));
         setSaveState('saved');
+        // Notify sibling components (e.g. DroneControlPanel) of config change
+        window.dispatchEvent(new CustomEvent('config-updated', { detail: data.config }));
       } else {
         setSaveState('error');
       }

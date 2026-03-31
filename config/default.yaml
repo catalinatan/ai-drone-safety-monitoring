@@ -50,6 +50,11 @@ drone:
   api_timeout: 5
   safe_altitude: -10.0
 
+# Equipment deployment (drone-mounted payload)
+equipment:
+  enabled: false
+  label: "Lifevest"
+
 # CCTV Follow Mode (AirSim-specific — used when environment moves, e.g. ship)
 follow_mode:
   target: ""          # "ship" | "railway" | "bridge" — empty = stationary

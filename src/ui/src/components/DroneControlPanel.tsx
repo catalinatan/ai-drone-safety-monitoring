@@ -62,6 +62,8 @@ export function DroneControlPanel() {
   const [activeControls, setActiveControls] = useState<Set<string>>(new Set());
   const [isReturningHome, setIsReturningHome] = useState(false);
   const [equipmentDeployed, setEquipmentDeployed] = useState(false);
+  const [equipmentLabel, setEquipmentLabel] = useState('Equipment');
+  const [equipmentEnabled, setEquipmentEnabled] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   // Multi-trigger state
   const [triggers, setTriggers] = useState<TriggerMeta[]>([]);
@@ -130,6 +132,28 @@ export function DroneControlPanel() {
     }, 1000);
     return () => clearInterval(tick);
   }, [airborneStart]);
+
+  // Fetch equipment config once on mount, then react to admin saves
+  useEffect(() => {
+    const applyEquipmentConfig = (cfg: Record<string, unknown>) => {
+      const eq = cfg?.equipment as Record<string, unknown> | undefined;
+      if (eq) {
+        if (typeof eq.label === 'string' && eq.label) setEquipmentLabel(eq.label);
+        if (typeof eq.enabled === 'boolean') setEquipmentEnabled(eq.enabled);
+      }
+    };
+    // Initial fetch
+    fetch(`${BACKEND_URL}/config`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((cfg) => { if (cfg) applyEquipmentConfig(cfg); })
+      .catch(() => {});
+    // Listen for admin config saves
+    const onConfigUpdated = (e: Event) => {
+      applyEquipmentConfig((e as CustomEvent).detail);
+    };
+    window.addEventListener('config-updated', onConfigUpdated);
+    return () => window.removeEventListener('config-updated', onConfigUpdated);
+  }, []);
 
   // Poll triggers from backend
   useEffect(() => {
@@ -687,7 +711,7 @@ export function DroneControlPanel() {
                 <>
                   <Crosshair size={14} />
                   <span className="text-[10px] font-bold uppercase tracking-wider">
-                    {status.is_navigating ? 'REDIRECT DRONE' : 'DEPLOY TO TRIGGER'}
+                    {status.is_navigating ? 'REDIRECT TO THIS LOCATION' : 'DEPLOY TO THIS LOCATION'}
                   </span>
                 </>
               )}
@@ -894,24 +918,26 @@ export function DroneControlPanel() {
                 </button>
               </div>
 
-              {/* Deploy Equipment */}
-              <button
-                onClick={handleDeployEquipment}
-                disabled={equipmentDeployed}
-                className={`
-                  flex items-center gap-1.5 px-3 py-2 rounded-lg border-2 transition-all duration-300 w-full justify-center
-                  ${
-                    equipmentDeployed
-                      ? 'border-[var(--zone-green)] bg-[var(--zone-green)]/20 text-[var(--zone-green)]'
-                      : 'border-[var(--zone-red)]/80 bg-[var(--zone-red)]/15 text-[var(--zone-red)] hover:border-[var(--zone-red)]'
-                  }
-                `}
-              >
-                <Package size={16} className={equipmentDeployed ? 'animate-bounce' : ''} />
-                <span className="text-[9px] font-bold font-mono uppercase tracking-wider">
-                  {equipmentDeployed ? 'Deployed' : 'Drop Equipment'}
-                </span>
-              </button>
+              {/* Deploy Equipment — configurable via Admin panel */}
+              {equipmentEnabled && (
+                <button
+                  onClick={handleDeployEquipment}
+                  disabled={equipmentDeployed}
+                  className={`
+                    flex items-center gap-1.5 px-3 py-2 rounded-lg border-2 transition-all duration-300 w-full justify-center
+                    ${
+                      equipmentDeployed
+                        ? 'border-[var(--zone-green)] bg-[var(--zone-green)]/20 text-[var(--zone-green)]'
+                        : 'border-[var(--zone-red)]/80 bg-[var(--zone-red)]/15 text-[var(--zone-red)] hover:border-[var(--zone-red)]'
+                    }
+                  `}
+                >
+                  <Package size={16} className={equipmentDeployed ? 'animate-bounce' : ''} />
+                  <span className="text-[9px] font-bold font-mono uppercase tracking-wider">
+                    {equipmentDeployed ? 'Deployed' : `Deploy ${equipmentLabel}`}
+                  </span>
+                </button>
+              )}
             </div>
           </div>
         </div>
