@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Shield, Radio, Eye, EyeOff, Scan, Loader2, Check, AlertTriangle, Settings, LayoutGrid } from 'lucide-react';
+import { Shield, Radio, Eye, EyeOff, Scan, Loader2, Check, AlertTriangle, Settings, LayoutGrid, Wrench } from 'lucide-react';
 import { FeedCard } from './FeedCard';
 import { SettingsPanel } from './SettingsPanel';
 import type { Feed } from '../types';
@@ -12,9 +12,10 @@ interface CommandPanelProps {
   sceneType: string;
   autoRefresh: boolean;
   onSaveSettings: (sceneType: string, autoRefresh: boolean) => Promise<void>;
+  onOpenAdmin?: () => void;
 }
 
-export function CommandPanel({ feeds, onEditFeed, onExpandFeed, onAutoSegmentAll, sceneType, autoRefresh, onSaveSettings }: CommandPanelProps) {
+export function CommandPanel({ feeds, onEditFeed, onExpandFeed, onAutoSegmentAll, sceneType, autoRefresh, onSaveSettings, onOpenAdmin }: CommandPanelProps) {
   const [showZones, setShowZones] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [segState, setSegState] = useState<'idle' | 'loading' | 'success' | 'empty' | 'failed'>('idle');
@@ -68,6 +69,16 @@ export function CommandPanel({ feeds, onEditFeed, onExpandFeed, onAutoSegmentAll
             <Settings size={12} />
             <span className="text-[10px] font-bold font-mono uppercase tracking-wider">Settings</span>
           </button>
+          {onOpenAdmin && (
+            <button
+              onClick={onOpenAdmin}
+              className="flex items-center gap-1.5 px-2 py-1 rounded border border-[var(--border-dim)] bg-[var(--bg-tertiary)] text-[var(--text-muted)] hover:text-[var(--accent-cyan)] hover:border-[var(--accent-cyan)] transition-all duration-200"
+              title="System Configuration"
+            >
+              <Wrench size={12} />
+              <span className="text-[10px] font-bold font-mono uppercase tracking-wider">Admin</span>
+            </button>
+          )}
         </div>
 
         <div className="flex items-center gap-2">

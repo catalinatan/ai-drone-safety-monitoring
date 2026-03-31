@@ -4,6 +4,7 @@ import { CommandPanel } from './components/CommandPanel';
 import { EditFeedPage } from './components/EditFeedPage';
 import { ExpandedFeedView } from './components/ExpandedFeedView';
 import { DroneControlPanel } from './components/DroneControlPanel';
+import { AdminPanel } from './components/AdminPanel';
 import { mockFeeds, BACKEND_URL } from './data/mockFeeds';
 import type { Feed, ViewState, Zone } from './types';
 
@@ -160,6 +161,10 @@ function App() {
     setCommandViewState({ type: 'command' });
   }, []);
 
+  const handleOpenAdmin = useCallback(() => {
+    setCommandViewState({ type: 'admin' });
+  }, []);
+
   const handleSaveZones = useCallback(async (feedId: string, zones: Zone[]) => {
     // Update local state
     setFeeds((prev) =>
@@ -269,6 +274,11 @@ function App() {
         );
       }
 
+      case 'admin':
+        return (
+          <AdminPanel onBack={handleBackToCommand} />
+        );
+
       case 'command':
       default:
         return (
@@ -280,6 +290,7 @@ function App() {
             sceneType={sceneType}
             autoRefresh={autoRefresh}
             onSaveSettings={handleSaveSettings}
+            onOpenAdmin={handleOpenAdmin}
           />
         );
     }

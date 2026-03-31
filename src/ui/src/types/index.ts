@@ -44,4 +44,5 @@ export interface Feed {
 export type ViewState =
   | { type: 'command' }
   | { type: 'edit'; feedId: string }
-  | { type: 'expanded'; feedId: string };
+  | { type: 'expanded'; feedId: string }
+  | { type: 'admin' };
