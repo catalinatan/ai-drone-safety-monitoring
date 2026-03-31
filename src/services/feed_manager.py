@@ -234,8 +234,11 @@ class FeedManager:
             else:
                 feed.auto_zones = list(zones)
 
-            # Effective zones: prefer manual when any are defined
-            effective = feed.manual_zones if feed.manual_zones else feed.auto_zones
+            # Effective zones: auto zones as base, manual zones layered on top.
+            # Manual zones have higher visual priority (drawn last → on top)
+            # but both sets are active for detection.  This lets auto-seg
+            # provide coverage while users refine specific areas manually.
+            effective = list(feed.auto_zones) + list(feed.manual_zones)
             feed.zones = effective
             feed.zone_manager.update_zones(effective, image_width, image_height)
 

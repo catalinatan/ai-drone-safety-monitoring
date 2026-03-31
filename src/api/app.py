@@ -87,8 +87,13 @@ def _detection_loop(
     store: Any,
     depth_estimator: Any = None,
     drone_api: Any = None,
+    gpu_lock: threading.Lock | None = None,
 ) -> None:
-    """Run human detection on every frame from all feeds."""
+    """Run human detection on every frame from all feeds.
+
+    Uses batched YOLO inference (single GPU call for all feeds) matching
+    the pre-refactor design for maximum throughput.
+    """
     from datetime import datetime
     from src.services.streaming import render_overlay
 
@@ -111,6 +116,14 @@ def _detection_loop(
     fps = det_cfg.get("fps", 10)
     interval = 1.0 / max(1, fps)
     cooldown = cfg.get("zones", {}).get("alarm_cooldown_seconds", 5.0)
+    warmup = det_cfg.get("warmup_frames", 20)
+    disable_overlay = os.environ.get("DISABLE_MASK_OVERLAY") == "1"
+
+    # Get the shared detector from any pipeline (all share the same instance)
+    detector = None
+    for p in pipelines.values():
+        detector = p._detector
+        break
 
     # Drone navigation state — mirrors pre-refactor FeedManager.drone_is_navigating
     nav = {
@@ -195,91 +208,134 @@ def _detection_loop(
             return _fallback()
 
     while getattr(fm, "_running", False):
+        # --- 1. Collect frames from all eligible feeds ---
+        batch_feed_ids = []
+        batch_frames = []
+        batch_pipelines = []
+
         for feed_id in fm.feed_ids():
             state = fm.get_state(feed_id)
             if state is None:
+                continue
+            if not fm.is_warmed_up(feed_id, warmup):
+                continue
+            pipeline = pipelines.get(feed_id)
+            if pipeline is None:
                 continue
 
             frame = fm.get_frame(feed_id)
             if frame is None:
                 continue
 
-            # Skip if not warmed up yet
-            warmup = det_cfg.get("warmup_frames", 20)
-            if not fm.is_warmed_up(feed_id, warmup):
+            # Skip feeds without zones (no detection needed) — matches old server
+            zm = pipeline._zone_manager
+            if zm.red_mask is None and zm.yellow_mask is None:
                 continue
 
-            # Run detection on this frame
-            pipeline = pipelines.get(feed_id)
-            if pipeline is None:
-                continue
+            batch_feed_ids.append(feed_id)
+            batch_frames.append(frame)
+            batch_pipelines.append(pipeline)
 
+        # --- 2. Run batched YOLO inference (single GPU call) ---
+        if batch_frames and detector is not None:
             try:
-                result = pipeline.process_frame(frame)
-
-                # Render overlay for all detected people (unless --no-mask was passed)
-                disable_overlay = os.environ.get("DISABLE_MASK_OVERLAY") == "1"
-                if result.person_masks and not disable_overlay:
-                    overlay = render_overlay(frame, result.person_masks)
-                else:
-                    overlay = None
-
-                # Update detection state
-                fm.update_detection(
-                    feed_id,
-                    alarm_active=result.alarm_active,
-                    caution_active=result.caution_active,
-                    people_count=result.people_count,
-                    danger_count=result.danger_count,
-                    caution_count=result.caution_count,
-                    mask_overlay=overlay,
-                )
-
-                # If alarm fired, record trigger and auto-deploy search drone
-                if result.alarm_fired:
-                    snapshot_jpeg = encode_frame_jpeg(frame)
-                    replay = list(state.replay_buffer)
-                    trigger_idx = len(replay) - 1
-
-                    # Compute 3D coordinates using depth estimation.
-                    # Use the dedicated AirSim client (created in this thread) to
-                    # avoid IOLoop conflicts with uvicorn's asyncio event loop.
-                    coords = get_person_coords(
-                        fm,
-                        feed_id,
-                        frame,
-                        result.danger_masks,
-                        depth_estimator,
-                        _depth_airsim_client,
-                    )
-
-                    event = deps.TriggerEvent(
-                        id=store.next_id(),
-                        feed_id=feed_id,
-                        timestamp=datetime.utcnow().isoformat() + "Z",
-                        coords=coords,
-                        snapshot=snapshot_jpeg or b"",
-                        replay_frames=replay,
-                        replay_trigger_index=max(0, trigger_idx),
-                    )
-                    store.add(event)
-
-                    # Auto-deploy search drone (same as pre-refactor depth_worker_loop)
-                    if drone_api is not None and not nav["is_navigating"]:
-                        now = time.time()
-                        if now - nav["last_deployment_time"] > cooldown:
-                            tx, ty, tz = coords
-                            print(f"[DRONE] Auto-deploying to ({tx:.2f}, {ty:.2f}, {tz:.2f}) for {feed_id}")
-                            if drone_api.goto_position(tx, ty, tz):
-                                nav["last_deployment_time"] = now
-                                nav["is_navigating"] = True
-                                event.deployed = True
-                                print("[DRONE] Deployment command sent")
-                            else:
-                                print("[DRONE] Deployment command failed")
-
+                if gpu_lock is not None:
+                    gpu_lock.acquire()
+                try:
+                    batch_masks = detector.get_masks_batch(batch_frames)
+                finally:
+                    if gpu_lock is not None:
+                        gpu_lock.release()
             except Exception as e:
-                print(f"[DETECTION] {feed_id}: {e}")
+                print(f"[DETECTION] Batch YOLO failed: {e}")
+                batch_masks = [[] for _ in batch_frames]
+
+            # --- 3. Process results per feed (zone checks, alarms, overlays) ---
+            for idx, feed_id in enumerate(batch_feed_ids):
+                pipeline = batch_pipelines[idx]
+                frame = batch_frames[idx]
+                person_masks = batch_masks[idx]
+                state = fm.get_state(feed_id)
+
+                try:
+                    # Zone overlap checks (CPU-only, fast)
+                    zm = pipeline._zone_manager
+                    alarm = pipeline._alarm
+                    pipeline._frame_count += 1
+
+                    people_count = len(person_masks)
+                    is_alarm = False
+                    is_caution = False
+                    danger_count = 0
+                    caution_count = 0
+                    danger_masks = []
+                    caution_masks = []
+                    alarm_fired = False
+
+                    if person_masks:
+                        is_alarm, danger_masks = zm.check_red(person_masks)
+                        danger_count = len(danger_masks)
+                        if is_alarm:
+                            alarm_fired = alarm.trigger()
+                        else:
+                            alarm.clear()
+                        is_caution, caution_masks = zm.check_yellow(person_masks)
+                        caution_count = len(caution_masks)
+                    else:
+                        alarm.clear()
+
+                    # Render overlay
+                    overlay = None
+                    if person_masks and not disable_overlay:
+                        overlay = render_overlay(frame, person_masks)
+
+                    fm.update_detection(
+                        feed_id,
+                        alarm_active=is_alarm,
+                        caution_active=is_caution,
+                        people_count=people_count,
+                        danger_count=danger_count,
+                        caution_count=caution_count,
+                        mask_overlay=overlay,
+                    )
+
+                    # If alarm fired, record trigger and auto-deploy search drone
+                    if alarm_fired:
+                        snapshot_jpeg = encode_frame_jpeg(frame)
+                        replay = list(state.replay_buffer)
+                        trigger_idx = len(replay) - 1
+
+                        coords = get_person_coords(
+                            fm, feed_id, frame, danger_masks,
+                            depth_estimator, _depth_airsim_client,
+                        )
+
+                        event = deps.TriggerEvent(
+                            id=store.next_id(),
+                            feed_id=feed_id,
+                            timestamp=datetime.utcnow().isoformat() + "Z",
+                            coords=coords,
+                            snapshot=snapshot_jpeg or b"",
+                            replay_frames=replay,
+                            replay_trigger_index=max(0, trigger_idx),
+                        )
+                        store.add(event)
+
+                        if drone_api is not None and not nav["is_navigating"]:
+                            now = time.time()
+                            if now - nav["last_deployment_time"] > cooldown:
+                                tx, ty, tz = coords
+                                print(f"[DRONE] Auto-deploying to ({tx:.2f}, {ty:.2f}, {tz:.2f}) for {feed_id}")
+                                if drone_api.goto_position(tx, ty, tz):
+                                    nav["last_deployment_time"] = now
+                                    nav["is_navigating"] = True
+                                    event.deployed = True
+                                    print("[DRONE] Deployment command sent")
+                                else:
+                                    print("[DRONE] Deployment command failed")
+
+                except Exception as e:
+                    print(f"[DETECTION] {feed_id}: {e}")
 
         # Poll drone status once per second to detect navigation completion
         now = time.time()
@@ -300,12 +356,13 @@ def _auto_seg_loop(
     fm: FeedManager,
     cfg: Dict[str, Any],
     segmenter: Any,
+    gpu_lock: threading.Lock | None = None,
 ) -> None:
     """Periodically auto-segment zones on every feed.
 
-    Scene-type behaviour (matches pre-refactor auto_segmentation_loop):
-    - ship   : Re-segment every interval_seconds, always overwrite all zones
-               (ship deck changes as vessel moves — auto wins over manual).
+    Scene-type behaviour:
+    - ship   : Re-segment every interval_seconds. Auto zones are merged with
+               manual zones (manual zones layer on top with higher priority).
     - railway/bridge : Segment once on first available frame; afterwards
                skip if user has saved manual zones.
     """
@@ -338,12 +395,17 @@ def _auto_seg_loop(
                     continue
 
                 try:
-                    zone_dicts = segmenter.segment_frame(frame, state.scene_type)
+                    if gpu_lock is not None:
+                        gpu_lock.acquire()
+                    try:
+                        zone_dicts = segmenter.segment_frame(frame, state.scene_type)
+                    finally:
+                        if gpu_lock is not None:
+                            gpu_lock.release()
                     if zone_dicts:
                         zones = [Zone(**z) for z in zone_dicts]
-                        # Clear manual zones so auto-seg always wins for ship
-                        with state.lock:
-                            state.manual_zones = []
+                        # Auto zones are merged with (not replacing) manual zones.
+                        # Manual zones layer on top with higher priority.
                         fm.update_zones(feed_id, zones, frame.shape[1], frame.shape[0], source="auto")
                         state.auto_seg_active = True
                         state.last_auto_seg_time = now
@@ -360,7 +422,13 @@ def _auto_seg_loop(
                     continue
 
                 try:
-                    zone_dicts = segmenter.segment_frame(frame, state.scene_type)
+                    if gpu_lock is not None:
+                        gpu_lock.acquire()
+                    try:
+                        zone_dicts = segmenter.segment_frame(frame, state.scene_type)
+                    finally:
+                        if gpu_lock is not None:
+                            gpu_lock.release()
                     if zone_dicts:
                         zones = [Zone(**z) for z in zone_dicts]
                         fm.update_zones(feed_id, zones, frame.shape[1], frame.shape[0], source="auto")
@@ -585,6 +653,10 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             print(f"[INIT] Detection pipeline setup failed: {e}")
 
+    # Shared GPU lock — serializes CUDA inference across detection and
+    # auto-segmentation threads (CUDA isn't thread-safe).
+    gpu_lock = threading.Lock()
+
     # Start background threads
     fm._running = True
     capture_thread = threading.Thread(
@@ -595,7 +667,7 @@ async def lifespan(app: FastAPI):
     if pipelines:
         detection_thread = threading.Thread(
             target=_detection_loop,
-            args=(fm, cfg, pipelines, deps.get_trigger_store(), depth_estimator, deps.get_drone_api()),
+            args=(fm, cfg, pipelines, deps.get_trigger_store(), depth_estimator, deps.get_drone_api(), gpu_lock),
             daemon=True,
             name="detection",
         )
@@ -604,7 +676,7 @@ async def lifespan(app: FastAPI):
     if segmenter is not None:
         auto_seg_thread = threading.Thread(
             target=_auto_seg_loop,
-            args=(fm, cfg, segmenter),
+            args=(fm, cfg, segmenter, gpu_lock),
             daemon=True,
             name="auto-seg",
         )
