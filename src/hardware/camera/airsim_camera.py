@@ -37,12 +37,11 @@ class AirSimCamera(CameraBackend):
 
             print(f"[AirSimCamera {self.vehicle_name}] Attempting to connect...")
 
-            # Create client with explicit settings
+            # Create client and confirm the RPC link is alive.
+            # NOTE: Do NOT call enableApiControl() before confirmConnection() —
+            # it is an RPC call that requires an established connection and will
+            # hang or error if the server hasn't responded yet.
             self._client = airsim.MultirotorClient()
-            self._client.enableApiControl(False)  # Release any existing control first
-
-            print(f"[AirSimCamera {self.vehicle_name}] Client created, confirming connection...")
-            # confirmConnection will block until connection is established
             self._client.confirmConnection()
 
             # Test that we can actually query the vehicle

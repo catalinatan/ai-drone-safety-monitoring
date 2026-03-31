@@ -473,42 +473,19 @@ async def lifespan(app: FastAPI):
     deps.set_feed_manager(fm)
     deps.set_config(cfg)
 
-    # Register feeds from feeds.yaml and attempt camera connections
-    # Retry logic for AirSim connections (may need time to start)
-    connected_count = 0
+    # Register feeds from feeds.yaml — cameras are created but NOT connected here.
+    # AirSim RPC calls (enableApiControl, confirmConnection, etc.) are blocking
+    # and use tornado IOLoop internally, which deadlocks when called inside
+    # uvicorn's asyncio event loop (the lifespan runs in that loop).
+    # The capture loop (background thread, outside asyncio) handles connection.
     for feed_id, feed_def in feeds_cfg.items():
         camera_cfg = feed_def.get("camera", {})
         camera = None
 
         try:
             camera = create_camera_backend(camera_cfg)
-
-            # Retry AirSim connections more aggressively
-            is_airsim = camera_cfg.get("type") == "airsim"
-            max_retries = 5 if is_airsim else 1
-            retry_delay = 2.0 if is_airsim else 0.5
-
-            for attempt in range(max_retries):
-                print(f"[INIT] {feed_id}: connection attempt {attempt + 1}/{max_retries}...")
-                ok = camera.connect()
-                if ok:
-                    connected_count += 1
-                    print(f"[INIT] {feed_id}: ✓ connected")
-                    break
-                if attempt < max_retries - 1:
-                    print(f"[INIT] {feed_id}: waiting {retry_delay}s before retry...")
-                    time.sleep(retry_delay)
-                else:
-                    print(f"[INIT] {feed_id}: ✗ failed after {max_retries} attempts")
-
         except Exception as e:
             print(f"[INIT] {feed_id}: camera backend error — {e}")
-
-        # If camera failed, continue in limited mode — matches old_server.py behavior
-        # where initialize() returned False and the lifespan yielded without crashing.
-        # The capture loop will retry the connection once AirSim becomes available.
-        if camera is None or not camera.is_connected:
-            print(f"[INIT] {feed_id}: not connected — will retry in capture loop once AirSim is ready")
 
         fm.register_feed(
             feed_id=feed_id,
@@ -517,11 +494,9 @@ async def lifespan(app: FastAPI):
             camera=camera,
             scene_type=feed_def.get("scene_type"),
         )
+        print(f"[INIT] {feed_id}: registered (connection deferred to capture loop)")
 
-    if connected_count > 0:
-        print(f"[INIT] {connected_count}/{len(feeds_cfg)} cameras connected")
-    else:
-        print("[INIT] No cameras connected — running in limited mode (no AirSim)")
+    print(f"[INIT] {len(feeds_cfg)} feed(s) registered — connections deferred to background threads")
 
     # Restore manually-saved zones from disk (without frame dimensions — masks
     # are regenerated on first real frame via _needs_mask_regen flag)
