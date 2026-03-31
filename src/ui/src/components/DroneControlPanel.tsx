@@ -706,16 +706,28 @@ export function DroneControlPanel() {
           {/* Action buttons: Deploy/Redirect + Dismiss/Resolve */}
           {selectedTrigger && (
             <div className="mt-2 flex gap-2">
-              {/* Deploy / Redirect */}
-              <button
-                onClick={handleDeployToTrigger}
-                className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg border-2 transition-all duration-300 font-mono border-[var(--zone-red)]/80 bg-[var(--zone-red)]/15 text-[var(--zone-red)] hover:border-[var(--zone-red)] hover:bg-[var(--zone-red)]/25"
-              >
-                <Crosshair size={14} />
-                <span className="text-[10px] font-bold uppercase tracking-wider">
-                  {status.is_navigating || status.mode === 'manual' ? 'REDIRECT' : 'DEPLOY'}
-                </span>
-              </button>
+              {/* Deploy / Redirect / Deployed */}
+              {selectedTrigger.deployed ? (
+                <button
+                  disabled
+                  className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg border-2 transition-all duration-300 font-mono border-[var(--zone-green)]/80 bg-[var(--zone-green)]/15 text-[var(--zone-green)]"
+                >
+                  <Check size={14} />
+                  <span className="text-[10px] font-bold uppercase tracking-wider">
+                    Deployed
+                  </span>
+                </button>
+              ) : (
+                <button
+                  onClick={handleDeployToTrigger}
+                  className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg border-2 transition-all duration-300 font-mono border-[var(--zone-red)]/80 bg-[var(--zone-red)]/15 text-[var(--zone-red)] hover:border-[var(--zone-red)] hover:bg-[var(--zone-red)]/25"
+                >
+                  <Crosshair size={14} />
+                  <span className="text-[10px] font-bold uppercase tracking-wider">
+                    {status.is_navigating || status.mode === 'manual' ? 'Redirect to this Location' : 'Deploy to this Location'}
+                  </span>
+                </button>
+              )}
               {/* Dismiss / Resolve */}
               {selectedTrigger.deployed ? (
                 <button
