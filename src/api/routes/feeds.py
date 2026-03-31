@@ -37,6 +37,7 @@ async def list_feeds(
             "status": snap,
             "sceneType": state.scene_type,
             "autoSegActive": state.auto_seg_active,
+            "detectionEnabled": state.detection_enabled,
         })
     return {"feeds": feeds}
 
@@ -69,4 +70,39 @@ async def update_settings(
             if state:
                 state.scene_type = scene_type
 
+    auto_refresh = body.get("autoRefresh")
+    if auto_refresh is not None:
+        for feed_id in fm.feed_ids():
+            state = fm.get_state(feed_id)
+            if state:
+                state.auto_refresh_enabled = bool(auto_refresh)
+
     return {"status": "ok"}
+
+
+@router.patch("/feeds/{feed_id}/detection")
+async def toggle_feed_detection(
+    feed_id: str,
+    request: Request,
+    fm: FeedManager = Depends(get_feed_manager),
+):
+    """Toggle human detection on/off for a single feed."""
+    state = fm.get_state(feed_id)
+    if state is None:
+        raise HTTPException(status_code=404, detail=f"Feed {feed_id!r} not found")
+    body = await request.json()
+    enabled = body.get("enabled")
+    if enabled is None:
+        raise HTTPException(status_code=400, detail="Missing 'enabled' field")
+    state.detection_enabled = bool(enabled)
+    # Clear detection state when disabled so UI doesn't show stale alarms
+    if not state.detection_enabled:
+        fm.update_detection(
+            feed_id,
+            alarm_active=False,
+            caution_active=False,
+            people_count=0,
+            danger_count=0,
+            caution_count=0,
+        )
+    return {"feed_id": feed_id, "detection_enabled": state.detection_enabled}

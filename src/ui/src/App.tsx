@@ -89,6 +89,7 @@ function App() {
               isLive: f.isLive ?? true,
               sceneType: f.sceneType || null,
               autoSegActive: f.autoSegActive ?? false,
+              detectionEnabled: f.detectionEnabled ?? true,
             }));
             console.log(`[INIT] Loaded ${backendFeeds.length} feeds from backend`);
             setFeeds(backendFeeds);
@@ -241,6 +242,21 @@ function App() {
     }
   }, []);
 
+  const handleToggleDetection = useCallback(async (feedId: string, enabled: boolean) => {
+    // Optimistic update
+    setFeeds((prev) => prev.map((f) => f.id === feedId ? { ...f, detectionEnabled: enabled } : f));
+    try {
+      await fetch(`${BACKEND_URL}/feeds/${feedId}/detection`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled }),
+      });
+    } catch {
+      // Revert on failure
+      setFeeds((prev) => prev.map((f) => f.id === feedId ? { ...f, detectionEnabled: !enabled } : f));
+    }
+  }, []);
+
   // Render Command Center views
   const renderCommandCenter = () => {
     switch (commandViewState.type) {
@@ -286,6 +302,7 @@ function App() {
             feeds={feeds}
             onEditFeed={handleEditFeed}
             onExpandFeed={handleExpandFeed}
+            onToggleDetection={handleToggleDetection}
             onAutoSegmentAll={handleAutoSegmentAll}
             sceneType={sceneType}
             autoRefresh={autoRefresh}

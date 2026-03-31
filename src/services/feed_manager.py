@@ -61,6 +61,10 @@ class FeedState:
     frame_count: int = 0
     replay_buffer: deque = field(default_factory=lambda: deque(maxlen=200))
 
+    # Per-feed toggles
+    detection_enabled: bool = True
+    auto_refresh_enabled: bool = False
+
     # Auto-segmentation
     auto_seg_active: bool = False
     last_auto_seg_time: float = 0.0

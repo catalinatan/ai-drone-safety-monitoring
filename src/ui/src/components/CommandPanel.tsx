@@ -8,6 +8,7 @@ interface CommandPanelProps {
   feeds: Feed[];
   onEditFeed: (feedId: string) => void;
   onExpandFeed: (feedId: string) => void;
+  onToggleDetection: (feedId: string, enabled: boolean) => void;
   onAutoSegmentAll: () => Promise<boolean>;
   sceneType: string;
   autoRefresh: boolean;
@@ -15,7 +16,7 @@ interface CommandPanelProps {
   onOpenAdmin?: () => void;
 }
 
-export function CommandPanel({ feeds, onEditFeed, onExpandFeed, onAutoSegmentAll, sceneType, autoRefresh, onSaveSettings, onOpenAdmin }: CommandPanelProps) {
+export function CommandPanel({ feeds, onEditFeed, onExpandFeed, onToggleDetection, onAutoSegmentAll, sceneType, autoRefresh, onSaveSettings, onOpenAdmin }: CommandPanelProps) {
   const [showZones, setShowZones] = useState(true);
   const [showSettings, setShowSettings] = useState(false);
   const [segState, setSegState] = useState<'idle' | 'loading' | 'success' | 'empty' | 'failed'>('idle');
@@ -178,6 +179,7 @@ export function CommandPanel({ feeds, onEditFeed, onExpandFeed, onAutoSegmentAll
               feed={feed}
               onEdit={() => onEditFeed(feed.id)}
               onExpand={() => onExpandFeed(feed.id)}
+              onToggleDetection={onToggleDetection}
               showZones={showZones}
             />
           ))}

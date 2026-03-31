@@ -217,6 +217,8 @@ def _detection_loop(
             state = fm.get_state(feed_id)
             if state is None:
                 continue
+            if not state.detection_enabled:
+                continue
             if not fm.is_warmed_up(feed_id, warmup):
                 continue
             pipeline = pipelines.get(feed_id)
@@ -385,7 +387,9 @@ def _auto_seg_loop(
                 continue
 
             if state.scene_type == "ship":
-                # Ship: always re-segment on interval, overwrite everything
+                # Ship: re-segment on interval only when auto-refresh is enabled
+                if not state.auto_refresh_enabled:
+                    continue
                 last_seg_time = getattr(state, "last_auto_seg_time", 0)
                 if now - last_seg_time < interval_seconds:
                     continue

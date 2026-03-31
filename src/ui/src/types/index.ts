@@ -40,6 +40,7 @@ export interface Feed {
   status?: DetectionStatus;
   sceneType?: 'ship' | 'railway' | 'bridge' | null;
   autoSegActive?: boolean;
+  detectionEnabled?: boolean;
 }
 
 export type ViewState =

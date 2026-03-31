@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Pencil, Maximize2, AlertTriangle, AlertCircle, Users, VideoOff } from 'lucide-react';
+import { Pencil, Maximize2, AlertTriangle, AlertCircle, Users, VideoOff, ScanEye, ScanLine } from 'lucide-react';
 import type { Feed } from '../types';
 import { useDetectionStatus } from '../hooks/useDetectionStatus';
 
@@ -13,10 +13,11 @@ interface FeedCardProps {
   feed: Feed;
   onEdit: () => void;
   onExpand: () => void;
+  onToggleDetection?: (feedId: string, enabled: boolean) => void;
   showZones?: boolean;
 }
 
-export function FeedCard({ feed, onEdit, onExpand, showZones = false }: FeedCardProps) {
+export function FeedCard({ feed, onEdit, onExpand, onToggleDetection, showZones = false }: FeedCardProps) {
   const detectionStatus = useDetectionStatus(feed.id, feed.isLive);
   const [hasRenderedFrame, setHasRenderedFrame] = useState(false);
   const [streamAttempt, setStreamAttempt] = useState(0);
@@ -130,6 +131,21 @@ export function FeedCard({ feed, onEdit, onExpand, showZones = false }: FeedCard
             </div>
           )}
 
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleDetection?.(feed.id, !feed.detectionEnabled);
+            }}
+            className={`p-1.5 rounded transition-all duration-200 ${
+              feed.detectionEnabled !== false
+                ? 'text-[var(--accent-cyan)] bg-[var(--accent-cyan)]/10 hover:bg-[var(--accent-cyan)]/20'
+                : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]'
+            }`}
+            title={feed.detectionEnabled !== false ? 'Detection ON — click to disable' : 'Detection OFF — click to enable'}
+            disabled={isPlaceholder}
+          >
+            {feed.detectionEnabled !== false ? <ScanEye size={14} /> : <ScanLine size={14} />}
+          </button>
           <button
             onClick={(e) => {
               e.stopPropagation();
