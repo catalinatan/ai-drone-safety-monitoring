@@ -16,7 +16,7 @@ interface CommandPanelProps {
 }
 
 export function CommandPanel({ feeds, onEditFeed, onExpandFeed, onAutoSegmentAll, sceneType, autoRefresh, onSaveSettings, onOpenAdmin }: CommandPanelProps) {
-  const [showZones, setShowZones] = useState(false);
+  const [showZones, setShowZones] = useState(true);
   const [showSettings, setShowSettings] = useState(false);
   const [segState, setSegState] = useState<'idle' | 'loading' | 'success' | 'empty' | 'failed'>('idle');
   const [gridSize, setGridSize] = useState<number | null>(null); // null = show all

@@ -89,10 +89,12 @@ def trigger_auto_segment(
         state.auto_seg_active = True
         state.last_auto_seg_time = time.monotonic()
 
+        # Return effective (merged) zones so the frontend gets auto + manual
+        effective_zones = fm.get_zones(feed_id)
         return {
             "status": "ok",
             "zones_count": len(zones),
-            "zones": [z.model_dump() for z in zones],
+            "zones": [z.model_dump() for z in effective_zones],
         }
     except Exception as e:
         raise HTTPException(

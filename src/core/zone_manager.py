@@ -120,12 +120,49 @@ class ZoneManager:
         image_width: int,
         image_height: int,
     ) -> None:
-        """Replace the current zones and regenerate binary masks."""
+        """
+        Replace the current zones and regenerate binary masks.
+
+        Manual zones have absolute pixel-level priority over auto zones.
+        Where a manual zone covers a pixel, only the manual zone's level
+        applies — any auto zone at that pixel is suppressed.
+        """
         self._zones = list(zones)
-        red_zones = [z for z in zones if z.level == "red"]
-        yellow_zones = [z for z in zones if z.level == "yellow"]
-        self._red_mask = zones_to_mask(red_zones, image_width, image_height)
-        self._yellow_mask = zones_to_mask(yellow_zones, image_width, image_height)
+
+        # Separate by source and level
+        manual_red = [z for z in zones if z.source == "manual" and z.level == "red"]
+        manual_yellow = [z for z in zones if z.source == "manual" and z.level == "yellow"]
+        manual_green = [z for z in zones if z.source == "manual" and z.level == "green"]
+        auto_red = [z for z in zones if z.source == "auto" and z.level == "red"]
+        auto_yellow = [z for z in zones if z.source == "auto" and z.level == "yellow"]
+
+        m_red = zones_to_mask(manual_red, image_width, image_height)
+        m_yellow = zones_to_mask(manual_yellow, image_width, image_height)
+        m_green = zones_to_mask(manual_green, image_width, image_height)
+        a_red = zones_to_mask(auto_red, image_width, image_height)
+        a_yellow = zones_to_mask(auto_yellow, image_width, image_height)
+
+        # Manual zones claim pixels absolutely — auto zones only fill unclaimed pixels
+        manual_any = np.zeros((image_height, image_width), dtype=np.uint8)
+        for m in (m_red, m_yellow, m_green):
+            if m is not None:
+                manual_any = manual_any | m
+
+        # effective_red = manual_red | (auto_red & ~manual_any)
+        eff_red = np.zeros((image_height, image_width), dtype=np.uint8)
+        if m_red is not None:
+            eff_red = eff_red | m_red
+        if a_red is not None:
+            eff_red = eff_red | (a_red & ~manual_any)
+        self._red_mask = eff_red if np.any(eff_red) else None
+
+        # effective_yellow = manual_yellow | (auto_yellow & ~manual_any)
+        eff_yellow = np.zeros((image_height, image_width), dtype=np.uint8)
+        if m_yellow is not None:
+            eff_yellow = eff_yellow | m_yellow
+        if a_yellow is not None:
+            eff_yellow = eff_yellow | (a_yellow & ~manual_any)
+        self._yellow_mask = eff_yellow if np.any(eff_yellow) else None
 
     def get_zones(self) -> List[Zone]:
         return list(self._zones)

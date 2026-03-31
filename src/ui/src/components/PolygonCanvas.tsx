@@ -1,12 +1,14 @@
 import { useRef, useState, useEffect, useCallback } from 'react';
 import type { Zone, ZoneLevel, Point } from '../types';
+import type { ToolType } from './EditFeedPage';
 
 interface PolygonCanvasProps {
   imageSrc: string;
   zones: Zone[];
   onZonesChange: (zones: Zone[]) => void;
-  activeTool: ZoneLevel | 'delete' | null;
+  activeTool: ToolType;
   readOnly?: boolean;
+  onCutComplete?: (cutPoints: Point[]) => void;
 }
 
 interface ImgRect {
@@ -28,6 +30,7 @@ export function PolygonCanvas({
   onZonesChange,
   activeTool,
   readOnly = false,
+  onCutComplete,
 }: PolygonCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const imageRef = useRef<HTMLImageElement>(null);
@@ -193,7 +196,7 @@ export function PolygonCanvas({
         return;
       }
 
-      // Drawing mode: add point
+      // Cut tool or drawing mode: add point
       const newPoints = [...currentPoints, coords];
 
       // Check if closing the polygon (clicking near first point)
@@ -204,12 +207,21 @@ export function PolygonCanvas({
         );
 
         if (distance < 3) {
-          // Close polygon - remove the last point (which is near the first)
           const closedPoints = newPoints.slice(0, -1);
+
+          if (activeTool === 'cut') {
+            // Cut tool: subtract this polygon from overlapping zone
+            onCutComplete?.(closedPoints);
+            setCurrentPoints([]);
+            return;
+          }
+
+          // Normal drawing: create new zone
           const newZone: Zone = {
             id: `zone-${Date.now()}`,
             level: activeTool,
             points: closedPoints,
+            source: 'manual',
           };
           onZonesChange([...zones, newZone]);
           setCurrentPoints([]);
@@ -226,14 +238,21 @@ export function PolygonCanvas({
   const handleDoubleClick = useCallback(() => {
     if (readOnly || !activeTool || activeTool === 'delete' || currentPoints.length < 3) return;
 
+    if (activeTool === 'cut') {
+      onCutComplete?.(currentPoints);
+      setCurrentPoints([]);
+      return;
+    }
+
     const newZone: Zone = {
       id: `zone-${Date.now()}`,
       level: activeTool,
       points: currentPoints,
+      source: 'manual',
     };
     onZonesChange([...zones, newZone]);
     setCurrentPoints([]);
-  }, [activeTool, currentPoints, zones, onZonesChange, readOnly]);
+  }, [activeTool, currentPoints, zones, onZonesChange, readOnly, onCutComplete]);
 
   // Handle escape key to cancel current drawing
   useEffect(() => {
@@ -361,42 +380,46 @@ export function PolygonCanvas({
           })}
 
           {/* Current drawing polygon */}
-          {currentPoints.length > 0 && activeTool && activeTool !== 'delete' && (
-            <g>
-              {/* Lines */}
-              <polyline
-                points={currentPoints.map((p) => `${p.x},${p.y}`).join(' ')}
-                fill="none"
-                stroke={ZONE_COLORS[activeTool].stroke}
-                strokeWidth={0.3}
-                strokeDasharray="1,0.5"
-              />
-              {/* Preview line to first point if we have 3+ points */}
-              {currentPoints.length >= 3 && (
-                <line
-                  x1={currentPoints[currentPoints.length - 1].x}
-                  y1={currentPoints[currentPoints.length - 1].y}
-                  x2={currentPoints[0].x}
-                  y2={currentPoints[0].y}
-                  stroke={ZONE_COLORS[activeTool].stroke}
-                  strokeWidth={0.2}
-                  strokeDasharray="0.5,0.5"
-                  opacity={0.5}
+          {currentPoints.length > 0 && activeTool && activeTool !== 'delete' && (() => {
+            const isCut = activeTool === 'cut';
+            const strokeColor = isCut ? '#00d4ff' : ZONE_COLORS[activeTool as ZoneLevel].stroke;
+            return (
+              <g>
+                {/* Lines */}
+                <polyline
+                  points={currentPoints.map((p) => `${p.x},${p.y}`).join(' ')}
+                  fill="none"
+                  stroke={strokeColor}
+                  strokeWidth={0.3}
+                  strokeDasharray="1,0.5"
                 />
-              )}
-              {/* Points */}
-              {currentPoints.map((point, idx) => (
-                <circle
-                  key={idx}
-                  cx={point.x}
-                  cy={point.y}
-                  r={idx === 0 ? 1 : 0.6}
-                  fill={ZONE_COLORS[activeTool].stroke}
-                  className={idx === 0 ? 'cursor-pointer' : ''}
-                />
-              ))}
-            </g>
-          )}
+                {/* Preview line to first point if we have 3+ points */}
+                {currentPoints.length >= 3 && (
+                  <line
+                    x1={currentPoints[currentPoints.length - 1].x}
+                    y1={currentPoints[currentPoints.length - 1].y}
+                    x2={currentPoints[0].x}
+                    y2={currentPoints[0].y}
+                    stroke={strokeColor}
+                    strokeWidth={0.2}
+                    strokeDasharray="0.5,0.5"
+                    opacity={0.5}
+                  />
+                )}
+                {/* Points */}
+                {currentPoints.map((point, idx) => (
+                  <circle
+                    key={idx}
+                    cx={point.x}
+                    cy={point.y}
+                    r={idx === 0 ? 1 : 0.6}
+                    fill={strokeColor}
+                    className={idx === 0 ? 'cursor-pointer' : ''}
+                  />
+                ))}
+              </g>
+            );
+          })()}
         </svg>
       )}
 
@@ -406,7 +429,9 @@ export function PolygonCanvas({
       {/* Drawing instructions */}
       {!readOnly && activeTool && activeTool !== 'delete' && currentPoints.length === 0 && (
         <div className="absolute bottom-3 left-3 px-2 py-1 rounded text-xs font-mono bg-[var(--bg-primary)]/80 border border-[var(--border-dim)] text-[var(--text-secondary)]">
-          Click to place points • Double-click or click first point to close • Drag vertices to adjust
+          {activeTool === 'cut'
+            ? 'Draw shape over a zone to cut • Double-click or click first point to close'
+            : 'Click to place points • Double-click or click first point to close • Drag vertices to adjust'}
         </div>
       )}
       {!readOnly && !activeTool && currentPoints.length === 0 && !draggingVertex && (

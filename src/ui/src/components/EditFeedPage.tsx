@@ -1,7 +1,8 @@
-import { useState } from 'react';
-import { ArrowLeft, Circle, Trash2 } from 'lucide-react';
+import { useState, useCallback } from 'react';
+import { ArrowLeft, Circle, Trash2, Scissors, Maximize } from 'lucide-react';
+import polygonClipping from 'polygon-clipping';
 import { PolygonCanvas } from './PolygonCanvas';
-import type { Feed, Zone, ZoneLevel } from '../types';
+import type { Feed, Zone, ZoneLevel, Point } from '../types';
 
 interface EditFeedPageProps {
   feed: Feed;
@@ -9,7 +10,17 @@ interface EditFeedPageProps {
   onCancel: () => void;
 }
 
-type ToolType = ZoneLevel | 'delete' | null;
+export type ToolType = ZoneLevel | 'delete' | 'cut' | null;
+
+// Convert Zone points to polygon-clipping format
+function zoneToPoly(zone: Zone): [number, number][] {
+  return zone.points.map((p) => [p.x, p.y]);
+}
+
+// Convert polygon-clipping result ring to Zone points
+function ringToPoints(ring: [number, number][]): Point[] {
+  return ring.map(([x, y]) => ({ x, y }));
+}
 
 export function EditFeedPage({ feed, onSave, onCancel }: EditFeedPageProps) {
   const [zones, setZones] = useState<Zone[]>(feed.zones);
@@ -22,6 +33,86 @@ export function EditFeedPage({ feed, onSave, onCancel }: EditFeedPageProps) {
   const handleSave = () => {
     onSave(zones);
   };
+
+  // Fill Remaining: create a zone covering all uncovered area
+  const handleFillRemaining = useCallback(() => {
+    // Need a drawing level selected (red/yellow/green)
+    const level = activeTool === 'red' || activeTool === 'yellow' || activeTool === 'green'
+      ? activeTool : 'green';
+
+    const fullRect: [number, number][] = [[0, 0], [100, 0], [100, 100], [0, 100]];
+
+    if (zones.length === 0) {
+      // No zones exist — fill the entire frame
+      setZones([...zones, {
+        id: `zone-${Date.now()}`,
+        level,
+        points: ringToPoints(fullRect),
+        source: 'manual',
+      }]);
+      return;
+    }
+
+    // Subtract all existing zones from the full rectangle
+    const existingPolys = zones.map((z) => [zoneToPoly(z)] as [number, number][][]);
+    try {
+      const result = polygonClipping.difference([fullRect], ...existingPolys);
+      if (!result || result.length === 0) return; // fully covered
+
+      const newZones: Zone[] = result.map((poly, i) => ({
+        id: `zone-fill-${Date.now()}-${i}`,
+        level,
+        points: ringToPoints(poly[0]), // outer ring
+        source: 'manual' as const,
+      }));
+      setZones([...zones, ...newZones]);
+    } catch {
+      // Fallback: just create full rectangle
+      setZones([...zones, {
+        id: `zone-${Date.now()}`,
+        level,
+        points: ringToPoints(fullRect),
+        source: 'manual',
+      }]);
+    }
+  }, [zones, activeTool]);
+
+  // Cut handler: subtract a drawn polygon from the zone it overlaps
+  const handleCutComplete = useCallback((cutPoints: Point[]) => {
+    if (cutPoints.length < 3) return;
+    const cutPoly: [number, number][] = cutPoints.map((p) => [p.x, p.y]);
+
+    // Find the zone whose polygon contains the centroid of the cut shape
+    const cx = cutPoints.reduce((s, p) => s + p.x, 0) / cutPoints.length;
+    const cy = cutPoints.reduce((s, p) => s + p.y, 0) / cutPoints.length;
+
+    const targetIdx = zones.findIndex((z) => isPointInPolygon({ x: cx, y: cy }, z.points));
+    if (targetIdx === -1) return;
+
+    const target = zones[targetIdx];
+    const targetPoly: [number, number][] = zoneToPoly(target);
+
+    try {
+      const result = polygonClipping.difference([targetPoly], [cutPoly]);
+      if (!result || result.length === 0) {
+        // Zone fully erased
+        setZones(zones.filter((_, i) => i !== targetIdx));
+        return;
+      }
+      // Replace target with result polygon(s)
+      const replacements: Zone[] = result.map((poly, i) => ({
+        id: i === 0 ? target.id : `zone-cut-${Date.now()}-${i}`,
+        level: target.level,
+        points: ringToPoints(poly[0]),
+        source: target.source,
+      }));
+      const updated = [...zones];
+      updated.splice(targetIdx, 1, ...replacements);
+      setZones(updated);
+    } catch {
+      // polygon-clipping failure — ignore
+    }
+  }, [zones]);
 
   const zoneStats = {
     red: zones.filter((z) => z.level === 'red').length,
@@ -89,6 +180,7 @@ export function EditFeedPage({ feed, onSave, onCancel }: EditFeedPageProps) {
             zones={zones}
             onZonesChange={setZones}
             activeTool={activeTool}
+            onCutComplete={handleCutComplete}
           />
         </div>
 
@@ -140,6 +232,27 @@ export function EditFeedPage({ feed, onSave, onCancel }: EditFeedPageProps) {
                 <Trash2 size={18} />
               </button>
 
+              {/* Cut Tool */}
+              <button
+                onClick={() => handleToolClick('cut')}
+                className={`zone-tool border-[var(--accent-cyan)] text-[var(--accent-cyan)] ${
+                  activeTool === 'cut' ? 'active bg-[var(--accent-cyan)]/20' : ''
+                } hover:bg-[var(--accent-cyan)]/10`}
+                title="Cut — Draw shape to remove from a zone"
+              >
+                <Scissors size={18} />
+              </button>
+
+              <div className="h-6 w-px bg-[var(--border-dim)] mx-2" />
+
+              {/* Fill Remaining */}
+              <button
+                onClick={handleFillRemaining}
+                className="zone-tool border-[var(--accent-cyan)] text-[var(--accent-cyan)] hover:bg-[var(--accent-cyan)]/10"
+                title="Fill all uncovered area with selected zone level"
+              >
+                <Maximize size={18} />
+              </button>
             </div>
 
             {/* Tool descriptions */}
@@ -148,6 +261,7 @@ export function EditFeedPage({ feed, onSave, onCancel }: EditFeedPageProps) {
               {activeTool === 'yellow' && 'CAUTION — Limited access'}
               {activeTool === 'green' && 'SAFE — Normal access'}
               {activeTool === 'delete' && 'DELETE — Click on a zone to remove'}
+              {activeTool === 'cut' && 'CUT — Draw shape to subtract from a zone'}
               {!activeTool && 'Select a tool to begin drawing zones'}
             </div>
           </div>
@@ -165,4 +279,18 @@ export function EditFeedPage({ feed, onSave, onCancel }: EditFeedPageProps) {
       </main>
     </div>
   );
+}
+
+// Ray casting point-in-polygon check
+function isPointInPolygon(point: Point, polygon: Point[]): boolean {
+  let inside = false;
+  const n = polygon.length;
+  for (let i = 0, j = n - 1; i < n; j = i++) {
+    const xi = polygon[i].x, yi = polygon[i].y;
+    const xj = polygon[j].x, yj = polygon[j].y;
+    if (yi > point.y !== yj > point.y && point.x < ((xj - xi) * (point.y - yi)) / (yj - yi) + xi) {
+      inside = !inside;
+    }
+  }
+  return inside;
 }

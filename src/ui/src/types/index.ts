@@ -9,6 +9,7 @@ export interface Zone {
   id: string;
   level: ZoneLevel;
   points: Point[];
+  source?: 'manual' | 'auto';
 }
 
 export interface NEDCoordinate {
