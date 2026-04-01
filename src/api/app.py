@@ -391,74 +391,56 @@ def _auto_seg_loop(
 ) -> None:
     """Periodically auto-segment zones on every feed.
 
-    Scene-type behaviour:
-    - ship   : Re-segment every interval_seconds. Auto zones are merged with
-               manual zones (manual zones layer on top with higher priority).
-    - railway/bridge : Segment once on first available frame; afterwards
-               skip if user has saved manual zones.
+    Behaviour is controlled by ``auto_segmentation`` in the runtime config:
+    - ``enabled``  — when False the loop idles (no re-segmentation).
+    - ``scene_type`` — the scene model to use for all feeds.
+    - ``interval_seconds`` — how often to re-segment (applies to all scenes).
+
+    On first run (or when auto-refresh is disabled), each feed gets one
+    initial segmentation pass.  Subsequent passes only happen while
+    ``enabled`` is True.
     """
     from src.core.models import Zone
 
-    seg_cfg = cfg.get("auto_segmentation", {})
-    interval_seconds = seg_cfg.get("interval_seconds", 60.0)
-
-    # Track which static-scene feeds have already had their initial segmentation
+    # Track which feeds have had their initial segmentation
     initial_seg_done: set = set()
+    last_scene_type: str | None = None
 
     # Wait for initial frames before starting
     time.sleep(5.0)
 
     while getattr(fm, "_running", False):
+        seg_cfg = cfg.get("auto_segmentation", {})
+        enabled = seg_cfg.get("enabled", False)
+        scene_type = seg_cfg.get("scene_type", "bridge")
+        interval_seconds = seg_cfg.get("interval_seconds", 60.0)
+
+        # If scene type changed, reset initial segmentation so all feeds re-segment
+        if scene_type != last_scene_type:
+            if last_scene_type is not None:
+                print(f"[AUTO-SEG] Scene type changed: {last_scene_type} -> {scene_type}, re-segmenting all feeds")
+                initial_seg_done.clear()
+            last_scene_type = scene_type
+
         now = time.monotonic()
         for feed_id in fm.feed_ids():
             state = fm.get_state(feed_id)
-            if state is None or not state.scene_type:
+            if state is None:
                 continue
 
-            if state.scene_type == "ship":
-                # Ship: re-segment on interval only when auto-refresh is enabled
-                if not state.auto_refresh_enabled:
-                    continue
-                last_seg_time = getattr(state, "last_auto_seg_time", 0)
-                if now - last_seg_time < interval_seconds:
-                    continue
+            # Keep feed scene_type in sync with global config
+            state.scene_type = scene_type
 
+            # Initial segmentation — run once per feed regardless of enabled flag
+            if feed_id not in initial_seg_done:
                 frame = fm.get_frame(feed_id)
                 if frame is None:
                     continue
-
                 try:
                     if gpu_lock is not None:
                         gpu_lock.acquire()
                     try:
-                        zone_dicts = segmenter.segment_frame(frame, state.scene_type)
-                    finally:
-                        if gpu_lock is not None:
-                            gpu_lock.release()
-                    if zone_dicts:
-                        zones = [Zone(**z) for z in zone_dicts]
-                        # Auto zones are merged with (not replacing) manual zones.
-                        # Manual zones layer on top with higher priority.
-                        fm.update_zones(feed_id, zones, frame.shape[1], frame.shape[0], source="auto")
-                        state.auto_seg_active = True
-                        state.last_auto_seg_time = now
-                except Exception as e:
-                    print(f"[AUTO-SEG] {feed_id}: {e}")
-
-            else:
-                # Railway / Bridge: segment once initially; skip if manual zones exist
-                if feed_id in initial_seg_done or state.manual_zones:
-                    continue
-
-                frame = fm.get_frame(feed_id)
-                if frame is None:
-                    continue
-
-                try:
-                    if gpu_lock is not None:
-                        gpu_lock.acquire()
-                    try:
-                        zone_dicts = segmenter.segment_frame(frame, state.scene_type)
+                        zone_dicts = segmenter.segment_frame(frame, scene_type)
                     finally:
                         if gpu_lock is not None:
                             gpu_lock.release()
@@ -467,10 +449,39 @@ def _auto_seg_loop(
                         fm.update_zones(feed_id, zones, frame.shape[1], frame.shape[0], source="auto")
                         state.auto_seg_active = True
                         state.last_auto_seg_time = now
-                        initial_seg_done.add(feed_id)
-                        print(f"[AUTO-SEG] Initial segmentation done for {feed_id} ({state.scene_type})")
+                    initial_seg_done.add(feed_id)
+                    print(f"[AUTO-SEG] Initial segmentation done for {feed_id} ({scene_type})")
                 except Exception as e:
                     print(f"[AUTO-SEG] {feed_id}: {e}")
+                continue
+
+            # Periodic refresh — only when enabled
+            if not enabled:
+                continue
+
+            last_seg_time = getattr(state, "last_auto_seg_time", 0)
+            if now - last_seg_time < interval_seconds:
+                continue
+
+            frame = fm.get_frame(feed_id)
+            if frame is None:
+                continue
+
+            try:
+                if gpu_lock is not None:
+                    gpu_lock.acquire()
+                try:
+                    zone_dicts = segmenter.segment_frame(frame, scene_type)
+                finally:
+                    if gpu_lock is not None:
+                        gpu_lock.release()
+                if zone_dicts:
+                    zones = [Zone(**z) for z in zone_dicts]
+                    fm.update_zones(feed_id, zones, frame.shape[1], frame.shape[0], source="auto")
+                    state.auto_seg_active = True
+                    state.last_auto_seg_time = now
+            except Exception as e:
+                print(f"[AUTO-SEG] {feed_id}: {e}")
 
         time.sleep(5.0)  # Check every 5 seconds
 
@@ -588,12 +599,14 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             print(f"[INIT] {feed_id}: camera backend error — {e}")
 
+        # Use per-feed scene_type if defined, else fall back to global config
+        global_scene_type = cfg.get("auto_segmentation", {}).get("scene_type", "bridge")
         fm.register_feed(
             feed_id=feed_id,
             name=feed_def.get("name", feed_id),
             location=feed_def.get("location", ""),
             camera=camera,
-            scene_type=feed_def.get("scene_type"),
+            scene_type=feed_def.get("scene_type") or global_scene_type,
         )
         print(f"[INIT] {feed_id}: registered (connection deferred to capture loop)")
 

@@ -1,28 +1,23 @@
 import { useState, useEffect, useCallback } from 'react';
-import { ArrowLeft, Save, Loader2, RefreshCw, AlertTriangle, Check, Activity } from 'lucide-react';
+import { ArrowLeft, Save, Loader2, RefreshCw, AlertTriangle, Check } from 'lucide-react';
 import { BACKEND_URL } from '../data/mockFeeds';
 
 interface AdminPanelProps {
   onBack: () => void;
 }
 
-interface AuditEvent {
-  type: string;
-  timestamp: string;
-  feed_id?: string;
-  details?: Record<string, unknown>;
-  [key: string]: unknown;
-}
-
 // Config section definitions — maps YAML structure to form fields
 interface FieldDef {
   key: string;
   label: string;
-  type: 'number' | 'string' | 'boolean';
+  type: 'number' | 'string' | 'boolean' | 'select';
   step?: number;
   min?: number;
   max?: number;
   hint?: string;
+  options?: { value: string; label: string }[];
+  /** When set, this field is disabled unless the sibling field `enabledBy` is truthy */
+  enabledBy?: string;
 }
 
 interface SectionDef {
@@ -54,7 +49,13 @@ const CONFIG_SECTIONS: SectionDef[] = [
     key: 'auto_segmentation',
     label: 'Auto-Segmentation',
     fields: [
-      { key: 'interval_seconds', label: 'Interval (s)', type: 'number', step: 10, min: 10, max: 600, hint: 'Re-segment interval for ship scenes' },
+      { key: 'scene_type', label: 'Scene Type', type: 'select', options: [
+        { value: 'bridge', label: 'Bridge' },
+        { value: 'railway', label: 'Railway' },
+        { value: 'ship', label: 'Ship' },
+      ], hint: 'Applies to all CCTV feeds' },
+      { key: 'enabled', label: 'Auto-Refresh Zones', type: 'boolean', hint: 'Periodically re-run zone segmentation' },
+      { key: 'interval_seconds', label: 'Refresh Interval (s)', type: 'number', step: 10, min: 10, max: 600, hint: 'How often to re-segment zones', enabledBy: 'enabled' },
       { key: 'confidence', label: 'Confidence', type: 'number', step: 0.05, min: 0.1, max: 1.0, hint: 'Segmentation model confidence' },
       { key: 'simplify_epsilon', label: 'Polygon Simplify', type: 'number', step: 0.5, min: 0.5, max: 10, hint: 'Polygon approximation tolerance (px)' },
       { key: 'min_contour_area', label: 'Min Contour Area', type: 'number', step: 10, min: 10, max: 500, hint: 'Ignore contours smaller than this (px²)' },
@@ -83,16 +84,6 @@ const CONFIG_SECTIONS: SectionDef[] = [
     fields: [
       { key: 'enabled', label: 'Enable Button', type: 'boolean', hint: 'Show Deploy Equipment button on drone panel' },
       { key: 'label', label: 'Equipment Name', type: 'string', hint: 'e.g. Lifevest, AED, First Aid Kit' },
-    ],
-  },
-  {
-    key: 'follow_mode',
-    label: 'Follow Mode',
-    fields: [
-      { key: 'target', label: 'Target', type: 'string', hint: '"ship", "railway", "bridge", or empty' },
-      { key: 'hover_drones', label: 'Hover Drones', type: 'boolean', hint: 'Keep CCTV drones hovering' },
-      { key: 'hover_altitude', label: 'Hover Altitude', type: 'number', step: 1, min: -50, max: 0 },
-      { key: 'follow_interval', label: 'Follow Interval (s)', type: 'number', step: 0.01, min: 0.01, max: 1.0, hint: 'Teleport loop tick rate' },
     ],
   },
 ];
@@ -124,10 +115,8 @@ function setNestedValue(obj: Record<string, unknown>, path: string[], value: unk
 export function AdminPanel({ onBack }: AdminPanelProps) {
   const [config, setConfig] = useState<Record<string, unknown> | null>(null);
   const [originalConfig, setOriginalConfig] = useState<Record<string, unknown> | null>(null);
-  const [events, setEvents] = useState<AuditEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
-  const [activeTab, setActiveTab] = useState<'config' | 'events'>('config');
 
   const fetchConfig = useCallback(async () => {
     try {
@@ -142,26 +131,14 @@ export function AdminPanel({ onBack }: AdminPanelProps) {
     }
   }, []);
 
-  const fetchEvents = useCallback(async () => {
-    try {
-      const res = await fetch(`${BACKEND_URL}/events?limit=50`);
-      if (res.ok) {
-        const data = await res.json();
-        setEvents(data.events ?? []);
-      }
-    } catch {
-      // Backend unavailable
-    }
-  }, []);
-
   useEffect(() => {
     const load = async () => {
       setLoading(true);
-      await Promise.all([fetchConfig(), fetchEvents()]);
+      await fetchConfig();
       setLoading(false);
     };
     load();
-  }, [fetchConfig, fetchEvents]);
+  }, [fetchConfig]);
 
   const handleFieldChange = (sectionKey: string, fieldKey: string, value: unknown) => {
     if (!config) return;
@@ -207,6 +184,32 @@ export function AdminPanel({ onBack }: AdminPanelProps) {
     if (!config) return null;
     const value = getNestedValue(config, [section.key, field.key]);
 
+    // Check if this field is gated by another boolean field
+    const isDisabledByGate = field.enabledBy
+      ? !Boolean(getNestedValue(config, [section.key, field.enabledBy]))
+      : false;
+
+    if (field.type === 'select') {
+      return (
+        <div key={field.key} className="py-2">
+          <label className="block text-xs font-mono text-[var(--text-primary)] mb-1">{field.label}</label>
+          <select
+            value={String(value ?? '')}
+            onChange={(e) => handleFieldChange(section.key, field.key, e.target.value)}
+            disabled={isDisabledByGate}
+            className={`w-full px-2 py-1.5 rounded border border-[var(--border-dim)] bg-[var(--bg-tertiary)] text-xs font-mono text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-cyan)] transition-colors cursor-pointer ${isDisabledByGate ? 'opacity-40 cursor-not-allowed' : ''}`}
+          >
+            {field.options?.map((opt) => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+          {field.hint && (
+            <p className="text-[9px] font-mono text-[var(--text-muted)] mt-0.5">{field.hint}</p>
+          )}
+        </div>
+      );
+    }
+
     if (field.type === 'boolean') {
       const checked = Boolean(value);
       return (
@@ -244,13 +247,14 @@ export function AdminPanel({ onBack }: AdminPanelProps) {
 
     if (field.type === 'string') {
       return (
-        <div key={field.key} className="py-2">
+        <div key={field.key} className={`py-2 ${isDisabledByGate ? 'opacity-40' : ''}`}>
           <label className="block text-xs font-mono text-[var(--text-primary)] mb-1">{field.label}</label>
           <input
             type="text"
             value={String(value ?? '')}
             onChange={(e) => handleFieldChange(section.key, field.key, e.target.value)}
-            className="w-full px-2 py-1.5 rounded border border-[var(--border-dim)] bg-[var(--bg-tertiary)] text-xs font-mono text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-cyan)] transition-colors"
+            disabled={isDisabledByGate}
+            className={`w-full px-2 py-1.5 rounded border border-[var(--border-dim)] bg-[var(--bg-tertiary)] text-xs font-mono text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-cyan)] transition-colors ${isDisabledByGate ? 'cursor-not-allowed' : ''}`}
           />
           {field.hint && (
             <p className="text-[9px] font-mono text-[var(--text-muted)] mt-0.5">{field.hint}</p>
@@ -261,7 +265,7 @@ export function AdminPanel({ onBack }: AdminPanelProps) {
 
     // number
     return (
-      <div key={field.key} className="py-2">
+      <div key={field.key} className={`py-2 ${isDisabledByGate ? 'opacity-40' : ''}`}>
         <div className="flex items-center justify-between mb-1">
           <label className="text-xs font-mono text-[var(--text-primary)]">{field.label}</label>
           <span className="text-[10px] font-mono text-[var(--accent-cyan)]">{String(value ?? '')}</span>
@@ -276,22 +280,14 @@ export function AdminPanel({ onBack }: AdminPanelProps) {
           step={field.step}
           min={field.min}
           max={field.max}
-          className="w-full px-2 py-1.5 rounded border border-[var(--border-dim)] bg-[var(--bg-tertiary)] text-xs font-mono text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-cyan)] transition-colors"
+          disabled={isDisabledByGate}
+          className={`w-full px-2 py-1.5 rounded border border-[var(--border-dim)] bg-[var(--bg-tertiary)] text-xs font-mono text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-cyan)] transition-colors ${isDisabledByGate ? 'cursor-not-allowed' : ''}`}
         />
         {field.hint && (
           <p className="text-[9px] font-mono text-[var(--text-muted)] mt-0.5">{field.hint}</p>
         )}
       </div>
     );
-  };
-
-  const formatTimestamp = (ts: string) => {
-    try {
-      const d = new Date(ts);
-      return d.toLocaleTimeString('en-US', { hour12: false }) + '.' + String(d.getMilliseconds()).padStart(3, '0');
-    } catch {
-      return ts;
-    }
   };
 
   if (loading) {
@@ -324,92 +320,50 @@ export function AdminPanel({ onBack }: AdminPanelProps) {
         </div>
 
         <div className="flex items-center gap-2">
-          {/* Tab switcher */}
-          <div className="flex rounded border border-[var(--border-dim)] overflow-hidden">
-            <button
-              onClick={() => setActiveTab('config')}
-              className={`
-                px-3 py-1 text-[10px] font-bold font-mono uppercase tracking-wider transition-all
-                ${activeTab === 'config'
-                  ? 'bg-[var(--accent-cyan)]/10 text-[var(--accent-cyan)] border-r border-[var(--border-dim)]'
-                  : 'bg-[var(--bg-tertiary)] text-[var(--text-muted)] hover:text-[var(--text-secondary)] border-r border-[var(--border-dim)]'
-                }
-              `}
-            >
-              Config
-            </button>
-            <button
-              onClick={() => { setActiveTab('events'); fetchEvents(); }}
-              className={`
-                px-3 py-1 text-[10px] font-bold font-mono uppercase tracking-wider transition-all
-                ${activeTab === 'events'
-                  ? 'bg-[var(--accent-cyan)]/10 text-[var(--accent-cyan)]'
-                  : 'bg-[var(--bg-tertiary)] text-[var(--text-muted)] hover:text-[var(--text-secondary)]'
-                }
-              `}
-            >
-              Events ({events.length})
-            </button>
-          </div>
-
-          {activeTab === 'config' && (
-            <>
-              <button
-                onClick={handleReset}
-                disabled={!hasChanges}
-                className={`
-                  flex items-center gap-1.5 px-2 py-1 rounded border text-[10px] font-bold font-mono uppercase tracking-wider transition-all
-                  ${hasChanges
-                    ? 'border-[var(--zone-yellow)] bg-[var(--zone-yellow)]/10 text-[var(--zone-yellow)] hover:bg-[var(--zone-yellow)]/20'
-                    : 'border-[var(--border-dim)] bg-[var(--bg-tertiary)] text-[var(--text-muted)] cursor-not-allowed opacity-50'
-                  }
-                `}
-              >
-                <RefreshCw size={10} />
-                Reset
-              </button>
-              <button
-                onClick={handleSave}
-                disabled={!hasChanges || saveState === 'saving'}
-                className={`
-                  flex items-center gap-1.5 px-2 py-1 rounded border text-[10px] font-bold font-mono uppercase tracking-wider transition-all
-                  ${saveState === 'saved'
-                    ? 'border-[var(--zone-green)] bg-[var(--zone-green)]/10 text-[var(--zone-green)]'
-                    : saveState === 'error'
-                    ? 'border-[var(--zone-red)] bg-[var(--zone-red)]/10 text-[var(--zone-red)]'
-                    : hasChanges && saveState !== 'saving'
-                    ? 'border-[var(--accent-cyan)] bg-[var(--accent-cyan)]/10 text-[var(--accent-cyan)] hover:bg-[var(--accent-cyan)]/20'
-                    : 'border-[var(--border-dim)] bg-[var(--bg-tertiary)] text-[var(--text-muted)] cursor-not-allowed opacity-50'
-                  }
-                `}
-              >
-                {saveState === 'saving' ? <Loader2 size={10} className="animate-spin" /> :
-                 saveState === 'saved' ? <Check size={10} /> :
-                 saveState === 'error' ? <AlertTriangle size={10} /> :
-                 <Save size={10} />}
-                {saveState === 'saving' ? 'Saving...' :
-                 saveState === 'saved' ? 'Saved' :
-                 saveState === 'error' ? 'Error' :
-                 'Save'}
-              </button>
-            </>
-          )}
-
-          {activeTab === 'events' && (
-            <button
-              onClick={fetchEvents}
-              className="flex items-center gap-1.5 px-2 py-1 rounded border border-[var(--border-dim)] bg-[var(--bg-tertiary)] text-[var(--text-muted)] hover:text-[var(--accent-cyan)] hover:border-[var(--accent-cyan)] transition-all text-[10px] font-bold font-mono uppercase tracking-wider"
-            >
-              <RefreshCw size={10} />
-              Refresh
-            </button>
-          )}
+          <button
+            onClick={handleReset}
+            disabled={!hasChanges}
+            className={`
+              flex items-center gap-1.5 px-2 py-1 rounded border text-[10px] font-bold font-mono uppercase tracking-wider transition-all
+              ${hasChanges
+                ? 'border-[var(--zone-yellow)] bg-[var(--zone-yellow)]/10 text-[var(--zone-yellow)] hover:bg-[var(--zone-yellow)]/20'
+                : 'border-[var(--border-dim)] bg-[var(--bg-tertiary)] text-[var(--text-muted)] cursor-not-allowed opacity-50'
+              }
+            `}
+          >
+            <RefreshCw size={10} />
+            Reset
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={!hasChanges || saveState === 'saving'}
+            className={`
+              flex items-center gap-1.5 px-2 py-1 rounded border text-[10px] font-bold font-mono uppercase tracking-wider transition-all
+              ${saveState === 'saved'
+                ? 'border-[var(--zone-green)] bg-[var(--zone-green)]/10 text-[var(--zone-green)]'
+                : saveState === 'error'
+                ? 'border-[var(--zone-red)] bg-[var(--zone-red)]/10 text-[var(--zone-red)]'
+                : hasChanges && saveState !== 'saving'
+                ? 'border-[var(--accent-cyan)] bg-[var(--accent-cyan)]/10 text-[var(--accent-cyan)] hover:bg-[var(--accent-cyan)]/20'
+                : 'border-[var(--border-dim)] bg-[var(--bg-tertiary)] text-[var(--text-muted)] cursor-not-allowed opacity-50'
+              }
+            `}
+          >
+            {saveState === 'saving' ? <Loader2 size={10} className="animate-spin" /> :
+             saveState === 'saved' ? <Check size={10} /> :
+             saveState === 'error' ? <AlertTriangle size={10} /> :
+             <Save size={10} />}
+            {saveState === 'saving' ? 'Saving...' :
+             saveState === 'saved' ? 'Saved' :
+             saveState === 'error' ? 'Error' :
+             'Save'}
+          </button>
         </div>
       </header>
 
       {/* Content */}
       <main className="flex-1 min-h-0 overflow-y-auto p-4">
-        {activeTab === 'config' && config && (
+        {config && (
           <div className="max-w-3xl mx-auto space-y-4">
             {CONFIG_SECTIONS.map((section) => (
               <div
@@ -426,62 +380,6 @@ export function AdminPanel({ onBack }: AdminPanelProps) {
                 </div>
               </div>
             ))}
-          </div>
-        )}
-
-        {activeTab === 'events' && (
-          <div className="max-w-3xl mx-auto">
-            {events.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-16 text-[var(--text-muted)]">
-                <Activity size={32} className="mb-3 opacity-30" />
-                <span className="text-sm font-mono">No audit events recorded</span>
-              </div>
-            ) : (
-              <div className="space-y-1">
-                {events.map((event, i) => (
-                  <div
-                    key={i}
-                    className="flex items-start gap-3 px-3 py-2 rounded border border-[var(--border-dim)]/50 bg-[var(--bg-secondary)]/40 hover:bg-[var(--bg-secondary)]/60 transition-colors"
-                  >
-                    {/* Timestamp */}
-                    <span className="text-[10px] font-mono text-[var(--text-muted)] whitespace-nowrap pt-0.5">
-                      {event.timestamp ? formatTimestamp(event.timestamp) : '--:--:--'}
-                    </span>
-
-                    {/* Type badge */}
-                    <span className={`
-                      text-[9px] font-bold font-mono uppercase tracking-wider px-1.5 py-0.5 rounded whitespace-nowrap
-                      ${event.type?.includes('ALARM')
-                        ? 'bg-[var(--zone-red)]/15 text-[var(--zone-red)] border border-[var(--zone-red)]/30'
-                        : event.type?.includes('ZONE')
-                        ? 'bg-[var(--zone-yellow)]/15 text-[var(--zone-yellow)] border border-[var(--zone-yellow)]/30'
-                        : 'bg-[var(--accent-cyan)]/10 text-[var(--accent-cyan)] border border-[var(--accent-cyan)]/30'
-                      }
-                    `}>
-                      {event.type ?? 'EVENT'}
-                    </span>
-
-                    {/* Feed ID */}
-                    {event.feed_id && (
-                      <span className="text-[10px] font-mono text-[var(--text-secondary)] whitespace-nowrap pt-0.5">
-                        {event.feed_id}
-                      </span>
-                    )}
-
-                    {/* Details */}
-                    <span className="text-[10px] font-mono text-[var(--text-muted)] truncate pt-0.5">
-                      {event.details
-                        ? JSON.stringify(event.details)
-                        : Object.entries(event)
-                            .filter(([k]) => !['type', 'timestamp', 'feed_id', 'details'].includes(k))
-                            .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
-                            .join(' ')
-                      }
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
           </div>
         )}
       </main>

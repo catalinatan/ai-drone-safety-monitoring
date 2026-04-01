@@ -25,6 +25,8 @@ zones:
 
 # Auto-Segmentation
 auto_segmentation:
+  scene_type: "bridge"       # "bridge" | "railway" | "ship" — applies to all CCTV feeds
+  enabled: false             # auto-refresh zones on interval
   interval_seconds: 60.0
   confidence: 0.5
   simplify_epsilon: 2.0

@@ -1,7 +1,6 @@
 import { useState } from 'react';
-import { Shield, Radio, Eye, EyeOff, Scan, Loader2, Check, AlertTriangle, Settings, LayoutGrid, Wrench } from 'lucide-react';
+import { Shield, Radio, Eye, EyeOff, Scan, Loader2, Check, AlertTriangle, LayoutGrid, Wrench } from 'lucide-react';
 import { FeedCard } from './FeedCard';
-import { SettingsPanel } from './SettingsPanel';
 import type { Feed } from '../types';
 
 interface CommandPanelProps {
@@ -10,15 +9,11 @@ interface CommandPanelProps {
   onExpandFeed: (feedId: string) => void;
   onToggleDetection: (feedId: string, enabled: boolean) => void;
   onAutoSegmentAll: () => Promise<boolean>;
-  sceneType: string;
-  autoRefresh: boolean;
-  onSaveSettings: (sceneType: string, autoRefresh: boolean) => Promise<void>;
   onOpenAdmin?: () => void;
 }
 
-export function CommandPanel({ feeds, onEditFeed, onExpandFeed, onToggleDetection, onAutoSegmentAll, sceneType, autoRefresh, onSaveSettings, onOpenAdmin }: CommandPanelProps) {
+export function CommandPanel({ feeds, onEditFeed, onExpandFeed, onToggleDetection, onAutoSegmentAll, onOpenAdmin }: CommandPanelProps) {
   const [showZones, setShowZones] = useState(true);
-  const [showSettings, setShowSettings] = useState(false);
   const [segState, setSegState] = useState<'idle' | 'loading' | 'success' | 'empty' | 'failed'>('idle');
   const [gridSize, setGridSize] = useState<number | null>(null); // null = show all
 
@@ -62,14 +57,6 @@ export function CommandPanel({ feeds, onEditFeed, onExpandFeed, onToggleDetectio
             <Radio className="w-3 h-3 text-[var(--zone-green)] status-live" />
             <span className="text-[10px] font-mono text-[var(--zone-green)]">ONLINE</span>
           </div>
-          <button
-            onClick={() => setShowSettings(true)}
-            className="flex items-center gap-1.5 px-2 py-1 rounded border border-[var(--border-dim)] bg-[var(--bg-tertiary)] text-[var(--text-muted)] hover:text-[var(--accent-cyan)] hover:border-[var(--accent-cyan)] transition-all duration-200"
-            title="Settings"
-          >
-            <Settings size={12} />
-            <span className="text-[10px] font-bold font-mono uppercase tracking-wider">Settings</span>
-          </button>
           {onOpenAdmin && (
             <button
               onClick={onOpenAdmin}
@@ -210,18 +197,6 @@ export function CommandPanel({ feeds, onEditFeed, onExpandFeed, onToggleDetectio
         </div>
       </footer>
 
-      {/* Settings Overlay */}
-      {showSettings && (
-        <SettingsPanel
-          sceneType={sceneType}
-          autoRefresh={autoRefresh}
-          onSave={async (st, ar) => {
-            await onSaveSettings(st, ar);
-            setShowSettings(false);
-          }}
-          onClose={() => setShowSettings(false)}
-        />
-      )}
     </div>
   );
 }

@@ -12,9 +12,6 @@ function App() {
   // Command Center specific state
   const [feeds, setFeeds] = useState<Feed[]>([]);
   const [commandViewState, setCommandViewState] = useState<ViewState>({ type: 'command' });
-  const [sceneType, setSceneType] = useState('bridge');
-  const [autoRefresh, setAutoRefresh] = useState(false);
-
   // Drone panel expand/collapse state
   const [droneExpanded, setDroneExpanded] = useState(false);
   const [droneActive, setDroneActive] = useState(false);
@@ -97,9 +94,6 @@ function App() {
             console.log('[INIT] No feeds from backend, using defaults');
             setFeeds(mockFeeds);
           }
-          // Load global settings
-          if (data.globalSceneType) setSceneType(data.globalSceneType);
-          if (data.autoRefresh != null) setAutoRefresh(data.autoRefresh);
         } else {
           setFeeds(mockFeeds);
         }
@@ -227,21 +221,6 @@ function App() {
     }
   }, [feeds]);
 
-  const handleSaveSettings = useCallback(async (newSceneType: string, newAutoRefresh: boolean) => {
-    const response = await fetch(`${BACKEND_URL}/settings`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sceneType: newSceneType, autoRefresh: newAutoRefresh }),
-    });
-    if (response.ok) {
-      setSceneType(newSceneType);
-      setAutoRefresh(newAutoRefresh);
-      // Update scene type on all local feeds
-      setFeeds((prev) => prev.map((f) => ({ ...f, sceneType: newSceneType as Feed['sceneType'] })));
-      console.log(`[SETTINGS] Saved: sceneType=${newSceneType}, autoRefresh=${newAutoRefresh}`);
-    }
-  }, []);
-
   const handleToggleDetection = useCallback(async (feedId: string, enabled: boolean) => {
     // Optimistic update
     setFeeds((prev) => prev.map((f) => f.id === feedId ? { ...f, detectionEnabled: enabled } : f));
@@ -304,9 +283,6 @@ function App() {
             onExpandFeed={handleExpandFeed}
             onToggleDetection={handleToggleDetection}
             onAutoSegmentAll={handleAutoSegmentAll}
-            sceneType={sceneType}
-            autoRefresh={autoRefresh}
-            onSaveSettings={handleSaveSettings}
             onOpenAdmin={handleOpenAdmin}
           />
         );

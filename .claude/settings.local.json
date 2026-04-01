@@ -22,7 +22,8 @@
       "Bash(python -m pytest tests/integration/test_api_zones.py::test_post_zones_returns_200 -q --tb=long)",
       "Bash(python -m pytest tests/unit/ tests/backend/ tests/cctv_monitoring/ tests/drone_control/ -q --tb=short)",
       "Read(//c/Users/Jia Yi PC/Documents/AirSim/**)",
-      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); [print\\(v\\) for v in d.get\\(''''Vehicles'''',{}\\).keys\\(\\)]\")"
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); [print\\(v\\) for v in d.get\\(''''Vehicles'''',{}\\).keys\\(\\)]\")",
+      "Bash(npx tsc:*)"
     ]
   }
 }
