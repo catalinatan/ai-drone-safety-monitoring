@@ -314,9 +314,40 @@ def _detection_loop(
 
                     # If alarm fired, record trigger and auto-deploy search drone
                     if alarm_fired:
-                        snapshot_jpeg = encode_frame_jpeg(frame)
+                        import cv2 as _cv2
+
+                        # Burn the danger-only mask onto the trigger frame so
+                        # the replay highlights the person who caused the alarm,
+                        # regardless of the --no-mask flag.
+                        trigger_frame = _cv2.cvtColor(frame, _cv2.COLOR_RGB2BGR)
+                        if danger_masks:
+                            _dmask = danger_masks[0].copy()
+                            for _dm in danger_masks[1:]:
+                                np.maximum(_dmask, _dm, out=_dmask)
+                            if _dmask.shape[:2] != trigger_frame.shape[:2]:
+                                _dmask = _cv2.resize(
+                                    _dmask, (trigger_frame.shape[1], trigger_frame.shape[0]),
+                                    interpolation=_cv2.INTER_NEAREST,
+                                )
+                            _mb = _dmask.astype(bool)
+                            trigger_frame[_mb] = (
+                                trigger_frame[_mb] * 0.6
+                                + np.array([0, 0, 255], dtype=np.float32) * 0.4
+                            ).astype(np.uint8)
+
+                        snapshot_jpeg = encode_frame_jpeg(trigger_frame)
                         replay = list(state.replay_buffer)
                         trigger_idx = len(replay) - 1
+
+                        # Replace the trigger frame in the replay with the
+                        # mask-annotated version.
+                        if 0 <= trigger_idx < len(replay):
+                            _ts_orig = replay[trigger_idx][0]
+                            _, _buf = _cv2.imencode(
+                                ".jpg", trigger_frame, [_cv2.IMWRITE_JPEG_QUALITY, 70]
+                            )
+                            if _buf is not None:
+                                replay[trigger_idx] = (_ts_orig, _buf.tobytes())
 
                         coords = get_person_coords(
                             fm, feed_id, frame, danger_masks,
