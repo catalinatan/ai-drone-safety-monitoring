@@ -398,18 +398,53 @@ def _detection_loop(
                             ).astype(np.uint8)
 
                         snapshot_jpeg = encode_frame_jpeg(trigger_frame)
-                        replay = list(state.replay_buffer)
-                        trigger_idx = len(replay) - 1
+                        raw_replay = list(state.replay_buffer)
+                        trigger_idx = len(raw_replay) - 1
 
-                        # Replace the trigger frame in the replay with the
-                        # mask-annotated version.
-                        if 0 <= trigger_idx < len(replay):
-                            _ts_orig = replay[trigger_idx][0]
-                            _, _buf = _cv2.imencode(
-                                ".jpg", trigger_frame, [_cv2.IMWRITE_JPEG_QUALITY, 70]
-                            )
-                            if _buf is not None:
-                                replay[trigger_idx] = (_ts_orig, _buf.tobytes())
+                        # Burn person masks onto ALL replay frames so the
+                        # replay shows the person's trajectory leading up to
+                        # the danger-zone entry.  Cyan for tracking, red for
+                        # the trigger frame (danger masks).
+                        replay = []
+                        for _ri, _entry in enumerate(raw_replay):
+                            _ts, _jpeg = _entry[0], _entry[1]
+                            _mask = _entry[2] if len(_entry) > 2 else None
+
+                            if _ri == trigger_idx:
+                                # Trigger frame — use the danger-mask overlay
+                                # (red, already composited onto trigger_frame).
+                                _, _buf = _cv2.imencode(
+                                    ".jpg", trigger_frame,
+                                    [_cv2.IMWRITE_JPEG_QUALITY, 70],
+                                )
+                                if _buf is not None:
+                                    _jpeg = _buf.tobytes()
+                            elif _mask is not None:
+                                # Earlier frame — burn person mask in cyan
+                                _dec = _cv2.imdecode(
+                                    np.frombuffer(_jpeg, np.uint8),
+                                    _cv2.IMREAD_COLOR,
+                                )
+                                if _dec is not None:
+                                    if _mask.shape[:2] != _dec.shape[:2]:
+                                        _mask = _cv2.resize(
+                                            _mask,
+                                            (_dec.shape[1], _dec.shape[0]),
+                                            interpolation=_cv2.INTER_NEAREST,
+                                        )
+                                    _mb2 = _mask.astype(bool)
+                                    _dec[_mb2] = (
+                                        _dec[_mb2] * 0.6
+                                        + np.array([255, 255, 0], dtype=np.float32) * 0.4
+                                    ).astype(np.uint8)
+                                    _, _buf = _cv2.imencode(
+                                        ".jpg", _dec,
+                                        [_cv2.IMWRITE_JPEG_QUALITY, 70],
+                                    )
+                                    if _buf is not None:
+                                        _jpeg = _buf.tobytes()
+
+                            replay.append((_ts, _jpeg))
 
                         coords = get_person_coords(
                             fm, feed_id, frame, danger_masks,
