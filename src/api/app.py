@@ -85,6 +85,35 @@ def _capture_loop(fm: FeedManager, cfg: Dict[str, Any]) -> None:
             time.sleep(remaining)
 
 
+def _drone_status_loop(
+    fm: FeedManager,
+    drone_api: Any,
+    nav: Dict[str, Any],
+) -> None:
+    """Poll drone status once per second in a dedicated thread.
+
+    Detects navigation completion and re-enables auto-deploy after RTH + landing.
+    Runs independently of the detection loop to avoid blocking inference.
+    """
+    while getattr(fm, "_running", False):
+        try:
+            status = drone_api.get_status()
+            if status:
+                if nav["is_navigating"] and not status.get("is_navigating", True):
+                    print("[DRONE] Drone reached target, mission complete")
+                    nav["is_navigating"] = False
+                # Reset auto-deploy gate only when drone is grounded at home
+                # (after RTH + landing). This is the ONLY path back to auto-deploy.
+                if (nav["first_auto_deployed"]
+                        and status.get("grounded", False)
+                        and status.get("mode") == "automatic"):
+                    print("[DRONE] Drone grounded at home — auto-deploy re-enabled")
+                    nav["first_auto_deployed"] = False
+        except Exception as e:
+            print(f"[DRONE] Status check failed: {e}")
+        time.sleep(1.0)
+
+
 def _detection_loop(
     fm: FeedManager,
     cfg: Dict[str, Any],
@@ -93,6 +122,7 @@ def _detection_loop(
     depth_estimator: Any = None,
     drone_api: Any = None,
     gpu_lock: threading.Lock | None = None,
+    nav: Dict[str, Any] | None = None,
 ) -> None:
     """Run human detection on every frame from all feeds.
 
@@ -119,6 +149,7 @@ def _detection_loop(
     det_cfg = cfg.get("detection", {})
     fps = det_cfg.get("fps", 10)
     interval = 1.0 / max(1, fps)
+    print(f"[DETECTION] Target FPS: {fps} (interval: {interval:.3f}s)")
     cooldown = cfg.get("zones", {}).get("alarm_cooldown_seconds", 5.0)
     warmup = det_cfg.get("warmup_frames", 20)
     disable_overlay = os.environ.get("DISABLE_MASK_OVERLAY") == "1"
@@ -129,13 +160,13 @@ def _detection_loop(
         detector = p._detector
         break
 
-    # Drone navigation state — mirrors pre-refactor FeedManager.drone_is_navigating
-    nav = {
-        "is_navigating": False,
-        "first_auto_deployed": False,   # True after first auto-deploy; blocks further auto-deploys
-        "last_deployment_time": 0.0,
-        "last_status_check": 0.0,
-    }
+    # Drone navigation state — shared with _drone_status_loop thread
+    if nav is None:
+        nav = {
+            "is_navigating": False,
+            "first_auto_deployed": False,
+            "last_deployment_time": 0.0,
+        }
 
     def encode_frame_jpeg(frame):
         """Encode numpy array as JPEG bytes."""
@@ -212,10 +243,24 @@ def _detection_loop(
             print(f"[DETECTION] Depth estimation failed: {e}, using camera position")
             return _fallback()
 
+    # Timing instrumentation — accumulate and log every 100 cycles
+    _t_cycles = 0
+    _t_total = 0.0
+    _t_collect = 0.0
+    _t_lock = 0.0
+    _t_infer = 0.0
+    _t_post = 0.0
+    _t_zone = 0.0
+    _t_mask = 0.0
+    _t_update = 0.0
+    _t_alarm = 0.0
+    _t_drone = 0.0
+
     while getattr(fm, "_running", False):
         loop_start = time.monotonic()
 
         # --- 1. Collect frames from all eligible feeds ---
+        _t0 = time.monotonic()
         batch_feed_ids = []
         batch_frames = []
         batch_pipelines = []
@@ -246,13 +291,22 @@ def _detection_loop(
             batch_pipelines.append(pipeline)
 
         # --- 2. Run batched YOLO inference (single GPU call) ---
+        _t1 = time.monotonic()
+        _t_collect += _t1 - _t0
         if batch_frames and detector is not None:
             try:
+                _t_lock_start = time.monotonic()
                 if gpu_lock is not None:
-                    gpu_lock.acquire()
+                    if not gpu_lock.acquire(timeout=0.005):
+                        _t_lock += time.monotonic() - _t_lock_start
+                        print("[DETECTION] GPU lock contention, skipping cycle")
+                        continue
+                _t_lock_end = time.monotonic()
+                _t_lock += _t_lock_end - _t_lock_start
                 try:
                     batch_masks = detector.get_masks_batch(batch_frames)
                 finally:
+                    _t_infer += time.monotonic() - _t_lock_end
                     if gpu_lock is not None:
                         gpu_lock.release()
             except Exception as e:
@@ -260,6 +314,7 @@ def _detection_loop(
                 batch_masks = [[] for _ in batch_frames]
 
             # --- 3. Process results per feed (zone checks, alarms, overlays) ---
+            _t_post_start = time.monotonic()
             for idx, feed_id in enumerate(batch_feed_ids):
                 pipeline = batch_pipelines[idx]
                 frame = batch_frames[idx]
@@ -281,6 +336,7 @@ def _detection_loop(
                     caution_masks = []
                     alarm_fired = False
 
+                    _t_zone_start = time.monotonic()
                     if person_masks:
                         is_alarm, danger_masks = zm.check_red(person_masks)
                         danger_count = len(danger_masks)
@@ -292,16 +348,20 @@ def _detection_loop(
                         caution_count = len(caution_masks)
                     else:
                         alarm.clear()
+                    _t_zone += time.monotonic() - _t_zone_start
 
                     # Build combined binary mask (single uint8 array) instead of
                     # a full RGB overlay canvas — cheaper to create here and to
                     # composite in the video route.
+                    _t_mask_start = time.monotonic()
                     combined_mask = None
                     if person_masks and not disable_overlay:
                         combined_mask = person_masks[0].copy()
                         for m in person_masks[1:]:
                             np.maximum(combined_mask, m, out=combined_mask)
+                    _t_mask += time.monotonic() - _t_mask_start
 
+                    _t_update_start = time.monotonic()
                     fm.update_detection(
                         feed_id,
                         alarm_active=is_alarm,
@@ -311,12 +371,80 @@ def _detection_loop(
                         caution_count=caution_count,
                         mask_overlay=combined_mask,
                     )
+                    _t_update += time.monotonic() - _t_update_start
 
                     # If alarm fired, record trigger and auto-deploy search drone
+                    _t_alarm_start = time.monotonic()
                     if alarm_fired:
-                        snapshot_jpeg = encode_frame_jpeg(frame)
-                        replay = list(state.replay_buffer)
-                        trigger_idx = len(replay) - 1
+                        import cv2 as _cv2
+
+                        # Burn the danger-only mask onto the trigger frame so
+                        # the replay highlights the person who caused the alarm,
+                        # regardless of the --no-mask flag.
+                        trigger_frame = _cv2.cvtColor(frame, _cv2.COLOR_RGB2BGR)
+                        if danger_masks:
+                            _dmask = danger_masks[0].copy()
+                            for _dm in danger_masks[1:]:
+                                np.maximum(_dmask, _dm, out=_dmask)
+                            if _dmask.shape[:2] != trigger_frame.shape[:2]:
+                                _dmask = _cv2.resize(
+                                    _dmask, (trigger_frame.shape[1], trigger_frame.shape[0]),
+                                    interpolation=_cv2.INTER_NEAREST,
+                                )
+                            _mb = _dmask.astype(bool)
+                            trigger_frame[_mb] = (
+                                trigger_frame[_mb] * 0.6
+                                + np.array([0, 0, 255], dtype=np.float32) * 0.4
+                            ).astype(np.uint8)
+
+                        snapshot_jpeg = encode_frame_jpeg(trigger_frame)
+                        raw_replay = list(state.replay_buffer)
+                        trigger_idx = len(raw_replay) - 1
+
+                        # Burn person masks onto ALL replay frames so the
+                        # replay shows the person's trajectory leading up to
+                        # the danger-zone entry.  Cyan for tracking, red for
+                        # the trigger frame (danger masks).
+                        replay = []
+                        for _ri, _entry in enumerate(raw_replay):
+                            _ts, _jpeg = _entry[0], _entry[1]
+                            _mask = _entry[2] if len(_entry) > 2 else None
+
+                            if _ri == trigger_idx:
+                                # Trigger frame — use the danger-mask overlay
+                                # (red, already composited onto trigger_frame).
+                                _, _buf = _cv2.imencode(
+                                    ".jpg", trigger_frame,
+                                    [_cv2.IMWRITE_JPEG_QUALITY, 70],
+                                )
+                                if _buf is not None:
+                                    _jpeg = _buf.tobytes()
+                            elif _mask is not None:
+                                # Earlier frame — burn person mask in cyan
+                                _dec = _cv2.imdecode(
+                                    np.frombuffer(_jpeg, np.uint8),
+                                    _cv2.IMREAD_COLOR,
+                                )
+                                if _dec is not None:
+                                    if _mask.shape[:2] != _dec.shape[:2]:
+                                        _mask = _cv2.resize(
+                                            _mask,
+                                            (_dec.shape[1], _dec.shape[0]),
+                                            interpolation=_cv2.INTER_NEAREST,
+                                        )
+                                    _mb2 = _mask.astype(bool)
+                                    _dec[_mb2] = (
+                                        _dec[_mb2] * 0.6
+                                        + np.array([255, 255, 0], dtype=np.float32) * 0.4
+                                    ).astype(np.uint8)
+                                    _, _buf = _cv2.imencode(
+                                        ".jpg", _dec,
+                                        [_cv2.IMWRITE_JPEG_QUALITY, 70],
+                                    )
+                                    if _buf is not None:
+                                        _jpeg = _buf.tobytes()
+
+                            replay.append((_ts, _jpeg))
 
                         coords = get_person_coords(
                             fm, feed_id, frame, danger_masks,
@@ -353,28 +481,51 @@ def _detection_loop(
                                 else:
                                     print("[DRONE] Deployment command failed")
 
+                    _t_alarm += time.monotonic() - _t_alarm_start
+
                 except Exception as e:
                     print(f"[DETECTION] {feed_id}: {e}")
 
-        # Poll drone status once per second to detect navigation completion
-        now = time.time()
-        if drone_api is not None and now - nav["last_status_check"] >= 1.0:
-            nav["last_status_check"] = now
-            try:
-                status = drone_api.get_status()
-                if status:
-                    if nav["is_navigating"] and not status.get("is_navigating", True):
-                        print("[DRONE] Drone reached target, mission complete")
-                        nav["is_navigating"] = False
-                    # Reset auto-deploy gate only when drone is grounded at home
-                    # (after RTH + landing). This is the ONLY path back to auto-deploy.
-                    if (nav["first_auto_deployed"]
-                            and status.get("grounded", False)
-                            and status.get("mode") == "automatic"):
-                        print("[DRONE] Drone grounded at home — auto-deploy re-enabled")
-                        nav["first_auto_deployed"] = False
-            except Exception as e:
-                print(f"[DRONE] Status check failed: {e}")
+        _t_drone_start = time.monotonic()
+        _t_drone += time.monotonic() - _t_drone_start
+
+        # --- Timing report ---
+        _t_cycle_end = time.monotonic()
+        if batch_frames and detector is not None:
+            _t_post += _t_cycle_end - _t_post_start
+        _t_total += _t_cycle_end - loop_start
+        _t_cycles += 1
+        if _t_cycles >= 100:
+            avg_total = (_t_total / _t_cycles) * 1000
+            avg_infer = (_t_infer / _t_cycles) * 1000
+            avg_post = (_t_post / _t_cycles) * 1000
+            avg_lock = (_t_lock / _t_cycles) * 1000
+            avg_fps = _t_cycles / _t_total if _t_total > 0 else 0
+            avg_zone = (_t_zone / _t_cycles) * 1000
+            avg_mask = (_t_mask / _t_cycles) * 1000
+            avg_update = (_t_update / _t_cycles) * 1000
+            avg_alarm = (_t_alarm / _t_cycles) * 1000
+            avg_drone = (_t_drone / _t_cycles) * 1000
+            print(
+                f"[DETECTION] FPS report (last {_t_cycles} cycles): "
+                f"avg {avg_fps:.1f} FPS | "
+                f"inference {avg_infer:.1f}ms | "
+                f"post {avg_post:.1f}ms "
+                f"[zone {avg_zone:.1f} | mask {avg_mask:.1f} | update {avg_update:.1f} | alarm {avg_alarm:.1f} | drone {avg_drone:.1f}] | "
+                f"lock-wait {avg_lock:.1f}ms | "
+                f"total {avg_total:.1f}ms"
+            )
+            _t_cycles = 0
+            _t_total = 0.0
+            _t_collect = 0.0
+            _t_lock = 0.0
+            _t_infer = 0.0
+            _t_post = 0.0
+            _t_zone = 0.0
+            _t_mask = 0.0
+            _t_update = 0.0
+            _t_alarm = 0.0
+            _t_drone = 0.0
 
         # Deadline-based sleep: account for time spent on inference + processing
         elapsed = time.monotonic() - loop_start
@@ -734,15 +885,33 @@ async def lifespan(app: FastAPI):
     # auto-segmentation threads (CUDA isn't thread-safe).
     gpu_lock = threading.Lock()
 
+    # Shared drone navigation state — accessed by detection loop (writes)
+    # and drone status polling thread (reads/clears).
+    nav = {
+        "is_navigating": False,
+        "first_auto_deployed": False,
+        "last_deployment_time": 0.0,
+    }
+
     # Start remaining background threads (capture thread already running)
+    drone_api = deps.get_drone_api()
     if pipelines:
         detection_thread = threading.Thread(
             target=_detection_loop,
-            args=(fm, cfg, pipelines, deps.get_trigger_store(), depth_estimator, deps.get_drone_api(), gpu_lock),
+            args=(fm, cfg, pipelines, deps.get_trigger_store(), depth_estimator, drone_api, gpu_lock, nav),
             daemon=True,
             name="detection",
         )
         detection_thread.start()
+
+    if drone_api is not None:
+        drone_poll_thread = threading.Thread(
+            target=_drone_status_loop,
+            args=(fm, drone_api, nav),
+            daemon=True,
+            name="drone-poll",
+        )
+        drone_poll_thread.start()
 
     if segmenter is not None:
         auto_seg_thread = threading.Thread(

@@ -150,7 +150,7 @@ class FeedManager:
             if position is not None:
                 feed.position = position
             if jpeg_bytes is not None and timestamp is not None:
-                feed.replay_buffer.append((timestamp, jpeg_bytes))
+                feed.replay_buffer.append((timestamp, jpeg_bytes, feed.last_mask_overlay))
 
     def get_frame(self, feed_id: str) -> Optional[np.ndarray]:
         """Return a copy of the latest frame, or None."""

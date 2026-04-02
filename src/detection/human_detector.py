@@ -52,7 +52,7 @@ def _try_load_tensorrt(model_path: str, inference_imgsz: int):
             format="engine",
             imgsz=inference_imgsz,
             half=True,
-            batch=4,
+            batch=8,
             dynamic=True,
         )
         model = YOLO(engine_path)
