@@ -78,8 +78,8 @@ export function FeedCard({ feed, onEdit, onExpand, onToggleDetection, showZones 
   // Determine border and header colors based on state
   // Priority: Alarm (red) > Caution (yellow) > Normal
   const getBorderClass = () => {
-    if (isAlarmActive) return 'ring-2 ring-[var(--zone-red)] animate-pulse';
-    if (isCautionActive) return 'ring-2 ring-[var(--zone-yellow)]';
+    if (isAlarmActive) return 'ring-4 ring-[var(--zone-red)] alarm-pulse glow-red';
+    if (isCautionActive) return 'ring-2 ring-[var(--zone-yellow)] glow-yellow';
     return '';
   };
 
@@ -172,7 +172,7 @@ export function FeedCard({ feed, onEdit, onExpand, onToggleDetection, showZones 
       </div>
 
       {/* Feed Image */}
-      <div className={`relative flex-1 min-h-0 overflow-hidden bg-gray-900 ${isAlarmActive ? 'border-2 border-[var(--zone-red)]' : isCautionActive ? 'border-2 border-[var(--zone-yellow)]' : ''}`}>
+      <div className={`relative flex-1 min-h-0 overflow-hidden bg-gray-900 ${isAlarmActive ? 'border-4 border-[var(--zone-red)]' : isCautionActive ? 'border-2 border-[var(--zone-yellow)]' : ''}`}>
         {isPlaceholder ? (
           // Placeholder for disconnected feeds
           <div className="w-full h-full flex flex-col items-center justify-center bg-[var(--bg-tertiary)]">
@@ -217,17 +217,27 @@ export function FeedCard({ feed, onEdit, onExpand, onToggleDetection, showZones 
           </div>
         )}
 
-        {/* Alarm overlay (RED - highest priority) */}
+        {/* Alarm red wash overlay */}
         {isAlarmActive && (
-          <div className="absolute top-2 left-2 px-2 py-1 rounded bg-[var(--zone-red)]/90 animate-pulse">
-            <span className="text-xs font-bold text-white tracking-wider">ALARM</span>
+          <div className="absolute inset-0 bg-[var(--zone-red)]/15 alarm-pulse pointer-events-none z-[2]" />
+        )}
+
+        {/* Caution yellow wash overlay */}
+        {isCautionActive && !isAlarmActive && (
+          <div className="absolute inset-0 bg-[var(--zone-yellow)]/10 pointer-events-none z-[2]" />
+        )}
+
+        {/* Alarm badge (RED - highest priority) */}
+        {isAlarmActive && (
+          <div className="absolute top-3 left-3 px-3 py-1.5 rounded bg-[var(--zone-red)] alarm-pulse z-[3] shadow-lg shadow-[var(--zone-red)]/50">
+            <span className="text-sm font-bold text-white tracking-widest">ALARM</span>
           </div>
         )}
 
-        {/* Caution overlay (YELLOW - lower priority than red) */}
+        {/* Caution badge (YELLOW - lower priority than red) */}
         {isCautionActive && !isAlarmActive && (
-          <div className="absolute top-2 left-2 px-2 py-1 rounded bg-[var(--zone-yellow)]/90">
-            <span className="text-xs font-bold text-black tracking-wider">CAUTION</span>
+          <div className="absolute top-3 left-3 px-3 py-1.5 rounded bg-[var(--zone-yellow)] z-[3] shadow-lg shadow-[var(--zone-yellow)]/50">
+            <span className="text-sm font-bold text-black tracking-widest">CAUTION</span>
           </div>
         )}
 
