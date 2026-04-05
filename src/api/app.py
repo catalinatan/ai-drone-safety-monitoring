@@ -33,6 +33,70 @@ from src.services.feed_manager import FeedManager
 
 
 # ---------------------------------------------------------------------------
+# Projection factory
+# ---------------------------------------------------------------------------
+
+def _create_projection(feed_id: str, feed_def: dict, cfg: dict) -> "ProjectionBackend":
+    """
+    Create the appropriate projection backend for a feed.
+
+    AirSim cameras get AirSimProjection (client set later from detection thread).
+    Config-based cameras get ConfigProjection using position/orientation from feeds.yaml.
+    """
+    from src.spatial.projection_base import ProjectionBackend
+    camera_type = feed_def.get("camera", {}).get("type", "")
+    safe_z = cfg.get("drone", {}).get("safe_altitude", -10.0)
+    cctv_height = cfg.get("detection", {}).get("cctv_height_meters", 10.0)
+
+    if camera_type == "airsim":
+        from src.spatial.airsim_projection import AirSimProjection
+        params = feed_def.get("camera", {}).get("params", {})
+        return AirSimProjection(
+            camera_name=params.get("camera_name", "0"),
+            vehicle_name=params.get("vehicle_name", ""),
+            cctv_height=cctv_height,
+            safe_z=safe_z,
+        )
+    else:
+        from src.spatial.config_projection import ConfigProjection
+        from src.spatial.gps_utils import gps_to_ned
+
+        pos_cfg = feed_def.get("position", {})
+        ori_cfg = feed_def.get("orientation", {})
+        orientation = (
+            ori_cfg.get("pitch", 0.0),
+            ori_cfg.get("yaw", 0.0),
+            ori_cfg.get("roll", 0.0),
+        )
+        fov = feed_def.get("fov", 90.0)
+
+        # Position: accept GPS (lat/lon/alt) or legacy NED (x/y/z)
+        gps_origin = None
+        if "latitude" in pos_cfg and "longitude" in pos_cfg:
+            lat = pos_cfg.get("latitude", 0.0)
+            lon = pos_cfg.get("longitude", 0.0)
+            alt = pos_cfg.get("altitude", 0.0)
+            gps_origin = (lat, lon, alt)
+            # Use this camera's GPS as its own origin → NED (0, 0, 0)
+            # The origin will be shared across feeds via _gps_origin
+            position = (0.0, 0.0, 0.0)
+        else:
+            position = (
+                pos_cfg.get("x", 0.0),
+                pos_cfg.get("y", 0.0),
+                pos_cfg.get("z", 0.0),
+            )
+
+        return ConfigProjection(
+            position=position,
+            orientation=orientation,
+            fov=fov,
+            safe_z=safe_z,
+            gps_origin=gps_origin,
+        )
+
+
+# ---------------------------------------------------------------------------
 # Background threads
 # ---------------------------------------------------------------------------
 
@@ -123,6 +187,7 @@ def _detection_loop(
     drone_api: Any = None,
     gpu_lock: threading.Lock | None = None,
     nav: Dict[str, Any] | None = None,
+    projections: Dict[str, Any] | None = None,
 ) -> None:
     """Run human detection on every frame from all feeds.
 
@@ -143,6 +208,12 @@ def _detection_loop(
             _depth_airsim_client = _airsim.MultirotorClient()
             _depth_airsim_client.confirmConnection()
             print("[DETECTION] Dedicated AirSim client for depth coordinate lookup connected")
+            # Wire the AirSim client into any AirSimProjection backends
+            if projections:
+                from src.spatial.airsim_projection import AirSimProjection
+                for _proj in projections.values():
+                    if isinstance(_proj, AirSimProjection):
+                        _proj.set_client(_depth_airsim_client)
         except Exception as _e:
             print(f"[DETECTION] Could not create dedicated AirSim client: {_e} — will use camera position fallback")
 
@@ -174,39 +245,31 @@ def _detection_loop(
         _, buf = cv2.imencode(".jpg", frame)
         return buf.tobytes() if buf is not None else b""
 
-    def get_person_coords(
-        fm, feed_id, frame, person_masks, depth_estimator, airsim_client
-    ):
+    def get_person_coords(fm, feed_id, frame, person_masks, depth_estimator, projections):
         """
         Estimate 3D world coordinates for the detected person.
-
-        Falls back to camera position if estimation fails.
+        Uses the feed's projection backend (AirSim or Config-based).
         """
         state = fm.get_state(feed_id)
-        camera = fm.get_camera(feed_id)
         safe_z = cfg.get("drone", {}).get("safe_altitude", -10.0)
 
         def _fallback():
             x, y, _ = state.position if state.position else (0.0, 0.0, 0.0)
             return (x, y, safe_z)
 
-        # Without depth estimator or camera that doesn't support AirSim, use camera position
+        projection = (projections or {}).get(feed_id)
+        if projection is None:
+            return _fallback()
+
+        # Update projection's fallback position from latest camera pose
+        if state.position:
+            projection.update_pose(position=state.position)
+
         if not depth_estimator or not person_masks:
             return _fallback()
 
-        # Only AirSim cameras can provide world coordinates
-        if not hasattr(camera, "camera_name") or not hasattr(camera, "vehicle_name"):
-            return _fallback()
-
-        # If no AirSim client available, use camera position
-        if not airsim_client:
-            return _fallback()
-
         try:
-            # Get depth map
             depth_map = depth_estimator.estimate(frame)
-
-            # Find centroid of first person mask
             person_mask = person_masks[0]
             y_indices, x_indices = person_mask.nonzero()
             if len(y_indices) == 0:
@@ -216,31 +279,11 @@ def _detection_loop(
             center_y = float(np.mean(y_indices))
             depth_val = depth_estimator.get_depth_at_pixel(depth_map, center_x, center_y)
 
-            # Convert pixel + depth to world coordinates
-            from src.spatial.projection import get_coords_from_lite_mono
-
-            camera_name = camera.camera_name
-            vehicle_name = camera.vehicle_name
-            cctv_height = cfg.get("detection", {}).get("cctv_height_meters", 10.0)
-
-            world_coord = get_coords_from_lite_mono(
-                airsim_client,
-                camera_name,
-                center_x,
-                center_y,
-                frame.shape[1],
-                frame.shape[0],
-                depth_val,
-                cctv_height,
-                vehicle_name=vehicle_name,
+            return projection.pixel_to_world(
+                center_x, center_y, depth_val, frame.shape[1], frame.shape[0],
             )
-            # Always use safe_altitude for z — pre-refactor always overrode z with
-            # SAFE_Z_ALTITUDE rather than the raw depth-estimated z (which can be
-            # positive / below-ground in AirSim NED coordinates)
-            safe_z = cfg.get("drone", {}).get("safe_altitude", -10.0)
-            return (world_coord.x_val, world_coord.y_val, safe_z)
         except Exception as e:
-            print(f"[DETECTION] Depth estimation failed: {e}, using camera position")
+            print(f"[DETECTION] Projection failed: {e}, using camera position")
             return _fallback()
 
     # Timing instrumentation — accumulate and log every 100 cycles
@@ -448,7 +491,7 @@ def _detection_loop(
 
                         coords = get_person_coords(
                             fm, feed_id, frame, danger_masks,
-                            depth_estimator, _depth_airsim_client,
+                            depth_estimator, projections,
                         )
 
                         event = deps.TriggerEvent(
@@ -750,6 +793,29 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             print(f"[INIT] {feed_id}: camera backend error — {e}")
 
+        # Extract camera pose from config (for real-world cameras)
+        camera_pose = None
+        pos_cfg = feed_def.get("position")
+        ori_cfg = feed_def.get("orientation")
+        if pos_cfg or ori_cfg:
+            # Store GPS coordinates in camera_pose if available
+            gps = None
+            if pos_cfg and "latitude" in pos_cfg:
+                gps = {
+                    "latitude": pos_cfg.get("latitude", 0.0),
+                    "longitude": pos_cfg.get("longitude", 0.0),
+                    "altitude": pos_cfg.get("altitude", 0.0),
+                }
+            camera_pose = {
+                "gps": gps,
+                "orientation": (
+                    ori_cfg.get("pitch", 0.0) if ori_cfg else 0.0,
+                    ori_cfg.get("yaw", 0.0) if ori_cfg else 0.0,
+                    ori_cfg.get("roll", 0.0) if ori_cfg else 0.0,
+                ),
+                "fov": feed_def.get("fov", 90.0),
+            }
+
         # Use per-feed scene_type if defined, else fall back to global config
         global_scene_type = cfg.get("auto_segmentation", {}).get("scene_type", "bridge")
         fm.register_feed(
@@ -758,8 +824,18 @@ async def lifespan(app: FastAPI):
             location=feed_def.get("location", ""),
             camera=camera,
             scene_type=feed_def.get("scene_type") or global_scene_type,
+            camera_pose=camera_pose,
         )
         print(f"[INIT] {feed_id}: registered (connection deferred to capture loop)")
+
+    # Create per-feed projection backends
+    projections = {}
+    for feed_id, feed_def in feeds_cfg.items():
+        projections[feed_id] = _create_projection(feed_id, feed_def, cfg)
+    print(f"[INIT] {len(projections)} projection backend(s) created")
+
+    # Store on app.state so routes can access projection backends
+    app.state.projections = projections
 
     print(f"[INIT] {len(feeds_cfg)} feed(s) registered — connections deferred to background threads")
 
@@ -898,7 +974,7 @@ async def lifespan(app: FastAPI):
     if pipelines:
         detection_thread = threading.Thread(
             target=_detection_loop,
-            args=(fm, cfg, pipelines, deps.get_trigger_store(), depth_estimator, drone_api, gpu_lock, nav),
+            args=(fm, cfg, pipelines, deps.get_trigger_store(), depth_estimator, drone_api, gpu_lock, nav, projections),
             daemon=True,
             name="detection",
         )

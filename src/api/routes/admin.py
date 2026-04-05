@@ -5,18 +5,22 @@ Admin routes:
   GET  /config/feeds         — feeds.yaml content
   PUT  /config/feeds         — write feeds.yaml
   GET  /events?limit=100     — recent audit events
+  POST /feeds/{id}/position  — live GPS position update
+  POST /feeds/{id}/calibrate — PnP calibration
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
 import yaml
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
-from src.api.dependencies import get_config, get_event_logger
+from src.api.dependencies import get_config, get_event_logger, get_feed_manager
+from src.services.feed_manager import FeedManager
 from src.core.config import (
     PROJECT_ROOT,
     get_feeds_config,
@@ -109,3 +113,144 @@ async def get_events_endpoint(
     """
     events = el.get_recent(limit)
     return {"events": [e.model_dump() if hasattr(e, "model_dump") else vars(e) for e in events]}
+
+
+# ---------------------------------------------------------------------------
+# Live position + calibration
+# ---------------------------------------------------------------------------
+
+class PositionBody(BaseModel):
+    latitude: float
+    longitude: float
+    altitude: float
+    heading: Optional[float] = None
+
+
+class CalibrateBody(BaseModel):
+    pixel_points: List[List[float]]
+    world_points: List[List[float]]  # each is [lat, lon, alt]
+    frame_w: int
+    frame_h: int
+
+
+@router.post("/feeds/{feed_id}/position")
+async def update_position(
+    feed_id: str,
+    body: PositionBody,
+    request: Request,
+    fm: FeedManager = Depends(get_feed_manager),
+):
+    """Push a live GPS position update for a feed's camera."""
+    state = fm.get_state(feed_id)
+    if state is None:
+        raise HTTPException(status_code=404, detail=f"Feed {feed_id!r} not found")
+
+    gps = {"latitude": body.latitude, "longitude": body.longitude, "altitude": body.altitude}
+
+    # Update the projection backend if available
+    projections = getattr(request.app.state, "projections", None)
+    if projections and feed_id in projections:
+        proj = projections[feed_id]
+        if hasattr(proj, "update_gps_position"):
+            proj.update_gps_position(body.latitude, body.longitude, body.altitude)
+
+    # Store GPS in camera_pose
+    with state.lock:
+        if state.camera_pose is None:
+            state.camera_pose = {"gps": gps, "orientation": (0, 0, 0), "fov": 90.0}
+        else:
+            state.camera_pose["gps"] = gps
+
+        if body.heading is not None:
+            orientation = state.camera_pose.get("orientation", (0, 0, 0))
+            state.camera_pose["orientation"] = (orientation[0], body.heading, orientation[2])
+
+    return {"status": "ok", "feed_id": feed_id, "gps": gps}
+
+
+@router.post("/feeds/{feed_id}/calibrate")
+async def calibrate_feed(
+    feed_id: str,
+    body: CalibrateBody,
+    request: Request,
+    fm: FeedManager = Depends(get_feed_manager),
+):
+    """Run PnP calibration to determine camera orientation from point correspondences.
+
+    world_points should be GPS coordinates: [[lat, lon, alt], ...].
+    They are converted to local NED relative to the camera's GPS position.
+    """
+    state = fm.get_state(feed_id)
+    if state is None:
+        raise HTTPException(status_code=404, detail=f"Feed {feed_id!r} not found")
+
+    if len(body.pixel_points) < 4 or len(body.world_points) < 4:
+        raise HTTPException(status_code=400, detail="At least 4 point correspondences required")
+
+    from src.spatial.calibration import solve_camera_orientation
+    from src.spatial.gps_utils import gps_to_ned
+
+    # Gather existing pose info
+    fov = 90.0
+    camera_gps = None
+    with state.lock:
+        if state.camera_pose is not None:
+            fov = state.camera_pose.get("fov", 90.0)
+            camera_gps = state.camera_pose.get("gps")
+
+    # Camera position as NED origin
+    if camera_gps:
+        origin_lat = camera_gps["latitude"]
+        origin_lon = camera_gps["longitude"]
+        origin_alt = camera_gps["altitude"]
+    else:
+        # No GPS set — use the first world point as origin
+        origin_lat, origin_lon, origin_alt = body.world_points[0]
+
+    camera_ned = (0.0, 0.0, 0.0)
+    if camera_gps:
+        camera_ned = gps_to_ned(
+            origin_lat, origin_lon, origin_alt,
+            origin_lat, origin_lon, origin_alt,
+        )  # Always (0,0,0) when camera is the origin
+
+    # Convert world points from GPS to NED
+    world_pts_ned = []
+    for wp in body.world_points:
+        ned = gps_to_ned(wp[0], wp[1], wp[2], origin_lat, origin_lon, origin_alt)
+        world_pts_ned.append(ned)
+
+    pixel_pts = [(p[0], p[1]) for p in body.pixel_points]
+
+    result = solve_camera_orientation(
+        pixel_points=pixel_pts,
+        world_points=world_pts_ned,
+        frame_w=body.frame_w,
+        frame_h=body.frame_h,
+        fov=fov,
+        camera_position=camera_ned,
+    )
+
+    if result is None:
+        raise HTTPException(status_code=422, detail="Calibration failed — solvePnP could not converge")
+
+    pitch, yaw, roll = result
+    orientation = (pitch, yaw, roll)
+
+    with state.lock:
+        if state.camera_pose is None:
+            state.camera_pose = {"gps": camera_gps, "orientation": orientation, "fov": fov}
+        else:
+            state.camera_pose["orientation"] = orientation
+
+    # Update projection backend orientation if available
+    projections = getattr(request.app.state, "projections", None)
+    if projections and feed_id in projections:
+        proj = projections[feed_id]
+        proj.update_pose(orientation=orientation)
+
+    return {
+        "status": "ok",
+        "feed_id": feed_id,
+        "orientation": {"pitch": pitch, "yaw": yaw, "roll": roll},
+    }

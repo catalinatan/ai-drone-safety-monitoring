@@ -1,6 +1,7 @@
 """
-Video route:
+Video routes:
   GET /video_feed/{id}  — MJPEG stream
+  GET /feeds/{id}/snapshot — single JPEG frame
 """
 
 from __future__ import annotations
@@ -10,7 +11,7 @@ import time
 import cv2
 import numpy as np
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 
 from src.api.dependencies import get_feed_manager, get_config
 from src.services.feed_manager import FeedManager
@@ -85,6 +86,28 @@ def _generate_frames(feed_id: str, fm: FeedManager, stream_interval: float):
 
         yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + last_jpeg + b"\r\n")
         time.sleep(stream_interval)
+
+
+@router.get("/feeds/{feed_id}/snapshot")
+async def get_feed_snapshot(
+    feed_id: str,
+    fm: FeedManager = Depends(get_feed_manager),
+):
+    """Return the latest frame from a feed as a JPEG."""
+    state = fm.get_state(feed_id)
+    if state is None:
+        raise HTTPException(status_code=404, detail=f"Feed {feed_id!r} not found")
+
+    frame = fm.get_frame(feed_id)
+    if frame is None:
+        raise HTTPException(status_code=404, detail="No frame available")
+
+    frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+    ret, buf = cv2.imencode(".jpg", frame_bgr, [cv2.IMWRITE_JPEG_QUALITY, 90])
+    if not ret:
+        raise HTTPException(status_code=500, detail="JPEG encoding failed")
+
+    return Response(content=buf.tobytes(), media_type="image/jpeg")
 
 
 @router.get("/video_feed/{feed_id}")

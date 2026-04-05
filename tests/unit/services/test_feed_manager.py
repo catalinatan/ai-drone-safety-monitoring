@@ -124,3 +124,43 @@ class TestFeedManagerSnapshot:
             "people_count", "danger_count", "caution_count",
         }
         assert required_keys <= snap.keys()
+
+
+class TestFeedManagerCameraPose:
+
+    def test_register_feed_with_pose(self):
+        fm = FeedManager()
+        cam = MockCamera()
+        fm.register_feed(
+            "cam-1", name="Test", location="Loc", camera=cam,
+            camera_pose={
+                "gps": {"latitude": 1.2847, "longitude": 103.8610, "altitude": 15.0},
+                "orientation": (-30.0, 180.0, 0.0),
+                "fov": 90.0,
+            },
+        )
+        state = fm.get_state("cam-1")
+        assert state.camera_pose is not None
+        assert state.camera_pose["gps"]["latitude"] == 1.2847
+        assert state.camera_pose["fov"] == 90.0
+
+    def test_register_feed_without_pose_defaults_none(self):
+        fm = FeedManager()
+        cam = MockCamera()
+        fm.register_feed("cam-1", name="Test", location="Loc", camera=cam)
+        state = fm.get_state("cam-1")
+        assert state.camera_pose is None
+
+    def test_update_camera_position(self):
+        fm = FeedManager()
+        cam = MockCamera()
+        fm.register_feed("cam-1", name="Test", location="Loc", camera=cam,
+                         camera_pose={"position": (0, 0, 0), "orientation": (0, 0, 0), "fov": 90})
+        fm.update_camera_position("cam-1", (5.0, 10.0, -15.0))
+        state = fm.get_state("cam-1")
+        assert state.camera_pose["position"] == (5.0, 10.0, -15.0)
+
+    def test_update_camera_position_nonexistent_feed(self):
+        fm = FeedManager()
+        # Should not raise
+        fm.update_camera_position("no-such-feed", (1, 2, 3))
