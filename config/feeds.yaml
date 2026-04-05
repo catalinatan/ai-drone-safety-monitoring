@@ -1,46 +1,71 @@
+# AI Safety Monitoring — Camera Feed Definitions
+# Edit this file to configure camera sources per deployment site.
+# Change `camera.type` to swap hardware without touching application code:
+#   "airsim" → AirSim simulator
+#   "rtsp"   → Production IP camera
+#   "file"   → Video file (testing / demos)
+
 feeds:
   cctv-1:
+    name: "CCTV CAM 1"
+    location: "Aerial Overview"
+    scene_type: "bridge"
     camera:
+      type: "airsim"
       params:
-        camera_name: '0'
-        vehicle_name: Drone2
-      type: airsim
-    fov: 90
-    location: Aerial Overview
-    name: CCTV CAM 1
-    orientation:
-      pitch: 0
-      roll: 0
-      yaw: 0
-    position:
-      altitude: 10
-      latitude: 10
-      longitude: 10
-    scene_type: bridge
+        camera_name: "0"
+        vehicle_name: "Drone2"
+
   cctv-2:
+    name: "CCTV CAM 2"
+    location: "Aerial Overview"
+    scene_type: "bridge"
     camera:
+      type: "airsim"
       params:
-        camera_name: '0'
-        vehicle_name: Drone3
-      type: airsim
-    location: Aerial Overview
-    name: CCTV CAM 2
-    scene_type: bridge
+        camera_name: "0"
+        vehicle_name: "Drone3"
+
   cctv-3:
+    name: "CCTV CAM 3"
+    location: "Aerial Overview"
+    scene_type: "bridge"
     camera:
+      type: "airsim"
       params:
-        camera_name: '0'
-        vehicle_name: Drone4
-      type: airsim
-    location: Aerial Overview
-    name: CCTV CAM 3
-    scene_type: bridge
+        camera_name: "0"
+        vehicle_name: "Drone4"
+
   cctv-4:
+    name: "CCTV CAM 4"
+    location: "Aerial Overview"
+    scene_type: "bridge"
     camera:
+      type: "airsim"
       params:
-        camera_name: '0'
-        vehicle_name: Drone5
-      type: airsim
-    location: Aerial Overview
-    name: CCTV CAM 4
-    scene_type: bridge
+        camera_name: "0"
+        vehicle_name: "Drone5"
+
+# --- Example: Real-world RTSP camera with GPS-based projection ---
+#  cctv-real:
+#    name: "Bridge North Camera"
+#    location: "North Pillar"
+#    scene_type: "bridge"
+#    camera:
+#      type: "rtsp"
+#      params:
+#        url: "rtsp://192.168.1.101/stream"
+#    position:
+#      latitude: 1.2847       # decimal degrees
+#      longitude: 103.8610    # decimal degrees
+#      altitude: 15.0         # metres above sea level
+#    orientation:
+#      pitch: -30.0   # degrees, negative = looking down
+#      yaw: 180.0     # degrees, compass heading
+#      roll: 0.0
+#    fov: 90.0
+#
+# The first camera's position is used as the NED origin.
+# All GPS coordinates are converted to local NED (metres) internally.
+# For AirSim cameras, position/orientation/fov are ignored — pose comes
+# from the simulator.

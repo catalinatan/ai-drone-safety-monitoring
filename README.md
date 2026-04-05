@@ -185,9 +185,9 @@ feeds:
       params:
         url: "rtsp://192.168.1.100:554/stream1"
     position:
-      x: 0.0          # NED north (metres from your chosen origin)
-      y: 0.0          # NED east
-      z: -15.0        # NED down (negative = above ground, so -15 = 15m up)
+      latitude: 1.2847       # decimal degrees
+      longitude: 103.8610    # decimal degrees
+      altitude: 15.0         # metres above sea level
     orientation:
       pitch: -30.0     # degrees, negative = looking down
       yaw: 180.0       # degrees, compass heading (0=north, 90=east, 180=south)
@@ -203,9 +203,9 @@ feeds:
       params:
         url: "rtsp://192.168.1.101:554/stream1"
     position:
-      x: 50.0
-      y: 20.0
-      z: -10.0
+      latitude: 1.2890
+      longitude: 103.8625
+      altitude: 10.0
     orientation:
       pitch: -25.0
       yaw: 0.0
@@ -215,16 +215,13 @@ feeds:
 
 #### Step 2: Determine camera position
 
-You need to know where each camera is located in 3D space. Options:
+You need to know each camera's GPS coordinates. Options:
 
-- **GPS transponder**: If your camera has a GPS module, convert the lat/lon/altitude to a local NED frame relative to a chosen origin point.
-- **Manual measurement**: Measure the camera's position relative to a reference point (e.g., corner of a building). Use metres.
-- **Site survey**: Use building plans or site maps.
+- **GPS transponder**: If your camera has a GPS module, read the lat/lon/altitude directly.
+- **Phone GPS**: Stand at the camera location and note the coordinates from a maps app.
+- **Site survey / building plans**: Look up the coordinates from documentation.
 
-The coordinate system is NED (North-East-Down):
-- **X** = metres north of origin
-- **Y** = metres east of origin
-- **Z** = metres down (negative values = above ground)
+Enter the position as decimal degrees (latitude, longitude) and altitude in metres above sea level. The system converts GPS to a local NED (North-East-Down) coordinate frame internally for the projection math.
 
 #### Step 3: Determine camera orientation
 
@@ -238,7 +235,7 @@ Use the built-in calibration tool in the Admin Panel. This solves for your camer
 2. Open the UI at http://localhost:5173
 3. Go to **Admin Panel** > find your camera in the **Camera Pose** section > click **Calibrate**
 4. Click 4 or more points in the camera image that you can identify in the real world
-5. For each point, enter its real-world NED coordinates (x, y, z)
+5. For each point, enter its GPS coordinates (latitude, longitude, altitude)
 6. Click **Calibrate** — the system uses OpenCV's PnP solver to compute pitch, yaw, and roll
 
 Good calibration points: corners of buildings, lamp posts, bollards, road markings — anything with a known, fixed position.
@@ -268,7 +265,7 @@ For cameras mounted on moving platforms, the system supports live GPS position u
 ```bash
 curl -X POST http://localhost:8001/feeds/cam-north/position \
   -H "Content-Type: application/json" \
-  -d '{"x": 12.5, "y": 7.3, "z": -15.0}'
+  -d '{"latitude": 1.2850, "longitude": 103.8615, "altitude": 15.0}'
 ```
 
 You can also include a heading (yaw) update:
@@ -276,7 +273,7 @@ You can also include a heading (yaw) update:
 ```bash
 curl -X POST http://localhost:8001/feeds/cam-north/position \
   -H "Content-Type: application/json" \
-  -d '{"x": 12.5, "y": 7.3, "z": -15.0, "heading": 135.0}'
+  -d '{"latitude": 1.2850, "longitude": 103.8615, "altitude": 15.0, "heading": 135.0}'
 ```
 
 This updates the camera's projection in real time without restarting the system.
@@ -314,9 +311,9 @@ feeds:
       params:
         path: "data/videos/demo.mp4"
     position:
-      x: 0.0
-      y: 0.0
-      z: -10.0
+      latitude: 1.2847
+      longitude: 103.8610
+      altitude: 10.0
     orientation:
       pitch: -30.0
       yaw: 0.0
@@ -364,7 +361,7 @@ The calibration tool uses OpenCV's `solvePnP` with the iterative method to deter
 Requirements for good calibration:
 - At least 4 non-coplanar points (more points = better accuracy)
 - Points should be spread across the camera's field of view
-- World coordinates must be measured accurately in the same NED frame as the camera position
+- World coordinates must be accurate GPS positions (latitude, longitude, altitude)
 
 ---
 
@@ -454,7 +451,7 @@ For real-world cameras (`rtsp` and `file`), you can also configure:
 
 | Field | Description |
 |-------|-------------|
-| `position` | Camera location in NED coordinates (`x`, `y`, `z`) |
+| `position` | Camera location as GPS (`latitude`, `longitude`, `altitude`) |
 | `orientation` | Camera angles in degrees (`pitch`, `yaw`, `roll`) |
 | `fov` | Horizontal field of view in degrees |
 
@@ -627,10 +624,10 @@ POST /feeds/{feed_id}/position
 Content-Type: application/json
 
 {
-  "x": 12.5,        # NED north (metres)
-  "y": 7.3,         # NED east (metres)
-  "z": -15.0,       # NED down (negative = above ground)
-  "heading": 135.0   # optional: compass heading in degrees
+  "latitude": 1.2850,    # decimal degrees
+  "longitude": 103.8615, # decimal degrees
+  "altitude": 15.0,      # metres above sea level
+  "heading": 135.0       # optional: compass heading in degrees
 }
 ```
 
@@ -642,7 +639,7 @@ Content-Type: application/json
 
 {
   "pixel_points": [[320, 240], [640, 100], [100, 400], [500, 350]],
-  "world_points": [[10, 5, 0], [20, -3, 0], [5, 12, 0], [15, 8, 0]],
+  "world_points": [[1.2847, 103.8610, 0], [1.2848, 103.8610, 0], [1.2847, 103.8611, 0], [1.2848, 103.8611, 0]],
   "frame_w": 1280,
   "frame_h": 720
 }
