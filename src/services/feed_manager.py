@@ -17,7 +17,7 @@ import threading
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -58,6 +58,7 @@ class FeedState:
     last_frame: Optional[np.ndarray] = None
     last_mask_overlay: Optional[np.ndarray] = None
     position: Optional[Tuple[float, float, float]] = None  # NED (x, y, z) from camera vehicle
+    camera_pose: Optional[Dict[str, Any]] = None  # {"position": (x,y,z), "orientation": (p,y,r), "fov": float}
     frame_count: int = 0
     replay_buffer: deque = field(default_factory=lambda: deque(maxlen=200))
 
@@ -102,6 +103,7 @@ class FeedManager:
         location: str,
         camera: CameraBackend,
         scene_type: Optional[str] = None,
+        camera_pose: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Add a feed to the registry. Idempotent — re-registering replaces the entry."""
         state = FeedState(
@@ -109,6 +111,7 @@ class FeedManager:
             name=name,
             location=location,
             scene_type=scene_type,
+            camera_pose=camera_pose,
         )
         with self._lock:
             self._feeds[feed_id] = state
@@ -262,6 +265,25 @@ class FeedManager:
             return False
         with feed.lock:
             return feed.frame_count >= warmup_frames
+
+    # ------------------------------------------------------------------
+    # Camera pose
+    # ------------------------------------------------------------------
+
+    def update_camera_position(
+        self,
+        feed_id: str,
+        position: Tuple[float, float, float],
+    ) -> None:
+        """Update camera position at runtime (e.g. from live GPS feed)."""
+        feed = self._feeds.get(feed_id)
+        if feed is None:
+            return
+        with feed.lock:
+            if feed.camera_pose is None:
+                feed.camera_pose = {"position": position, "orientation": (0, 0, 0), "fov": 90.0}
+            else:
+                feed.camera_pose["position"] = position
 
     # ------------------------------------------------------------------
     # Snapshot for API responses

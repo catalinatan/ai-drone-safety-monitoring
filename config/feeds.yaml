@@ -1,47 +1,46 @@
-# AI Safety Monitoring — Camera Feed Definitions
-# Edit this file to configure camera sources per deployment site.
-# Change `camera.type` to swap hardware without touching application code:
-#   "airsim" → AirSim simulator
-#   "rtsp"   → Production IP camera
-#   "file"   → Video file (testing / demos)
-
 feeds:
   cctv-1:
-    name: "CCTV CAM 1"
-    location: "Aerial Overview"
-    scene_type: "bridge"
     camera:
-      type: "airsim"
       params:
-        camera_name: "0"
-        vehicle_name: "Drone2"
-
+        camera_name: '0'
+        vehicle_name: Drone2
+      type: airsim
+    fov: 90
+    location: Aerial Overview
+    name: CCTV CAM 1
+    orientation:
+      pitch: 0
+      roll: 0
+      yaw: 0
+    position:
+      altitude: 10
+      latitude: 10
+      longitude: 10
+    scene_type: bridge
   cctv-2:
-    name: "CCTV CAM 2"
-    location: "Aerial Overview"
-    scene_type: "bridge"
     camera:
-      type: "airsim"
       params:
-        camera_name: "0"
-        vehicle_name: "Drone3"
-
+        camera_name: '0'
+        vehicle_name: Drone3
+      type: airsim
+    location: Aerial Overview
+    name: CCTV CAM 2
+    scene_type: bridge
   cctv-3:
-    name: "CCTV CAM 3"
-    location: "Aerial Overview"
-    scene_type: "bridge"
     camera:
-      type: "airsim"
       params:
-        camera_name: "0"
-        vehicle_name: "Drone4"
-
+        camera_name: '0'
+        vehicle_name: Drone4
+      type: airsim
+    location: Aerial Overview
+    name: CCTV CAM 3
+    scene_type: bridge
   cctv-4:
-    name: "CCTV CAM 4"
-    location: "Aerial Overview"
-    scene_type: "bridge"
     camera:
-      type: "airsim"
       params:
-        camera_name: "0"
-        vehicle_name: "Drone5"
+        camera_name: '0'
+        vehicle_name: Drone5
+      type: airsim
+    location: Aerial Overview
+    name: CCTV CAM 4
+    scene_type: bridge

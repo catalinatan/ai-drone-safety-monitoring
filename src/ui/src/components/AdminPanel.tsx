@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { ArrowLeft, Save, Loader2, RefreshCw, AlertTriangle, Check } from 'lucide-react';
 import { BACKEND_URL } from '../data/mockFeeds';
 
@@ -110,6 +110,351 @@ function setNestedValue(obj: Record<string, unknown>, path: string[], value: unk
     value,
   );
   return result;
+}
+
+// ---------------------------------------------------------------------------
+// Per-feed camera pose section + PnP calibration tool
+// ---------------------------------------------------------------------------
+
+interface FeedPoseConfig {
+  feed_id: string;
+  name: string;
+  gps: { latitude: number; longitude: number; altitude: number };
+  orientation: { pitch: number; yaw: number; roll: number };
+  fov: number;
+}
+
+function CalibrationTool({ feedId, onDone }: { feedId: string; onDone: () => void }) {
+  const [points, setPoints] = useState<Array<{
+    pixel: [number, number];
+    world: [number, number, number];
+  }>>([]);
+  const [status, setStatus] = useState<'idle' | 'solving' | 'done' | 'error'>('idle');
+  const [result, setResult] = useState<{ pitch: number; yaw: number; roll: number } | null>(null);
+  const imgRef = useRef<HTMLImageElement>(null);
+
+  const handleImageClick = (e: React.MouseEvent<HTMLImageElement>) => {
+    const img = imgRef.current;
+    if (!img) return;
+    const rect = img.getBoundingClientRect();
+    const scaleX = img.naturalWidth / rect.width;
+    const scaleY = img.naturalHeight / rect.height;
+    const px = Math.round((e.clientX - rect.left) * scaleX);
+    const py = Math.round((e.clientY - rect.top) * scaleY);
+
+    setPoints(prev => [...prev, {
+      pixel: [px, py],
+      world: [0, 0, 0],
+    }]);
+  };
+
+  const updateWorldCoord = (index: number, axis: 0 | 1 | 2, value: number) => {
+    setPoints(prev => prev.map((p, i) => {
+      if (i !== index) return p;
+      const world = [...p.world] as [number, number, number];
+      world[axis] = value;
+      return { ...p, world };
+    }));
+  };
+
+  const removePoint = (index: number) => {
+    setPoints(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const handleCalibrate = async () => {
+    if (points.length < 4) return;
+    setStatus('solving');
+    try {
+      const img = imgRef.current;
+      const res = await fetch(`${BACKEND_URL}/feeds/${feedId}/calibrate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pixel_points: points.map(p => p.pixel),
+          world_points: points.map(p => p.world),
+          frame_w: img?.naturalWidth || 640,
+          frame_h: img?.naturalHeight || 480,
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setResult(data.orientation);
+        setStatus('done');
+      } else {
+        setStatus('error');
+      }
+    } catch {
+      setStatus('error');
+    }
+  };
+
+  return (
+    <div className="space-y-3">
+      <p className="text-[10px] font-mono text-[var(--text-muted)]">
+        Click 4+ points in the camera view, then enter their GPS coordinates (lat, lon, altitude).
+      </p>
+
+      {/* Live camera snapshot for clicking */}
+      <div className="relative border border-[var(--border-dim)] rounded overflow-hidden">
+        <img
+          ref={imgRef}
+          src={`${BACKEND_URL}/feeds/${feedId}/snapshot`}
+          alt="Camera view"
+          className="w-full cursor-crosshair"
+          onClick={handleImageClick}
+          onError={(e) => {
+            (e.target as HTMLImageElement).src = `${BACKEND_URL}/video_feed/${feedId}`;
+          }}
+        />
+        {/* Show clicked points as markers */}
+        {points.map((p, i) => {
+          const img = imgRef.current;
+          if (!img) return null;
+          const rect = img.getBoundingClientRect();
+          const sx = rect.width / (img.naturalWidth || 1);
+          const sy = rect.height / (img.naturalHeight || 1);
+          return (
+            <div key={i} className="absolute w-3 h-3 bg-[var(--accent-cyan)] rounded-full border border-white -translate-x-1/2 -translate-y-1/2 pointer-events-none text-[8px] text-center leading-3 font-bold"
+              style={{ left: p.pixel[0] * sx, top: p.pixel[1] * sy }}>
+              {i + 1}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Point list with world coordinate inputs */}
+      {points.length > 0 && (
+        <div className="space-y-1">
+          {points.map((p, i) => (
+            <div key={i} className="flex items-center gap-2 text-[10px] font-mono">
+              <span className="text-[var(--accent-cyan)] w-4">#{i + 1}</span>
+              <span className="text-[var(--text-muted)] w-24">px({p.pixel[0]}, {p.pixel[1]})</span>
+              <input type="number" step="0.0001" placeholder="Lat" value={p.world[0]}
+                onChange={e => updateWorldCoord(i, 0, Number(e.target.value))}
+                className="w-20 px-1 py-0.5 rounded border border-[var(--border-dim)] bg-[var(--bg-tertiary)] text-[var(--text-primary)] text-[10px]" />
+              <input type="number" step="0.0001" placeholder="Lon" value={p.world[1]}
+                onChange={e => updateWorldCoord(i, 1, Number(e.target.value))}
+                className="w-20 px-1 py-0.5 rounded border border-[var(--border-dim)] bg-[var(--bg-tertiary)] text-[var(--text-primary)] text-[10px]" />
+              <input type="number" step="0.1" placeholder="Alt(m)" value={p.world[2]}
+                onChange={e => updateWorldCoord(i, 2, Number(e.target.value))}
+                className="w-20 px-1 py-0.5 rounded border border-[var(--border-dim)] bg-[var(--bg-tertiary)] text-[var(--text-primary)] text-[10px]" />
+              <button onClick={() => removePoint(i)}
+                className="text-[var(--zone-red)] hover:text-red-400">x</button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Status + actions */}
+      <div className="flex items-center gap-2">
+        <button onClick={handleCalibrate}
+          disabled={points.length < 4 || status === 'solving'}
+          className={`px-3 py-1 rounded border text-[10px] font-mono font-bold uppercase tracking-wider ${
+            points.length >= 4
+              ? 'border-[var(--zone-green)] text-[var(--zone-green)] bg-[var(--zone-green)]/10 hover:bg-[var(--zone-green)]/20'
+              : 'border-[var(--border-dim)] text-[var(--text-muted)] opacity-50 cursor-not-allowed'
+          }`}>
+          {status === 'solving' ? 'Solving...' : `Calibrate (${points.length}/4+ pts)`}
+        </button>
+        <button onClick={onDone}
+          className="px-3 py-1 rounded border border-[var(--border-dim)] text-[var(--text-muted)] text-[10px] font-mono font-bold uppercase tracking-wider hover:text-[var(--text-secondary)]">
+          Cancel
+        </button>
+      </div>
+
+      {status === 'done' && result && (
+        <div className="text-[10px] font-mono text-[var(--zone-green)] bg-[var(--zone-green)]/10 border border-[var(--zone-green)]/30 rounded p-2">
+          Calibration successful — Pitch: {result.pitch.toFixed(1)}° | Yaw: {result.yaw.toFixed(1)}° | Roll: {result.roll.toFixed(1)}°
+        </div>
+      )}
+      {status === 'error' && (
+        <div className="text-[10px] font-mono text-[var(--zone-red)] bg-[var(--zone-red)]/10 border border-[var(--zone-red)]/30 rounded p-2">
+          Calibration failed — try different point positions
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CameraPoseSection() {
+  const [feeds, setFeeds] = useState<Record<string, any> | null>(null);
+  const [editing, setEditing] = useState<string | null>(null);
+  const [calibrating, setCalibrating] = useState<string | null>(null);
+  const [poseValues, setPoseValues] = useState<FeedPoseConfig | null>(null);
+  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+
+  useEffect(() => {
+    fetch(`${BACKEND_URL}/config/feeds`)
+      .then(r => r.json())
+      .then(data => setFeeds(data))
+      .catch(() => {});
+  }, []);
+
+  const startEdit = (feedId: string, feedDef: any) => {
+    setEditing(feedId);
+    setCalibrating(null);
+    setPoseValues({
+      feed_id: feedId,
+      name: feedDef.name || feedId,
+      gps: {
+        latitude: feedDef.position?.latitude ?? 0,
+        longitude: feedDef.position?.longitude ?? 0,
+        altitude: feedDef.position?.altitude ?? 0,
+      },
+      orientation: {
+        pitch: feedDef.orientation?.pitch ?? 0,
+        yaw: feedDef.orientation?.yaw ?? 0,
+        roll: feedDef.orientation?.roll ?? 0,
+      },
+      fov: feedDef.fov ?? 90,
+    });
+  };
+
+  const handleSavePose = async () => {
+    if (!editing || !poseValues || !feeds) return;
+    setSaveState('saving');
+    try {
+      const updatedFeeds = { ...feeds };
+      updatedFeeds[editing] = {
+        ...updatedFeeds[editing],
+        position: poseValues.gps,
+        orientation: poseValues.orientation,
+        fov: poseValues.fov,
+      };
+
+      const res = await fetch(`${BACKEND_URL}/config/feeds`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ feeds: updatedFeeds }),
+      });
+
+      if (res.ok) {
+        setFeeds(updatedFeeds);
+
+        // Also push GPS position update to runtime
+        await fetch(`${BACKEND_URL}/feeds/${editing}/position`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(poseValues.gps),
+        });
+
+        setSaveState('saved');
+        setEditing(null);
+      } else {
+        setSaveState('error');
+      }
+    } catch {
+      setSaveState('error');
+    }
+    setTimeout(() => setSaveState('idle'), 2500);
+  };
+
+  if (!feeds) return null;
+
+  return (
+    <div className="rounded-lg border border-[var(--border-dim)] bg-[var(--bg-secondary)]/60 overflow-hidden">
+      <div className="px-4 py-2.5 border-b border-[var(--border-dim)] bg-[var(--bg-tertiary)]/50">
+        <h2 className="text-[10px] font-bold font-mono uppercase tracking-widest text-[var(--accent-cyan)]">
+          Camera Pose (Per Feed)
+        </h2>
+      </div>
+      <div className="px-4 py-2 space-y-3">
+        {Object.entries(feeds).map(([feedId, feedDef]: [string, any]) => (
+          <div key={feedId} className="border border-[var(--border-dim)] rounded p-3">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs font-mono font-semibold text-[var(--text-primary)]">
+                {feedDef.name || feedId}
+              </span>
+              <div className="flex items-center">
+                <button
+                  onClick={() => startEdit(feedId, feedDef)}
+                  className="text-[10px] font-mono text-[var(--accent-cyan)] hover:underline"
+                >
+                  {editing === feedId ? 'Editing...' : 'Edit Pose'}
+                </button>
+                <button
+                  onClick={() => { setCalibrating(feedId); setEditing(null); }}
+                  className="text-[10px] font-mono text-[var(--zone-green)] hover:underline ml-2"
+                >
+                  Calibrate
+                </button>
+              </div>
+            </div>
+
+            {calibrating === feedId ? (
+              <CalibrationTool feedId={feedId} onDone={() => setCalibrating(null)} />
+            ) : editing === feedId && poseValues ? (
+              <div className="space-y-2">
+                <div className="grid grid-cols-3 gap-2">
+                  <div>
+                    <label className="block text-[9px] font-mono text-[var(--text-muted)] mb-0.5">Latitude</label>
+                    <input type="number" step="0.0001" value={poseValues.gps.latitude}
+                      onChange={e => setPoseValues({...poseValues, gps: {...poseValues.gps, latitude: Number(e.target.value)}})}
+                      className="w-full px-2 py-1 rounded border border-[var(--border-dim)] bg-[var(--bg-tertiary)] text-xs font-mono text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-cyan)]" />
+                  </div>
+                  <div>
+                    <label className="block text-[9px] font-mono text-[var(--text-muted)] mb-0.5">Longitude</label>
+                    <input type="number" step="0.0001" value={poseValues.gps.longitude}
+                      onChange={e => setPoseValues({...poseValues, gps: {...poseValues.gps, longitude: Number(e.target.value)}})}
+                      className="w-full px-2 py-1 rounded border border-[var(--border-dim)] bg-[var(--bg-tertiary)] text-xs font-mono text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-cyan)]" />
+                  </div>
+                  <div>
+                    <label className="block text-[9px] font-mono text-[var(--text-muted)] mb-0.5">Altitude (m)</label>
+                    <input type="number" step="0.1" value={poseValues.gps.altitude}
+                      onChange={e => setPoseValues({...poseValues, gps: {...poseValues.gps, altitude: Number(e.target.value)}})}
+                      className="w-full px-2 py-1 rounded border border-[var(--border-dim)] bg-[var(--bg-tertiary)] text-xs font-mono text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-cyan)]" />
+                  </div>
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  <div>
+                    <label className="block text-[9px] font-mono text-[var(--text-muted)] mb-0.5">Pitch (deg)</label>
+                    <input type="number" step="1" value={poseValues.orientation.pitch}
+                      onChange={e => setPoseValues({...poseValues, orientation: {...poseValues.orientation, pitch: Number(e.target.value)}})}
+                      className="w-full px-2 py-1 rounded border border-[var(--border-dim)] bg-[var(--bg-tertiary)] text-xs font-mono text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-cyan)]" />
+                  </div>
+                  <div>
+                    <label className="block text-[9px] font-mono text-[var(--text-muted)] mb-0.5">Yaw (heading)</label>
+                    <input type="number" step="1" value={poseValues.orientation.yaw}
+                      onChange={e => setPoseValues({...poseValues, orientation: {...poseValues.orientation, yaw: Number(e.target.value)}})}
+                      className="w-full px-2 py-1 rounded border border-[var(--border-dim)] bg-[var(--bg-tertiary)] text-xs font-mono text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-cyan)]" />
+                  </div>
+                  <div>
+                    <label className="block text-[9px] font-mono text-[var(--text-muted)] mb-0.5">Roll (deg)</label>
+                    <input type="number" step="1" value={poseValues.orientation.roll}
+                      onChange={e => setPoseValues({...poseValues, orientation: {...poseValues.orientation, roll: Number(e.target.value)}})}
+                      className="w-full px-2 py-1 rounded border border-[var(--border-dim)] bg-[var(--bg-tertiary)] text-xs font-mono text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-cyan)]" />
+                  </div>
+                </div>
+                <div className="w-1/3">
+                  <label className="block text-[9px] font-mono text-[var(--text-muted)] mb-0.5">FOV (deg)</label>
+                  <input type="number" step="1" min="10" max="180" value={poseValues.fov}
+                    onChange={e => setPoseValues({...poseValues, fov: Number(e.target.value)})}
+                    className="w-full px-2 py-1 rounded border border-[var(--border-dim)] bg-[var(--bg-tertiary)] text-xs font-mono text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-cyan)]" />
+                </div>
+                <div className="flex gap-2 pt-1">
+                  <button onClick={handleSavePose}
+                    disabled={saveState === 'saving'}
+                    className="px-3 py-1 rounded border border-[var(--accent-cyan)] bg-[var(--accent-cyan)]/10 text-[var(--accent-cyan)] text-[10px] font-mono font-bold uppercase tracking-wider hover:bg-[var(--accent-cyan)]/20">
+                    {saveState === 'saving' ? 'Saving...' : saveState === 'saved' ? 'Saved' : 'Save Pose'}
+                  </button>
+                  <button onClick={() => setEditing(null)}
+                    className="px-3 py-1 rounded border border-[var(--border-dim)] text-[var(--text-muted)] text-[10px] font-mono font-bold uppercase tracking-wider hover:text-[var(--text-secondary)]">
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="text-[10px] font-mono text-[var(--text-muted)] space-y-0.5">
+                <div>GPS: {feedDef.position?.latitude ?? '—'}, {feedDef.position?.longitude ?? '—'} | Alt: {feedDef.position?.altitude ?? '—'}m</div>
+                <div>Orientation: pitch={feedDef.orientation?.pitch ?? '—'} yaw={feedDef.orientation?.yaw ?? '—'} roll={feedDef.orientation?.roll ?? '—'}</div>
+                <div>FOV: {feedDef.fov ?? '—'}°</div>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 export function AdminPanel({ onBack }: AdminPanelProps) {
@@ -380,6 +725,7 @@ export function AdminPanel({ onBack }: AdminPanelProps) {
                 </div>
               </div>
             ))}
+            <CameraPoseSection />
           </div>
         )}
       </main>
