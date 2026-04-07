@@ -129,44 +129,39 @@ def make_visualisation(img: np.ndarray, gt_mask: np.ndarray,
     return np.hstack([left, right])
 
 
-def save_examples(records: list[dict], model: YOLO, model_name: str,
-                  labels_dir: Path, n: int, scene: str) -> None:
-    """Save visualisations for the top-n and bottom-n IoU images.
-    Trivial images (no GT and no prediction) are excluded."""
-    non_trivial = [r for r in records if not r.get("trivial", False)]
-    sorted_records = sorted(non_trivial, key=lambda r: r["iou"])
-    worst = sorted_records[:n]
-    best  = sorted_records[-n:][::-1]
+def save_all_visualisations(records: list[dict], model: YOLO, model_name: str,
+                            labels_dir: Path, scene: str) -> None:
+    """Save visualisations for every image, sorted by IoU ascending."""
+    sorted_records = sorted(records, key=lambda r: r["iou"])
 
-    for group_name, group in [("worst", worst), ("best", best)]:
-        out_dir = VIS_OUTPUT_ROOT / scene / model_name / group_name
-        out_dir.mkdir(parents=True, exist_ok=True)
+    out_dir = VIS_OUTPUT_ROOT / scene / model_name / "all"
+    out_dir.mkdir(parents=True, exist_ok=True)
 
-        for rank, rec in enumerate(group, 1):
-            img_path   = rec["img_path"]
-            iou        = rec["iou"]
-            label_path = labels_dir / f"{img_path.stem}.txt"
+    for rank, rec in enumerate(sorted_records, 1):
+        img_path   = rec["img_path"]
+        iou        = rec["iou"]
+        label_path = labels_dir / f"{img_path.stem}.txt"
 
-            img = cv2.imread(str(img_path))
-            if img is None:
-                continue
-            h, w = img.shape[:2]
+        img = cv2.imread(str(img_path))
+        if img is None:
+            continue
+        h, w = img.shape[:2]
 
-            gt   = yolo_polygons_to_mask(label_path, w, h)
-            pred = get_predicted_mask(model, img_path, w, h)
+        gt   = yolo_polygons_to_mask(label_path, w, h)
+        pred = get_predicted_mask(model, img_path, w, h)
 
-            vis = make_visualisation(img, gt, pred, iou)
-            out_path = out_dir / f"{rank:02d}_{img_path.stem}_iou{iou:.4f}.jpg"
-            cv2.imwrite(str(out_path), vis)
+        vis = make_visualisation(img, gt, pred, iou)
+        out_path = out_dir / f"{rank:03d}_{img_path.stem}_iou{iou:.4f}.jpg"
+        cv2.imwrite(str(out_path), vis)
 
-        print(f"    Saved {group_name} {n} examples → {out_dir}")
+    print(f"    Saved {len(sorted_records)} visualisations → {out_dir}")
 
 
 # ---------------------------------------------------------------------------
 # Per-scene evaluation
 # ---------------------------------------------------------------------------
 
-def evaluate_scene(scene: str, model_path: Path, n_examples: int) -> dict:
+def evaluate_scene(scene: str, model_path: Path) -> dict:
     images_dir = TEST_DATASET_ROOT / scene / "train" / "images"
     labels_dir = TEST_DATASET_ROOT / scene / "train" / "labels"
 
@@ -198,8 +193,8 @@ def evaluate_scene(scene: str, model_path: Path, n_examples: int) -> dict:
 
     ious = [r["iou"] for r in records]
 
-    print(f"  Saving example visualisations...")
-    save_examples(records, model, model_name, labels_dir, n=n_examples, scene=scene)
+    print(f"  Saving visualisations...")
+    save_all_visualisations(records, model, model_name, labels_dir, scene=scene)
 
     return {
         "n_images":   len(ious),
@@ -233,8 +228,6 @@ def main():
     parser = argparse.ArgumentParser(description="Evaluate human detection IoU on test images")
     parser.add_argument("--scene", choices=available_scenes + ["all"], default="all",
                         help="Which human test scene to evaluate (default: all)")
-    parser.add_argument("--n-examples", type=int, default=5,
-                        help="Number of best/worst examples to save (default: 5)")
     parser.add_argument("--output-csv", type=str, default=None,
                         help="Optional path to save combined CSV of all results")
     args = parser.parse_args()
@@ -258,7 +251,7 @@ def main():
             model_name = model_path.parent.parent.name
             print(f"\n  [{model_name}]")
 
-            result = evaluate_scene(scene, model_path, args.n_examples)
+            result = evaluate_scene(scene, model_path)
 
             if "error" in result:
                 print(f"  ERROR — {result['error']}")
