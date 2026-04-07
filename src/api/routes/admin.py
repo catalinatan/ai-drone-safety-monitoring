@@ -7,6 +7,7 @@ Admin routes:
   GET  /events?limit=100     — recent audit events
   POST /feeds/{id}/position  — live GPS position update
   POST /feeds/{id}/calibrate — PnP calibration
+  POST /feeds/{id}/calibrate-height — camera height calibration
 """
 
 from __future__ import annotations
@@ -133,6 +134,15 @@ class CalibrateBody(BaseModel):
     frame_h: int
 
 
+class CalibrateHeightBody(BaseModel):
+    pixel_x: float
+    pixel_y: float
+    latitude: float
+    longitude: float
+    frame_w: int
+    frame_h: int
+
+
 @router.post("/feeds/{feed_id}/position")
 async def update_position(
     feed_id: str,
@@ -253,4 +263,71 @@ async def calibrate_feed(
         "status": "ok",
         "feed_id": feed_id,
         "orientation": {"pitch": pitch, "yaw": yaw, "roll": roll},
+    }
+
+
+@router.post("/feeds/{feed_id}/calibrate-height")
+async def calibrate_height(
+    feed_id: str,
+    body: CalibrateHeightBody,
+    request: Request,
+    fm: FeedManager = Depends(get_feed_manager),
+):
+    """Calibrate camera height above ground from a single known ground point.
+
+    The user clicks a point on the ground in the camera image and provides
+    its GPS coordinates. The system back-calculates the camera height that
+    makes the projection ray land at that point.
+    """
+    state = fm.get_state(feed_id)
+    if state is None:
+        raise HTTPException(status_code=404, detail=f"Feed {feed_id!r} not found")
+
+    projections = getattr(request.app.state, "projections", None)
+    if not projections or feed_id not in projections:
+        raise HTTPException(status_code=400, detail="No projection backend for this feed")
+
+    proj = projections[feed_id]
+
+    # Convert GPS to NED relative to camera position
+    from src.spatial.gps_utils import gps_to_ned
+
+    camera_gps = None
+    with state.lock:
+        if state.camera_pose is not None:
+            camera_gps = state.camera_pose.get("gps")
+
+    if camera_gps:
+        origin_lat = camera_gps["latitude"]
+        origin_lon = camera_gps["longitude"]
+        origin_alt = camera_gps["altitude"]
+    else:
+        # Use clicked point as rough origin
+        origin_lat, origin_lon, origin_alt = body.latitude, body.longitude, 0.0
+
+    ned = gps_to_ned(body.latitude, body.longitude, 0.0, origin_lat, origin_lon, origin_alt)
+    world_x, world_y = ned[0], ned[1]
+
+    height = proj.calibrate_height(
+        body.pixel_x, body.pixel_y,
+        world_x, world_y,
+        body.frame_w, body.frame_h,
+    )
+
+    if height is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Height calibration failed — ensure the point is visible ground",
+        )
+
+    # Store calibrated height in camera_pose
+    with state.lock:
+        if state.camera_pose is None:
+            state.camera_pose = {}
+        state.camera_pose["calibrated_height"] = round(height, 2)
+
+    return {
+        "status": "ok",
+        "feed_id": feed_id,
+        "calibrated_height_m": round(height, 2),
     }

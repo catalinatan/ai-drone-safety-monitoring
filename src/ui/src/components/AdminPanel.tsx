@@ -276,10 +276,127 @@ function CalibrationTool({ feedId, onDone }: { feedId: string; onDone: () => voi
   );
 }
 
+function HeightCalibrationTool({ feedId, onDone }: { feedId: string; onDone: (height?: number) => void }) {
+  const imgRef = useRef<HTMLImageElement>(null);
+  const [clickedPixel, setClickedPixel] = useState<[number, number] | null>(null);
+  const [gps, setGps] = useState({ latitude: 0, longitude: 0 });
+  const [status, setStatus] = useState<'idle' | 'calibrating' | 'success' | 'error'>('idle');
+  const [result, setResult] = useState<number | null>(null);
+  const [imgDims, setImgDims] = useState<{ w: number; h: number } | null>(null);
+
+  const handleImgClick = (e: React.MouseEvent<HTMLImageElement>) => {
+    const img = imgRef.current;
+    if (!img) return;
+    const rect = img.getBoundingClientRect();
+    const scaleX = img.naturalWidth / rect.width;
+    const scaleY = img.naturalHeight / rect.height;
+    const px = (e.clientX - rect.left) * scaleX;
+    const py = (e.clientY - rect.top) * scaleY;
+    setClickedPixel([px, py]);
+    setImgDims({ w: img.naturalWidth, h: img.naturalHeight });
+  };
+
+  const handleCalibrate = async () => {
+    if (!clickedPixel || !imgDims) return;
+    setStatus('calibrating');
+    try {
+      const res = await fetch(`${BACKEND_URL}/feeds/${feedId}/calibrate-height`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pixel_x: clickedPixel[0],
+          pixel_y: clickedPixel[1],
+          latitude: gps.latitude,
+          longitude: gps.longitude,
+          frame_w: imgDims.w,
+          frame_h: imgDims.h,
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setResult(data.calibrated_height_m);
+        setStatus('success');
+      } else {
+        setStatus('error');
+      }
+    } catch {
+      setStatus('error');
+    }
+  };
+
+  return (
+    <div className="space-y-2 mt-2">
+      <p className="text-[9px] font-mono text-[var(--text-muted)]">
+        Click a point on the ground where someone could stand, then enter its GPS coordinates.
+      </p>
+      <div className="relative border border-[var(--border-dim)] rounded overflow-hidden">
+        <img
+          ref={imgRef}
+          src={`${BACKEND_URL}/feeds/${feedId}/snapshot`}
+          alt="snapshot"
+          className="w-full cursor-crosshair"
+          onClick={handleImgClick}
+        />
+        {clickedPixel && imgRef.current && (() => {
+          const img = imgRef.current!;
+          const rect = img.getBoundingClientRect();
+          const sx = rect.width / (img.naturalWidth || 1);
+          const sy = rect.height / (img.naturalHeight || 1);
+          return (
+            <div className="absolute w-3 h-3 bg-[var(--zone-green)] rounded-full border border-white -translate-x-1/2 -translate-y-1/2 pointer-events-none"
+              style={{ left: clickedPixel[0] * sx, top: clickedPixel[1] * sy }} />
+          );
+        })()}
+      </div>
+      {clickedPixel && (
+        <div className="text-[9px] font-mono text-[var(--text-secondary)]">
+          Ground point: ({clickedPixel[0].toFixed(0)}, {clickedPixel[1].toFixed(0)})
+        </div>
+      )}
+      <div className="grid grid-cols-2 gap-2">
+        <div>
+          <label className="block text-[9px] font-mono text-[var(--text-muted)] mb-0.5">Latitude</label>
+          <input type="number" step="0.0001" value={gps.latitude}
+            onChange={e => setGps({ ...gps, latitude: Number(e.target.value) })}
+            className="w-full px-2 py-1 rounded border border-[var(--border-dim)] bg-[var(--bg-tertiary)] text-xs font-mono text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-cyan)]" />
+        </div>
+        <div>
+          <label className="block text-[9px] font-mono text-[var(--text-muted)] mb-0.5">Longitude</label>
+          <input type="number" step="0.0001" value={gps.longitude}
+            onChange={e => setGps({ ...gps, longitude: Number(e.target.value) })}
+            className="w-full px-2 py-1 rounded border border-[var(--border-dim)] bg-[var(--bg-tertiary)] text-xs font-mono text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-cyan)]" />
+        </div>
+      </div>
+      <div className="flex gap-2">
+        <button onClick={handleCalibrate}
+          disabled={!clickedPixel || status === 'calibrating'}
+          className="px-3 py-1 rounded border border-[var(--zone-green)] bg-[var(--zone-green)]/10 text-[var(--zone-green)] text-[10px] font-mono font-bold uppercase tracking-wider hover:bg-[var(--zone-green)]/20 disabled:opacity-40">
+          {status === 'calibrating' ? 'Calibrating...' : 'Calibrate Height'}
+        </button>
+        <button onClick={() => onDone(result ?? undefined)}
+          className="px-3 py-1 rounded border border-[var(--border-dim)] text-[var(--text-muted)] text-[10px] font-mono font-bold uppercase tracking-wider hover:text-[var(--text-secondary)]">
+          {status === 'success' ? 'Done' : 'Cancel'}
+        </button>
+      </div>
+      {status === 'success' && result !== null && (
+        <div className="text-[10px] font-mono text-[var(--zone-green)] bg-[var(--zone-green)]/10 border border-[var(--zone-green)]/30 rounded p-2">
+          Height calibrated: {result.toFixed(2)}m above ground
+        </div>
+      )}
+      {status === 'error' && (
+        <div className="text-[10px] font-mono text-[var(--zone-red)] bg-[var(--zone-red)]/10 border border-[var(--zone-red)]/30 rounded p-2">
+          Calibration failed — ensure the clicked point is visible ground
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CameraPoseSection() {
   const [feeds, setFeeds] = useState<Record<string, any> | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const [calibrating, setCalibrating] = useState<string | null>(null);
+  const [calibratingHeight, setCalibratingHeight] = useState<string | null>(null);
   const [poseValues, setPoseValues] = useState<FeedPoseConfig | null>(null);
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
 
@@ -293,6 +410,7 @@ function CameraPoseSection() {
   const startEdit = (feedId: string, feedDef: any) => {
     setEditing(feedId);
     setCalibrating(null);
+    setCalibratingHeight(null);
     setPoseValues({
       feed_id: feedId,
       name: feedDef.name || feedId,
@@ -372,16 +490,26 @@ function CameraPoseSection() {
                 >
                   {editing === feedId ? 'Editing...' : 'Edit Pose'}
                 </button>
+                <span className="text-[var(--border-dim)] mx-1">|</span>
                 <button
-                  onClick={() => { setCalibrating(feedId); setEditing(null); }}
-                  className="text-[10px] font-mono text-[var(--zone-green)] hover:underline ml-2"
+                  onClick={() => { setCalibrating(feedId); setEditing(null); setCalibratingHeight(null); }}
+                  className="text-[10px] font-mono text-[var(--zone-green)] hover:underline"
                 >
-                  Calibrate
+                  Calibrate Orientation
+                </button>
+                <span className="text-[var(--border-dim)] mx-1">|</span>
+                <button
+                  onClick={() => { setCalibratingHeight(feedId); setEditing(null); setCalibrating(null); }}
+                  className="text-[10px] font-mono text-[var(--zone-yellow,orange)] hover:underline"
+                >
+                  Calibrate Height
                 </button>
               </div>
             </div>
 
-            {calibrating === feedId ? (
+            {calibratingHeight === feedId ? (
+              <HeightCalibrationTool feedId={feedId} onDone={() => setCalibratingHeight(null)} />
+            ) : calibrating === feedId ? (
               <CalibrationTool feedId={feedId} onDone={() => setCalibrating(null)} />
             ) : editing === feedId && poseValues ? (
               <div className="space-y-2">

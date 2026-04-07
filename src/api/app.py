@@ -56,6 +56,7 @@ def _create_projection(feed_id: str, feed_def: dict, cfg: dict) -> "ProjectionBa
             vehicle_name=params.get("vehicle_name", ""),
             cctv_height=cctv_height,
             safe_z=safe_z,
+            auto_height=True,
         )
     else:
         from src.spatial.config_projection import ConfigProjection

@@ -147,3 +147,56 @@ class ConfigProjection(ProjectionBackend):
         self._rotation = rotation
         # Extract Euler angles for reference
         self._orientation_deg = tuple(rotation.as_euler("ZYX", degrees=True))
+
+    def calibrate_height(
+        self,
+        pixel_x: float,
+        pixel_y: float,
+        world_x: float,
+        world_y: float,
+        frame_w: int,
+        frame_h: int,
+    ) -> Optional[float]:
+        """Back-calculate camera height from a known ground point.
+
+        Casts a ray through the pixel and finds the height h such that
+        the ray-ground intersection lands at (world_x, world_y).
+        """
+        fov_rad = np.deg2rad(self._fov)
+        focal_len = (frame_w / 2) / np.tan(fov_rad / 2)
+        c_x, c_y = frame_w / 2, frame_h / 2
+
+        ray_cam = np.array([
+            1.0,
+            (pixel_x - c_x) / focal_len,
+            (pixel_y - c_y) / focal_len,
+        ])
+        ray_cam /= np.linalg.norm(ray_cam)
+
+        ray_world = self._rotation.as_matrix() @ ray_cam
+
+        if abs(ray_world[2]) < 0.001:
+            return None
+
+        cam_x, cam_y, cam_z = self._position
+
+        if abs(ray_world[0]) > abs(ray_world[1]):
+            t = (world_x - cam_x) / ray_world[0]
+        else:
+            t = (world_y - cam_y) / ray_world[1]
+
+        if t <= 0:
+            return None
+
+        # ground_z = cam_z + t * ray_z, and height = ground_z - cam_z
+        height = t * ray_world[2]
+        if height <= 0:
+            return None
+
+        # Store as the effective height for the ground-plane intersection
+        # In config projection, ground_z = 0.0 and cam_z represents height
+        # So we update cam_z to match: cam_z = -height (NED: negative = above ground)
+        # But actually this changes the camera position which is wrong.
+        # Instead, just return the height — the caller stores it.
+        print(f"[CALIBRATE] Height calibrated to {height:.2f}m")
+        return height

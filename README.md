@@ -330,10 +330,10 @@ The system uses a projection abstraction layer to convert detected humans from 2
 ### How it works
 
 1. YOLO detects a person and produces a segmentation mask
-2. The mask center pixel is located
-3. Lite-Mono estimates depth at that pixel
-4. The projection backend converts (pixel_x, pixel_y, depth) to (x, y, z) world coordinates
-5. These coordinates are used to dispatch the drone
+2. The bottom-center of the mask is used as the ground contact point (feet position), rather than the centroid, to avoid vertical bias from torso-level sampling
+3. Lite-Mono estimates relative depth at that pixel
+4. The projection backend converts (pixel_x, pixel_y, depth) to (x, y, z) world coordinates using ray-ground plane intersection
+5. Only the X and Y coordinates are used for drone dispatch — the Z coordinate is overridden by the configured `safe_altitude` for flight safety
 
 ### Projection backends
 
@@ -354,9 +354,40 @@ For real-world cameras, the system:
 4. Intersects the ray with the ground plane (z=0 in NED) to find the world position
 5. Uses the monocular depth estimate to interpolate along the ray
 
-### PnP calibration
+### Camera height and ground plane
 
-The calibration tool uses OpenCV's `solvePnP` with the iterative method to determine camera orientation from 4+ point correspondences between pixel coordinates and known world coordinates. The solver outputs a rotation matrix which is decomposed into pitch, yaw, and roll angles.
+The projection accuracy depends critically on the camera height parameter (`cctv_height_meters`). This value defines the vertical distance between the camera and the ground plane. The system uses this to compute the ray-ground intersection:
+
+```
+ground_z = 0.0 (NED ground plane)
+t_ground = (ground_z - cam_z) / ray_z
+world_point = cam_position + t_ground * ray_direction
+```
+
+If the camera height is incorrect (e.g., the camera is mounted on a ship deck above sea level, but the configured height assumes ground level), projected coordinates will have systematic directional bias — all estimates will be shifted consistently in one direction.
+
+**For AirSim cameras**, the system automatically calibrates the camera height on first use by querying the `ThirdPersonCharacter` actor's Z position and computing the actual camera-to-ground distance. This removes the need for manual height configuration in simulation.
+
+**For real-world cameras**, the height can be determined in three ways:
+
+1. **Direct measurement** — Measure the camera's height above the ground plane it observes
+2. **Height calibration tool** — Use the Admin Panel's "Calibrate Height" feature (see below)
+3. **Manual configuration** — Set `cctv_height_meters` in the camera's projection parameters
+
+### Height calibration
+
+The height calibration tool back-calculates the camera's height above ground from a single known ground point:
+
+1. In the Admin Panel, select a camera and click **Calibrate Height**
+2. Click a point on the ground in the camera snapshot — this must be a point whose real-world position you know
+3. Enter the GPS coordinates (latitude, longitude) of that ground point
+4. Click **Calibrate** — the system casts a ray through the clicked pixel and solves for the camera height `h` such that the ray-ground intersection lands at the specified world coordinates
+
+This is particularly useful when the camera's exact height above the ground plane is ambiguous (e.g., cameras on bridges, ship decks, or elevated platforms where "height" could be measured relative to different surfaces).
+
+### PnP calibration (orientation)
+
+The PnP calibration tool uses OpenCV's `solvePnP` with the iterative method to determine camera orientation from 4+ point correspondences between pixel coordinates and known world coordinates. The solver outputs a rotation matrix which is decomposed into pitch, yaw, and roll angles.
 
 Requirements for good calibration:
 - At least 4 non-coplanar points (more points = better accuracy)
@@ -560,7 +591,9 @@ Configurable sections:
 - **Streaming** — Capture and stream FPS
 - **Drone** — API URL, timeout, safe altitude
 - **Equipment** — Drone payload settings (e.g., lifevest deployment)
-- **Camera Pose (Per Feed)** — View and edit each camera's position, orientation, and FOV. Includes the PnP calibration tool for determining orientation from reference points.
+- **Camera Pose (Per Feed)** — View and edit each camera's position, orientation, and FOV. Includes calibration tools:
+  - **Calibrate Orientation** — PnP solver to determine camera orientation from 4+ known reference points
+  - **Calibrate Height** — Back-calculate camera height above ground from a single known ground point (click a point in the image and enter its GPS coordinates)
 
 ### Drone Control Panel
 
@@ -578,8 +611,8 @@ A collapsible side panel for monitoring and controlling the deployment drone:
 1. **Frame capture** — Background thread continuously grabs frames from all camera backends and stores them in the feed manager.
 2. **YOLO inference** — A detection thread runs YOLO11 instance segmentation on each frame, producing per-person binary masks.
 3. **Zone overlap** — Each person mask is tested against red and yellow zone masks. Overlap above the threshold triggers the corresponding alert level.
-4. **Depth estimation** — For red zone intrusions, the person's center position is located. Lite-Mono estimates depth at that pixel.
-5. **3D coordinate calculation** — The projection backend converts the 2D pixel + depth into 3D world coordinates (NED frame). For AirSim, this queries the simulator directly. For real cameras, this uses ray-ground intersection with the configured camera pose.
+4. **Depth estimation** — For red zone intrusions, the bottom-center of the person's mask (feet) is used as the ground contact point. Lite-Mono estimates relative depth at that pixel.
+5. **3D coordinate calculation** — The projection backend converts the 2D pixel + depth into 3D world coordinates (NED frame). For AirSim, this queries the simulator directly and auto-calibrates camera height from the scene. For real cameras, this uses ray-ground intersection with the configured (or calibrated) camera pose and height.
 6. **Drone dispatch** — The first red zone intrusion triggers automatic drone deployment. Subsequent intrusions require manual confirmation via the UI.
 7. **Replay capture** — The system continuously buffers recent frames with their detection masks. When an alarm triggers, the replay includes human tracking masks (cyan) for all buffered frames and the trigger mask (red) for the intrusion frame.
 
@@ -610,6 +643,7 @@ The system uses the NED (North-East-Down) coordinate frame:
 | `/feeds/{feed_id}/snapshot` | GET | Latest camera frame as JPEG |
 | `/feeds/{feed_id}/position` | POST | Push live GPS position update |
 | `/feeds/{feed_id}/calibrate` | POST | Run PnP calibration from point correspondences |
+| `/feeds/{feed_id}/calibrate-height` | POST | Calibrate camera height from a known ground point |
 | `/video_feed/{feed_id}` | GET | MJPEG video stream |
 | `/triggers` | GET | List intrusion trigger history |
 | `/config` | GET | Current runtime configuration |
@@ -652,6 +686,32 @@ Returns the solved orientation:
   "status": "ok",
   "feed_id": "cam-north",
   "orientation": { "pitch": -28.5, "yaw": 176.2, "roll": -0.3 }
+}
+```
+
+#### Height Calibration
+
+```bash
+POST /feeds/{feed_id}/calibrate-height
+Content-Type: application/json
+
+{
+  "pixel_x": 640,           # clicked pixel X in the camera image
+  "pixel_y": 500,           # clicked pixel Y in the camera image
+  "latitude": 1.2848,       # GPS latitude of the clicked ground point
+  "longitude": 103.8611,    # GPS longitude of the clicked ground point
+  "frame_w": 1280,
+  "frame_h": 720
+}
+```
+
+Returns the calibrated height:
+
+```json
+{
+  "status": "ok",
+  "feed_id": "cam-north",
+  "calibrated_height_m": 12.45
 }
 ```
 
@@ -752,7 +812,7 @@ ai-safety-monitoring/
 │   │   ├── app.py                   # App factory, background loops, projection wiring
 │   │   ├── dependencies.py          # Dependency injection
 │   │   └── routes/                  # REST endpoints
-│   │       ├── admin.py             # Config, live GPS, PnP calibration
+│   │       ├── admin.py             # Config, GPS, PnP calibration, height calibration
 │   │       ├── video.py             # MJPEG streams, snapshot endpoint
 │   │       ├── feeds.py             # Feed status
 │   │       ├── zones.py             # Zone CRUD and auto-segmentation
@@ -784,12 +844,15 @@ ai-safety-monitoring/
 │   │   ├── scene_segmenter.py       # Scene auto-segmentation
 │   │   └── depth_estimator.py       # Lite-Mono depth
 │   ├── spatial/                     # 3D coordinate math
-│   │   ├── projection_base.py       # ProjectionBackend ABC
-│   │   ├── airsim_projection.py     # AirSim-based projection
+│   │   ├── projection_base.py       # ProjectionBackend ABC (incl. calibrate_height)
+│   │   ├── airsim_projection.py     # AirSim projection (auto-height calibration)
 │   │   ├── config_projection.py     # Config-based projection (real cameras)
 │   │   ├── calibration.py           # PnP camera calibration solver
+│   │   ├── gps_utils.py             # GPS-to-NED coordinate conversion
 │   │   ├── coord_utils.py           # Coordinate helpers
 │   │   └── projection.py            # Legacy AirSim projection utilities
+│   ├── eval/                        # Evaluation scripts
+│   │   └── eval_depth_estimation.py # Depth estimation accuracy evaluation (AirSim)
 │   ├── drone_server/                # Drone control API
 │   │   ├── app.py
 │   │   ├── control_loop.py
@@ -813,6 +876,58 @@ ai-safety-monitoring/
     ├── integration/                 # API tests (TestClient)
     └── ...
 ```
+
+---
+
+## Depth Estimation Evaluation
+
+The system includes an evaluation script (`src/eval/eval_depth_estimation.py`) for measuring depth estimation and projection accuracy against AirSim ground truth. It compares the system's estimated world coordinates with the actual position of a `ThirdPersonCharacter` actor in the AirSim environment.
+
+### Running the evaluation
+
+```bash
+# Basic evaluation on a single environment
+python -m src.eval.eval_depth_estimation --env ship
+
+# With live camera visualization
+python -m src.eval.eval_depth_estimation --env ship --show
+
+# Setup drones in follow mode before collecting samples
+python -m src.eval.eval_depth_estimation --env ship --setup
+
+# Aggregate results across multiple environments
+python -m src.eval.eval_depth_estimation --aggregate
+```
+
+### Command-line flags
+
+| Flag | Description |
+|------|-------------|
+| `--env <name>` | AirSim environment to evaluate (e.g., `ship`, `bridge`) |
+| `--show` | Display per-camera OpenCV windows with live detection overlay |
+| `--setup` | Start the drone follow-mode loop (mirrors production `--follow` behaviour) before evaluation |
+| `--aggregate` | Combine results from multiple `--env` runs into a single summary |
+
+### How it works
+
+1. **Follow mode** — When `--setup` is used, CCTV drones replicate the production follow-mode loop: each drone is continuously teleported to its corresponding Camera Actor pose in the AirSim scene.
+2. **Detection** — YOLO runs on each camera frame. The bottom of each detected person mask (feet position) is used as the ground contact point.
+3. **Filtering** — Small detections below `MIN_MASK_AREA_FRACTION` (0.1% of frame area) are discarded to eliminate false positives from background objects.
+4. **Matching** — Each detection is matched to the `ThirdPersonCharacter` ground truth position. Matches exceeding `MATCH_DISTANCE_THRESHOLD_M` are discarded to avoid false matches when the character isn't visible.
+5. **Projection** — The matched pixel is projected to world coordinates using the same `AirSimProjection` backend as production, with the camera height auto-calibrated from AirSim poses.
+6. **Error calculation** — Only X and Y errors are measured (2D horizontal plane), since the Z coordinate is overridden by `safe_altitude` for drone dispatch and is not operationally relevant.
+
+### Output
+
+Results are saved to `eval_output/depth_estimation/<env>/`:
+
+| File | Description |
+|------|-------------|
+| `results.csv` | Per-sample raw data (pixel coords, estimated/ground-truth X/Y, errors, distance) |
+| `summary.json` | Aggregate statistics (mean, median, P90, max errors) |
+| `error_histogram.png` | Distribution of 2D position errors |
+| `scatter_xy.png` | Scatter plot of estimated vs ground truth positions with error vectors |
+| `error_vs_distance.png` | Error magnitude as a function of camera-to-person distance |
 
 ---
 
@@ -854,6 +969,8 @@ Zones are saved to `data/zones.json`. Ensure the backend process has write permi
 - If using PnP calibration, ensure points are spread across the image and world coordinates are accurate
 - Check the Admin Panel > Camera Pose section to verify the current values
 - For AirSim cameras, the Camera Pose section has no effect — pose is read from the simulator
+- **Systematic directional bias in projections** — If all projected coordinates are consistently shifted in one direction, the camera height is likely incorrect. Use the height calibration tool (Admin Panel > Calibrate Height) to recalculate it from a known ground point
+- **Height ambiguity on elevated platforms** — For cameras on bridges, ship decks, or rooftops, the "height" should be measured relative to the ground plane the camera observes (e.g., the deck surface), not relative to sea level or the building base
 
 ---
 
