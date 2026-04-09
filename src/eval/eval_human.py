@@ -1,17 +1,21 @@
 """
-Evaluate human detection segmentation models by comparing predicted masks
-against ground-truth masks from the test dataset.
+Evaluate human detection segmentation models using instance-level F1 score.
 
-IoU (Intersection over Union) is computed per image then averaged.
-GT labels are YOLO polygon format (.txt files alongside images).
+Each GT instance and each predicted instance is matched individually via IoU.
+Matching logic per image:
+  - True Positive  (TP): GT instance matched to a prediction above IoU threshold
+  - False Negative (FN): GT instance with no prediction above IoU threshold
+  - False Positive (FP): predicted instance with no GT above IoU threshold
 
-Visualisations of the best and worst performing images are saved to:
-    eval_output/{scene}/{model_name}/best/
-    eval_output/{scene}/{model_name}/worst/
+TP/FP/FN are accumulated across all images, then:
+  Precision = TP / (TP + FP)
+  Recall    = TP / (TP + FN)
+  F1        = 2 * Precision * Recall / (Precision + Recall)
 
-Each visualisation shows the original image with:
-  - Green overlay = ground truth mask (all persons combined)
-  - Blue overlay  = predicted mask  (all persons combined)
+Visualisations saved to:
+    eval_output/{scene}/{model_name}/all/
+Each image shows ground truth (green) and predicted (blue) instance outlines,
+with TP/FP/FN counts in the header.
 
 Test dataset structure expected:
     data/test_dataset/images/human_{scene}/train/images/
@@ -20,8 +24,8 @@ Test dataset structure expected:
 Usage:
     python -m src.eval.eval_human
     python -m src.eval.eval_human --scene human_bridge
+    python -m src.eval.eval_human --iou-threshold 0.5
     python -m src.eval.eval_human --output-csv results_human.csv
-    python -m src.eval.eval_human --n-examples 5
 """
 
 import argparse
@@ -30,7 +34,10 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+from scipy.optimize import linear_sum_assignment
 from ultralytics import YOLO
+
+from src.human_detection.config import DANGER_ZONE_OVERLAP_THRESHOLD
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -40,23 +47,23 @@ TEST_DATASET_ROOT = Path("data/test_dataset/images")
 MODELS_ROOT       = Path("runs/segment/runs/segment")
 VIS_OUTPUT_ROOT   = Path("eval_output")
 
-CONF_THRESHOLD  = 0.25
-INFERENCE_IMGSZ = 1280
+CONF_THRESHOLD   = 0.25
+INFERENCE_IMGSZ  = 1280
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png"}
 
 
 # ---------------------------------------------------------------------------
-# Mask helpers
+# Instance mask helpers
 # ---------------------------------------------------------------------------
 
-def yolo_polygons_to_mask(label_path: Path, img_w: int, img_h: int) -> np.ndarray:
-    """Merge all polygon annotations (any class) into a single binary mask."""
-    mask = np.zeros((img_h, img_w), dtype=np.uint8)
+def yolo_polygons_to_instances(label_path: Path, img_w: int, img_h: int) -> list[np.ndarray]:
+    """Parse YOLO polygon label file → list of individual binary masks (one per instance)."""
+    instances = []
     if not label_path.exists():
-        return mask
+        return instances
     text = label_path.read_text().strip()
     if not text:
-        return mask
+        return instances
     for line in text.splitlines():
         parts = line.split()
         coords = list(map(float, parts[1:]))   # skip class id
@@ -64,54 +71,113 @@ def yolo_polygons_to_mask(label_path: Path, img_w: int, img_h: int) -> np.ndarra
             continue
         xs = [round(coords[i]     * img_w) for i in range(0, len(coords), 2)]
         ys = [round(coords[i + 1] * img_h) for i in range(0, len(coords), 2)]
+        mask = np.zeros((img_h, img_w), dtype=np.uint8)
         cv2.fillPoly(mask, [np.array(list(zip(xs, ys)), dtype=np.int32)], color=1)
-    return mask
+        if mask.sum() > 0:
+            instances.append(mask)
+    return instances
 
 
-def get_predicted_mask(model: YOLO, image_path: Path, img_w: int, img_h: int) -> np.ndarray:
-    """Run model and combine all predicted instance masks into one binary mask."""
+def get_predicted_instances(model: YOLO, image_path: Path,
+                             img_w: int, img_h: int) -> list[np.ndarray]:
+    """Run model → list of individual binary masks (one per detected instance)."""
     results = model(str(image_path), conf=CONF_THRESHOLD,
                     imgsz=INFERENCE_IMGSZ, verbose=False, save=False)
-    mask = np.zeros((img_h, img_w), dtype=np.uint8)
+    instances = []
     if results[0].masks is None:
-        return mask
+        return instances
     for m in results[0].masks.data:
         resized = cv2.resize(m.cpu().numpy(), (img_w, img_h))
-        mask = np.maximum(mask, (resized > 0.5).astype(np.uint8))
-    return mask
+        binary = (resized > 0.5).astype(np.uint8)
+        if binary.sum() > 0:
+            instances.append(binary)
+    return instances
 
 
-def compute_iou(gt: np.ndarray, pred: np.ndarray) -> float:
-    intersection = np.logical_and(gt, pred).sum()
-    union        = np.logical_or(gt, pred).sum()
-    if union == 0:
-        return 1.0   # both GT and prediction are empty — correct non-detection
-    return float(intersection / union)
+def gt_coverage(gt: np.ndarray, pred: np.ndarray) -> float:
+    """Fraction of GT mask covered by prediction — mirrors DANGER_ZONE_OVERLAP_THRESHOLD logic."""
+    gt_area = int(gt.sum())
+    if gt_area == 0:
+        return 0.0
+    return float(np.logical_and(gt, pred).sum()) / gt_area
+
+
+# ---------------------------------------------------------------------------
+# Instance matching
+# ---------------------------------------------------------------------------
+
+def match_instances(gt_instances: list[np.ndarray],
+                    pred_instances: list[np.ndarray],
+                    overlap_threshold: float) -> tuple[int, int, int]:
+    """
+    Optimal (Hungarian) matching of GT to predictions using GT coverage as the
+    score — identical logic to DANGER_ZONE_OVERLAP_THRESHOLD in config.py.
+
+    A GT is a TP if the best-matched prediction covers >= overlap_threshold of it.
+    Unmatched GT  → FN
+    Unmatched pred → FP
+
+    Returns (TP, FP, FN).
+    """
+    if not gt_instances and not pred_instances:
+        return 0, 0, 0
+
+    if not gt_instances:
+        return 0, len(pred_instances), 0
+
+    if not pred_instances:
+        return 0, 0, len(gt_instances)
+
+    # Coverage matrix: rows = GT, cols = predictions
+    cov_matrix = np.zeros((len(gt_instances), len(pred_instances)), dtype=np.float32)
+    for i, gt in enumerate(gt_instances):
+        for j, pred in enumerate(pred_instances):
+            cov_matrix[i, j] = gt_coverage(gt, pred)
+
+    # Hungarian algorithm on negated matrix (minimises cost = maximises coverage)
+    row_ind, col_ind = linear_sum_assignment(-cov_matrix)
+
+    matched_gt   = set()
+    matched_pred = set()
+    for i, j in zip(row_ind, col_ind):
+        if cov_matrix[i, j] >= overlap_threshold:
+            matched_gt.add(i)
+            matched_pred.add(j)
+
+    tp = len(matched_gt)
+    fn = len(gt_instances)   - tp
+    fp = len(pred_instances) - len(matched_pred)
+    return tp, fp, fn
 
 
 # ---------------------------------------------------------------------------
 # Visualisation
 # ---------------------------------------------------------------------------
 
-def make_visualisation(img: np.ndarray, gt_mask: np.ndarray,
-                        pred_mask: np.ndarray, iou: float) -> np.ndarray:
+def make_visualisation(img: np.ndarray,
+                       gt_instances: list[np.ndarray],
+                       pred_instances: list[np.ndarray],
+                       tp: int, fp: int, fn: int) -> np.ndarray:
     """
-    Returns a side-by-side image:
-      Left:  original + green GT mask overlay
-      Right: original + blue predicted mask overlay
+    Side-by-side:
+      Left:  original + green GT instance outlines
+      Right: original + blue predicted instance outlines
+    Header shows TP / FP / FN counts.
     """
-    def overlay(base, mask, colour):
-        out = base.copy().astype(np.float32)
-        tint = np.zeros_like(base, dtype=np.float32)
-        tint[mask == 1] = colour
-        out[mask == 1] = out[mask == 1] * 0.5 + tint[mask == 1] * 0.5
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        result = out.astype(np.uint8)
-        cv2.drawContours(result, contours, -1, colour, 2)
-        return result
+    def draw_instances(base, instances, colour):
+        out = base.copy()
+        for mask in instances:
+            tint = np.zeros_like(base, dtype=np.float32)
+            tint[mask == 1] = colour
+            out = out.astype(np.float32)
+            out[mask == 1] = out[mask == 1] * 0.5 + tint[mask == 1] * 0.5
+            out = out.astype(np.uint8)
+            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            cv2.drawContours(out, contours, -1, colour, 2)
+        return out
 
-    left  = overlay(img, gt_mask,   (0, 200, 0))    # green = GT
-    right = overlay(img, pred_mask, (220, 0, 0))    # blue  = predicted
+    left  = draw_instances(img, gt_instances,   (0, 200, 0))   # green = GT
+    right = draw_instances(img, pred_instances, (220, 0, 0))   # blue  = predicted
 
     h, w = img.shape[:2]
     label_h = 30
@@ -120,48 +186,23 @@ def make_visualisation(img: np.ndarray, gt_mask: np.ndarray,
         labelled = np.zeros((h + label_h, w, 3), dtype=np.uint8)
         labelled[label_h:] = panel
         cv2.putText(labelled, text, (8, 20),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
         return labelled
 
-    left  = add_label(left,  "Ground Truth (green)")
-    right = add_label(right, f"Predicted (blue)  IoU={iou:.4f}")
+    n_gt   = len(gt_instances)
+    n_pred = len(pred_instances)
+    left  = add_label(left,  f"GT (green)  n={n_gt}")
+    right = add_label(right, f"Predicted (blue)  n={n_pred}  TP={tp} FP={fp} FN={fn}")
 
     return np.hstack([left, right])
-
-
-def save_all_visualisations(records: list[dict], model: YOLO, model_name: str,
-                            labels_dir: Path, scene: str) -> None:
-    """Save visualisations for every image, sorted by IoU ascending."""
-    sorted_records = sorted(records, key=lambda r: r["iou"])
-
-    out_dir = VIS_OUTPUT_ROOT / scene / model_name / "all"
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    for rank, rec in enumerate(sorted_records, 1):
-        img_path   = rec["img_path"]
-        iou        = rec["iou"]
-        label_path = labels_dir / f"{img_path.stem}.txt"
-
-        img = cv2.imread(str(img_path))
-        if img is None:
-            continue
-        h, w = img.shape[:2]
-
-        gt   = yolo_polygons_to_mask(label_path, w, h)
-        pred = get_predicted_mask(model, img_path, w, h)
-
-        vis = make_visualisation(img, gt, pred, iou)
-        out_path = out_dir / f"{rank:03d}_{img_path.stem}_iou{iou:.4f}.jpg"
-        cv2.imwrite(str(out_path), vis)
-
-    print(f"    Saved {len(sorted_records)} visualisations → {out_dir}")
 
 
 # ---------------------------------------------------------------------------
 # Per-scene evaluation
 # ---------------------------------------------------------------------------
 
-def evaluate_scene(scene: str, model_path: Path) -> dict:
+def evaluate_scene(scene: str, model_path: Path,
+                   overlap_threshold: float) -> dict:
     images_dir = TEST_DATASET_ROOT / scene / "train" / "images"
     labels_dir = TEST_DATASET_ROOT / scene / "train" / "labels"
 
@@ -175,33 +216,51 @@ def evaluate_scene(scene: str, model_path: Path) -> dict:
 
     model      = YOLO(str(model_path))
     model_name = model_path.parent.parent.name
-    records    = []
 
-    for img_path in image_paths:
+    out_dir = VIS_OUTPUT_ROOT / scene / model_name / "all"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    total_tp = total_fp = total_fn = 0
+    n_images = 0
+
+    for rank, img_path in enumerate(image_paths, 1):
         label_path = labels_dir / f"{img_path.stem}.txt"
         img = cv2.imread(str(img_path))
         if img is None:
             continue
         h, w = img.shape[:2]
-        gt   = yolo_polygons_to_mask(label_path, w, h)
-        pred = get_predicted_mask(model, img_path, w, h)
-        trivial = int(gt.sum()) == 0 and int(pred.sum()) == 0
-        records.append({"img_path": img_path, "iou": compute_iou(gt, pred), "trivial": trivial})
 
-    if not records:
+        gt_instances   = yolo_polygons_to_instances(label_path, w, h)
+        pred_instances = get_predicted_instances(model, img_path, w, h)
+
+        tp, fp, fn = match_instances(gt_instances, pred_instances, overlap_threshold)
+        total_tp += tp
+        total_fp += fp
+        total_fn += fn
+        n_images += 1
+
+        vis = make_visualisation(img, gt_instances, pred_instances, tp, fp, fn)
+        out_path = out_dir / f"{rank:03d}_{img_path.stem}_tp{tp}_fp{fp}_fn{fn}.jpg"
+        cv2.imwrite(str(out_path), vis)
+
+    if n_images == 0:
         return {"error": "No valid images processed"}
 
-    ious = [r["iou"] for r in records]
+    precision = total_tp / (total_tp + total_fp) if (total_tp + total_fp) > 0 else 0.0
+    recall    = total_tp / (total_tp + total_fn) if (total_tp + total_fn) > 0 else 0.0
+    f1        = (2 * precision * recall / (precision + recall)
+                 if (precision + recall) > 0 else 0.0)
 
-    print(f"  Saving visualisations...")
-    save_all_visualisations(records, model, model_name, labels_dir, scene=scene)
+    print(f"    Saved {n_images} visualisations → {out_dir}")
 
     return {
-        "n_images":   len(ious),
-        "mean_iou":   round(float(np.mean(ious)),   4),
-        "median_iou": round(float(np.median(ious)), 4),
-        "min_iou":    round(float(np.min(ious)),    4),
-        "max_iou":    round(float(np.max(ious)),    4),
+        "n_images":  n_images,
+        "tp":        total_tp,
+        "fp":        total_fp,
+        "fn":        total_fn,
+        "precision": round(precision, 4),
+        "recall":    round(recall,    4),
+        "f1":        round(f1,        4),
     }
 
 
@@ -210,7 +269,6 @@ def evaluate_scene(scene: str, model_path: Path) -> dict:
 # ---------------------------------------------------------------------------
 
 def discover_human_models() -> list[Path]:
-    """Find all trained human detection model weights."""
     return sorted(MODELS_ROOT.glob("human_detection_*/weights/best.pt"))
 
 
@@ -225,9 +283,11 @@ def main():
         and (d / "train" / "images").exists()
     ] if TEST_DATASET_ROOT.exists() else []
 
-    parser = argparse.ArgumentParser(description="Evaluate human detection IoU on test images")
+    parser = argparse.ArgumentParser(description="Evaluate human detection F1 on test images")
     parser.add_argument("--scene", choices=available_scenes + ["all"], default="all",
                         help="Which human test scene to evaluate (default: all)")
+    parser.add_argument("--overlap-threshold", type=float, default=DANGER_ZONE_OVERLAP_THRESHOLD,
+                        help=f"GT coverage threshold for TP matching (default: {DANGER_ZONE_OVERLAP_THRESHOLD})")
     parser.add_argument("--output-csv", type=str, default=None,
                         help="Optional path to save combined CSV of all results")
     args = parser.parse_args()
@@ -242,7 +302,8 @@ def main():
 
     for scene in scenes:
         print(f"\n{'='*65}")
-        print(f"  SCENE: {scene.upper()}  |  {len(human_models)} model(s)")
+        print(f"  SCENE: {scene.upper()}  |  {len(human_models)} model(s)  "
+              f"|  overlap threshold: {args.overlap_threshold}")
         print(f"{'='*65}")
 
         scene_results = []
@@ -251,42 +312,43 @@ def main():
             model_name = model_path.parent.parent.name
             print(f"\n  [{model_name}]")
 
-            result = evaluate_scene(scene, model_path)
+            result = evaluate_scene(scene, model_path, args.overlap_threshold)
 
             if "error" in result:
                 print(f"  ERROR — {result['error']}")
             else:
-                print(f"  mean IoU={result['mean_iou']}  "
-                      f"median={result['median_iou']}  "
-                      f"min={result['min_iou']}  max={result['max_iou']}  "
+                print(f"  F1={result['f1']}  precision={result['precision']}  "
+                      f"recall={result['recall']}  "
+                      f"TP={result['tp']} FP={result['fp']} FN={result['fn']}  "
                       f"(n={result['n_images']})")
                 row = {"scene": scene, "model": model_name, **result}
                 scene_results.append(row)
                 all_results.append(row)
 
-        # Per-scene CSV
         if scene_results:
             scene_csv = VIS_OUTPUT_ROOT / scene / "results.csv"
             scene_csv.parent.mkdir(parents=True, exist_ok=True)
-            fields = ["scene", "model", "mean_iou", "median_iou", "min_iou", "max_iou", "n_images"]
+            fields = ["scene", "model", "f1", "precision", "recall",
+                      "tp", "fp", "fn", "n_images"]
             with open(scene_csv, "w", newline="") as f:
                 writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
                 writer.writeheader()
-                writer.writerows(sorted(scene_results, key=lambda x: -x["mean_iou"]))
+                writer.writerows(sorted(scene_results, key=lambda x: -x["f1"]))
             print(f"\n  Scene results saved → {scene_csv}")
 
     if all_results:
         print(f"\n\n{'='*65}")
         print("  SUMMARY")
         print(f"{'='*65}")
-        print(f"{'Model':<50} {'Mean IoU':>9} {'Median':>9} {'Min':>7} {'Max':>7}")
+        print(f"{'Model':<50} {'F1':>6} {'Prec':>7} {'Rec':>7} {'TP':>5} {'FP':>5} {'FN':>5}")
         print("-" * 65)
-        for r in sorted(all_results, key=lambda x: -x["mean_iou"]):
-            print(f"{r['model']:<50} {r['mean_iou']:>9} {r['median_iou']:>9} "
-                  f"{r['min_iou']:>7} {r['max_iou']:>7}")
+        for r in sorted(all_results, key=lambda x: -x["f1"]):
+            print(f"{r['model']:<50} {r['f1']:>6} {r['precision']:>7} {r['recall']:>7} "
+                  f"{r['tp']:>5} {r['fp']:>5} {r['fn']:>5}")
 
         if args.output_csv:
-            fields = ["scene", "model", "mean_iou", "median_iou", "min_iou", "max_iou", "n_images"]
+            fields = ["scene", "model", "f1", "precision", "recall",
+                      "tp", "fp", "fn", "n_images"]
             with open(args.output_csv, "w", newline="") as f:
                 writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
                 writer.writeheader()
