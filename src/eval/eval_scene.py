@@ -26,6 +26,7 @@ Usage:
 
 import argparse
 import csv
+import shutil
 from pathlib import Path
 
 import cv2
@@ -41,7 +42,7 @@ MODELS_ROOT       = Path("runs/segment/runs/segment")
 VIS_OUTPUT_ROOT   = Path("eval_output")
 
 CONF_THRESHOLD  = 0.25
-INFERENCE_IMGSZ = 1280
+INFERENCE_IMGSZ = 640
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png"}
 
 
@@ -134,6 +135,8 @@ def save_all_visualisations(records: list[dict], model: YOLO, model_name: str,
     sorted_records = sorted(records, key=lambda r: r["iou"])
 
     out_dir = VIS_OUTPUT_ROOT / scene / model_name / "all"
+    if out_dir.exists():
+        shutil.rmtree(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     for rank, rec in enumerate(sorted_records, 1):

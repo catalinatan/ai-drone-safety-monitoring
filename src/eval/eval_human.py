@@ -30,6 +30,7 @@ Usage:
 
 import argparse
 import csv
+import shutil
 from pathlib import Path
 
 import cv2
@@ -218,6 +219,8 @@ def evaluate_scene(scene: str, model_path: Path,
     model_name = model_path.parent.parent.name
 
     out_dir = VIS_OUTPUT_ROOT / scene / model_name / "all"
+    if out_dir.exists():
+        shutil.rmtree(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     total_tp = total_fp = total_fn = 0
