@@ -40,8 +40,8 @@ from src.human_detection.config import DANGER_ZONE_OVERLAP_THRESHOLD
 # *** SET THESE TO YOUR BEST MODELS BEFORE RUNNING ***
 # ---------------------------------------------------------------------------
 
-SEG_MODEL_PATH    = Path("runs/segment/runs/segment/bridge_hazard_yolo11n-seg/weights/best.pt")
-HUMAN_MODEL_PATH  = Path("runs/segment/runs/segment/human_detection_real_yolo11n-seg/weights/best.pt")
+SEG_MODEL_PATH    = Path("runs/segment/runs/segment/bridge_hazard_yolo11m-seg/weights/best.pt")
+HUMAN_MODEL_PATH  = Path("runs/segment/runs/segment/human_detection_real_yolo11m-seg/weights/best.pt")
 
 # ---------------------------------------------------------------------------
 # Dataset paths
@@ -197,11 +197,19 @@ def evaluate(seg_model: YOLO, human_model: YOLO,
             # For positives: use cleanup for seg, original for human detection
             if gt_label == "positive":
                 cleanup_path = find_cleanup(img_path)
-                seg_source = cleanup_path if cleanup_path else img_path
+                if cleanup_path:
+                    cleanup_img = cv2.imread(str(cleanup_path))
+                    ch, cw = cleanup_img.shape[:2] if cleanup_img is not None else (h, w)
+                    seg_mask = get_seg_mask(seg_model, cleanup_path, cw, ch)
+                    # Resize mask to original dimensions if cleanup size differs
+                    if (cw, ch) != (w, h):
+                        seg_mask = cv2.resize(seg_mask, (w, h), interpolation=cv2.INTER_NEAREST)
+                    danger_zone = seg_mask
+                else:
+                    danger_zone = get_seg_mask(seg_model, img_path, w, h)
             else:
-                seg_source = img_path
+                danger_zone = get_seg_mask(seg_model, img_path, w, h)
 
-            danger_zone  = get_seg_mask(seg_model, seg_source, w, h)
             human_masks  = get_human_masks(human_model, img_path, w, h)
             fired        = alarm_fires(danger_zone, human_masks)
 
