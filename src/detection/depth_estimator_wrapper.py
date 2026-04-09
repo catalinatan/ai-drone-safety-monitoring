@@ -67,8 +67,10 @@ class DepthEstimator:
         Returns
         -------
         np.ndarray
-            Normalized depth map (H, W) float32, values in [0, 1].
-            0 = closest, 1 = farthest.
+            Inverse-disparity depth map (H, W) float32.
+            Higher values = farther from camera.
+            Use with compute_scale_factor() and get_metric_depth_at_pixel()
+            to obtain metric depth in metres.
         """
         if frame.dtype != np.uint8:
             frame = (frame * 255).astype(np.uint8) if frame.max() <= 1.0 else frame
@@ -76,21 +78,37 @@ class DepthEstimator:
 
     def get_depth_at_pixel(self, depth_map: np.ndarray, x: int, y: int) -> float:
         """
-        Get depth value at a specific pixel.
+        Get raw inverse-disparity value at a specific pixel.
 
-        Parameters
-        ----------
-        depth_map : np.ndarray
-            Depth map from estimate().
-        x, y : int
-            Pixel coordinates (clipped to bounds).
-
-        Returns
-        -------
-        float
-            Depth value at pixel, normalized to [0, 1].
+        For metric depth in metres, use get_metric_depth_at_pixel() instead.
         """
         h, w = depth_map.shape
         x = max(0, min(int(x), w - 1))
         y = max(0, min(int(y), h - 1))
         return float(depth_map[y, x])
+
+    @staticmethod
+    def get_metric_depth_at_pixel(
+        depth_map: np.ndarray, x: int, y: int, scale_factor: float,
+    ) -> float:
+        """
+        Get metric depth (metres) at a pixel.
+
+        Parameters
+        ----------
+        depth_map : np.ndarray
+            Inverse-disparity map from estimate() — values proportional to depth.
+        x, y : int
+            Pixel coordinates (clamped to bounds).
+        scale_factor : float
+            Per-frame scale factor from projection backend's compute_scale_factor().
+
+        Returns
+        -------
+        float
+            Metric depth in metres at the given pixel.
+        """
+        h, w = depth_map.shape
+        x = max(0, min(int(x), w - 1))
+        y = max(0, min(int(y), h - 1))
+        return float(scale_factor * depth_map[y, x])

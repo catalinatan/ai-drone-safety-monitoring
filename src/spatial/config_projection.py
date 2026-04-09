@@ -70,6 +70,18 @@ class ConfigProjection(ProjectionBackend):
         frame_w: int,
         frame_h: int,
     ) -> Tuple[float, float, float]:
+        """Project pixel to world coordinates using metric depth.
+
+        Parameters
+        ----------
+        depth : float
+            Metric depth in metres (distance from camera to target along the ray).
+            Computed by caller via: scale_factor * inverse_disparity_at_pixel.
+            Pass 0.0 to return camera position.
+        """
+        if depth <= 0:
+            return (float(self._position[0]), float(self._position[1]), self._safe_z)
+
         # Camera intrinsics from FOV
         fov_rad = np.deg2rad(self._fov)
         focal_len = (frame_w / 2) / np.tan(fov_rad / 2)
@@ -86,27 +98,73 @@ class ConfigProjection(ProjectionBackend):
         # Rotate to world frame
         ray_world = self._rotation.as_matrix() @ ray_cam
 
-        # Ground plane intersection (Z=0 in NED)
-        cam_z = self._position[2]  # negative in NED = above ground
-        ground_z = 0.0
-
-        if abs(ray_world[2]) < 0.001:
-            # Ray nearly horizontal — use height-based fallback distance
-            height = abs(cam_z)
-            distance = depth * (height * 2.5)
-        else:
-            t_ground = (ground_z - cam_z) / ray_world[2]
-            if t_ground < 0:
-                # Ray points away from ground
-                height = abs(cam_z)
-                distance = depth * (height * 2.5)
-            else:
-                min_distance = max(1.0, abs(cam_z) * 0.5)
-                max_distance = t_ground
-                distance = min_distance + (max_distance - min_distance) * (depth ** 0.5)
-
-        point_world = self._position + distance * ray_world
+        # Place point at metric depth along the ray
+        point_world = self._position + depth * ray_world
         return (float(point_world[0]), float(point_world[1]), self._safe_z)
+
+    def compute_scale_factor(
+        self,
+        depth_map: np.ndarray,
+        frame_w: int,
+        frame_h: int,
+    ) -> float:
+        """Recover metric scale from ground-plane pixels.
+
+        Samples pixels from the bottom strip of the image (likely ground),
+        computes geometric ray-ground distance for each, and returns the
+        median ratio of geometric_distance / inverse_disparity.
+        """
+        fov_rad = np.deg2rad(self._fov)
+        focal_len = (frame_w / 2) / np.tan(fov_rad / 2)
+        c_x, c_y = frame_w / 2, frame_h / 2
+        cam_z = self._position[2]
+        height = abs(cam_z)
+
+        if height < 0.1:
+            return 1.0  # camera at ground level, can't calibrate
+
+        ground_z = cam_z + height  # = 0 when cam_z is negative and height = |cam_z|
+
+        # Sample pixels from bottom 20% of image (most likely ground)
+        h, w = depth_map.shape
+        y_start = int(h * 0.8)
+        sample_rows = range(y_start, h, max(1, (h - y_start) // 5))
+        sample_cols = range(0, w, max(1, w // 8))
+
+        ratios = []
+        rot_matrix = self._rotation.as_matrix()
+
+        for row in sample_rows:
+            for col in sample_cols:
+                inv_disp = depth_map[row, col]
+                if inv_disp < 1e-6:
+                    continue
+
+                # Map (col, row) to pixel coords in frame space
+                px = (col / w) * frame_w
+                py = (row / h) * frame_h
+
+                ray_cam = np.array([
+                    1.0,
+                    (px - c_x) / focal_len,
+                    (py - c_y) / focal_len,
+                ])
+                ray_cam /= np.linalg.norm(ray_cam)
+                ray_world = rot_matrix @ ray_cam
+
+                if abs(ray_world[2]) < 0.001:
+                    continue
+
+                t_ground = (ground_z - cam_z) / ray_world[2]
+                if t_ground <= 0:
+                    continue
+
+                ratios.append(t_ground / inv_disp)
+
+        if not ratios:
+            return 1.0  # fallback
+
+        return float(np.median(ratios))
 
     def update_pose(
         self,

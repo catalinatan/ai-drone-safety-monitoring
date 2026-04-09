@@ -276,12 +276,18 @@ def _detection_loop(
             if len(y_indices) == 0:
                 return _fallback()
 
+            # Bottom-center of mask = foot position (ground contact point)
             center_x = float(np.mean(x_indices))
-            center_y = float(np.mean(y_indices))
-            depth_val = depth_estimator.get_depth_at_pixel(depth_map, center_x, center_y)
+            center_y = float(np.max(y_indices))
+
+            # Per-frame scale recovery + metric depth
+            scale = projection.compute_scale_factor(depth_map, frame.shape[1], frame.shape[0])
+            metric_depth = depth_estimator.get_metric_depth_at_pixel(
+                depth_map, int(center_x), int(center_y), scale,
+            )
 
             return projection.pixel_to_world(
-                center_x, center_y, depth_val, frame.shape[1], frame.shape[0],
+                center_x, center_y, metric_depth, frame.shape[1], frame.shape[0],
             )
         except Exception as e:
             print(f"[DETECTION] Projection failed: {e}, using camera position")

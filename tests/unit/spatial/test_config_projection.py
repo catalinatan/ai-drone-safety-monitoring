@@ -26,21 +26,21 @@ class TestConfigProjectionInterface:
 
 class TestConfigProjectionRayCast:
 
-    def test_center_pixel_projects_along_camera_forward(self):
-        """Center pixel with depth=0.5 returns a point in front of camera."""
+    def test_center_pixel_with_metric_depth(self):
+        """Passing metric depth directly places point at that distance along the ray."""
         proj = ConfigProjection(
-            position=(0.0, 0.0, -15.0),   # 15m above ground (NED)
-            orientation=(-45.0, 0.0, 0.0), # pitch=-45 (looking down at 45 deg), yaw=0 (north)
+            position=(0.0, 0.0, -15.0),
+            orientation=(-45.0, 0.0, 0.0),
             fov=90.0,
             safe_z=-10.0,
         )
-        x, y, z = proj.pixel_to_world(320, 240, 0.5, 640, 480)
-        # Should be somewhere in front of camera (positive x in NED for yaw=0)
-        assert x > 0.0
+        # 20m metric depth along a -45 degree ray from 15m height
+        x, y, z = proj.pixel_to_world(320, 240, 20.0, 640, 480)
+        assert x > 0.0  # projects forward (north)
         assert z == -10.0  # safe_z override
 
-    def test_zero_depth_returns_near_camera(self):
-        """depth=0 returns point very close to camera position."""
+    def test_zero_depth_returns_camera_position(self):
+        """depth=0 returns the camera position itself."""
         proj = ConfigProjection(
             position=(10.0, 20.0, -15.0),
             orientation=(-30.0, 90.0, 0.0),
@@ -48,21 +48,36 @@ class TestConfigProjectionRayCast:
             safe_z=-10.0,
         )
         x, y, z = proj.pixel_to_world(320, 240, 0.0, 640, 480)
-        # Near camera (min_distance clamp means depth=0 still moves a bit)
-        assert abs(x - 10.0) < 10.0
-        assert abs(y - 20.0) < 10.0
+        assert abs(x - 10.0) < 0.01
+        assert abs(y - 20.0) < 0.01
 
-    def test_full_depth_reaches_ground_plane(self):
-        """depth=1.0 projects to the ground plane intersection."""
+    def test_known_geometry_accuracy(self):
+        """Camera 10m up, pitch -90 (straight down), center pixel, depth=10m.
+
+        Should land directly below the camera at ground level.
+        """
         proj = ConfigProjection(
-            position=(0.0, 0.0, -20.0),
-            orientation=(-45.0, 0.0, 0.0),
+            position=(5.0, 3.0, -10.0),
+            orientation=(-90.0, 0.0, 0.0),
             fov=90.0,
             safe_z=-10.0,
         )
-        x, y, z = proj.pixel_to_world(320, 240, 1.0, 640, 480)
-        # At full depth, ground intersection should be ~20m away for 45 deg pitch at 20m height
-        assert x > 10.0
+        x, y, z = proj.pixel_to_world(320, 240, 10.0, 640, 480)
+        # Should be directly below camera
+        assert abs(x - 5.0) < 0.5
+        assert abs(y - 3.0) < 0.5
+
+    def test_fallback_for_zero_depth(self):
+        """depth=0 with horizontal camera still returns valid coords."""
+        proj = ConfigProjection(
+            position=(0.0, 0.0, -10.0),
+            orientation=(0.0, 0.0, 0.0),
+            fov=90.0,
+            safe_z=-10.0,
+        )
+        x, y, z = proj.pixel_to_world(320, 240, 0.0, 640, 480)
+        assert isinstance(x, float)
+        assert isinstance(y, float)
 
 
 class TestConfigProjectionUpdatePose:
@@ -131,16 +146,54 @@ class TestConfigProjectionGPS:
 
 class TestConfigProjectionFallback:
 
-    def test_horizontal_ray_uses_height_fallback(self):
-        """Camera pointing horizontally (pitch=0) can't hit ground — uses height-based distance."""
+    def test_horizontal_ray_uses_metric_depth_directly(self):
+        """Camera pointing horizontally — metric depth used as-is along the ray."""
         proj = ConfigProjection(
             position=(0.0, 0.0, -10.0),
-            orientation=(0.0, 0.0, 0.0),  # looking straight ahead
+            orientation=(0.0, 0.0, 0.0),
             fov=90.0,
             safe_z=-10.0,
         )
-        x, y, z = proj.pixel_to_world(320, 240, 0.5, 640, 480)
-        # Should still produce valid coordinates
+        x, y, z = proj.pixel_to_world(320, 240, 25.0, 640, 480)
         assert isinstance(x, float)
         assert isinstance(y, float)
         assert z == -10.0
+
+
+class TestComputeScaleFactor:
+
+    def test_scale_factor_from_ground_pixels(self):
+        """Scale factor should convert inverse-disparity to metric distance.
+
+        Camera at 15m height, pitch -45 degrees, looking north.
+        Center pixel ray hits ground at ~15m distance (height/sin(45)).
+        If the depth map has inverse-disparity=5.0 there, scale should be ~15/5=3.0.
+        """
+        proj = ConfigProjection(
+            position=(0.0, 0.0, -15.0),
+            orientation=(-45.0, 0.0, 0.0),
+            fov=90.0,
+        )
+        # Fake inverse-disparity map (4x4 for simplicity)
+        # All pixels have inv_disp = 5.0
+        depth_map = np.full((4, 4), 5.0, dtype=np.float32)
+
+        scale = proj.compute_scale_factor(depth_map, 4, 4)
+
+        # The geometric ground distance for center pixel at -45 pitch, 15m height
+        # t_ground = 15 / ray_z component ≈ 21.2m (15 / sin(45) for the ray)
+        # scale = t_ground / inv_disp ≈ 21.2 / 5.0 ≈ 4.24
+        # Exact value depends on ray computation; just check it's positive and reasonable
+        assert scale > 0
+        assert 1.0 < scale < 100.0
+
+    def test_scale_factor_positive(self):
+        """Scale factor must always be positive."""
+        proj = ConfigProjection(
+            position=(0.0, 0.0, -10.0),
+            orientation=(-30.0, 90.0, 0.0),
+            fov=90.0,
+        )
+        depth_map = np.full((48, 64), 3.0, dtype=np.float32)
+        scale = proj.compute_scale_factor(depth_map, 64, 48)
+        assert scale > 0

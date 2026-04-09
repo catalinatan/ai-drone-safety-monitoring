@@ -113,6 +113,83 @@ class AirSimProjection(ProjectionBackend):
             x, y, _ = self._fallback_position
             return (x, y, self._safe_z)
 
+    def compute_scale_factor(
+        self,
+        depth_map: "np.ndarray",
+        frame_w: int,
+        frame_h: int,
+    ) -> float:
+        """Recover metric scale by comparing ray-ground distances to model predictions.
+
+        Uses camera pose from AirSim and cctv_height to compute geometric
+        ground distances at sampled pixels, then returns median ratio.
+        """
+        if self._client is None:
+            return 1.0
+
+        try:
+            info = self._client.simGetCameraInfo(
+                self._camera_name, vehicle_name=self._vehicle_name,
+            )
+            cam_pos = info.pose.position
+            cam_orient = info.pose.orientation
+
+            height = self._cctv_height
+            if height < 0.1:
+                return 1.0
+
+            ground_z = cam_pos.z_val + height
+
+            fov_rad = np.deg2rad(90.0)
+            focal_len = (frame_w / 2) / np.tan(fov_rad / 2)
+            c_x, c_y = frame_w / 2, frame_h / 2
+
+            r = R.from_quat([
+                cam_orient.x_val, cam_orient.y_val,
+                cam_orient.z_val, cam_orient.w_val,
+            ])
+            rot_matrix = r.as_matrix()
+
+            # Sample pixels from bottom 20% of image (most likely ground)
+            h, w = depth_map.shape
+            y_start = int(h * 0.8)
+            sample_rows = range(y_start, h, max(1, (h - y_start) // 5))
+            sample_cols = range(0, w, max(1, w // 8))
+
+            ratios = []
+            for row in sample_rows:
+                for col in sample_cols:
+                    inv_disp = depth_map[row, col]
+                    if inv_disp < 1e-6:
+                        continue
+                    px = (col / w) * frame_w
+                    py = (row / h) * frame_h
+
+                    ray_cam = np.array([
+                        1.0,
+                        (px - c_x) / focal_len,
+                        (py - c_y) / focal_len,
+                    ])
+                    ray_cam /= np.linalg.norm(ray_cam)
+                    ray_world = rot_matrix @ ray_cam
+
+                    if abs(ray_world[2]) < 0.001:
+                        continue
+
+                    t_ground = (ground_z - cam_pos.z_val) / ray_world[2]
+                    if t_ground <= 0:
+                        continue
+
+                    ratios.append(t_ground / inv_disp)
+
+            if not ratios:
+                return 1.0
+
+            return float(np.median(ratios))
+        except Exception as e:
+            print(f"[AirSimProjection] Scale factor failed: {e}")
+            return 1.0
+
     def update_pose(
         self,
         position: Optional[Tuple[float, float, float]] = None,

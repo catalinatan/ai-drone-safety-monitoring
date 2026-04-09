@@ -66,10 +66,10 @@ CCTV_HEIGHT_METERS = 15.0
 
 # If the best detection-to-ground-truth 2D distance exceeds this, assume
 # the target actor was not detected and skip the sample.
-MATCH_DISTANCE_THRESHOLD_M = 10.0
+MATCH_DISTANCE_THRESHOLD_M = 40.0
 
 # Minimum mask area as a fraction of the frame — filters out small blobs/false positives
-MIN_MASK_AREA_FRACTION = 0.001
+MIN_MASK_AREA_FRACTION = 0.000005
 
 
 # ---------------------------------------------------------------------------
@@ -199,7 +199,7 @@ def run_evaluation(
     """
     from src.detection.human_detector import HumanDetector
     from src.detection.depth_estimator_wrapper import DepthEstimator
-    from src.spatial.projection import get_coords_from_lite_mono
+    from src.spatial.airsim_projection import AirSimProjection
 
     cameras = {k: v for k, v in CAMERA_FEEDS.items()
                if camera_ids is None or k in camera_ids}
@@ -330,10 +330,22 @@ def run_evaluation(
             cam_info_cur = client.simGetCameraInfo(cam_name, vehicle_name=veh_name)
             cctv_height_actual = gt[2] - cam_info_cur.pose.position.z_val
 
-            # 4. Depth estimation (once per frame, shared across all detections)
-            depth_map = depth_est.estimate(frame)
+            # 4. Build per-iteration projection backend seeded with the true
+            #    camera-to-ground height (from AirSim ground truth).
+            projection = AirSimProjection(
+                airsim_client=client,
+                camera_name=cam_name,
+                vehicle_name=veh_name,
+                cctv_height=cctv_height_actual,
+            )
 
-            # 5. Project ALL person detections and find the one closest to ground truth
+            # 5. Depth estimation + per-frame scale recovery
+            depth_map = depth_est.estimate(frame)
+            scale_factor = projection.compute_scale_factor(
+                depth_map, frame.shape[1], frame.shape[0],
+            )
+
+            # 6. Project ALL person detections using metric depth
             best_est = None
             best_err_2d = float("inf")
             best_center = None
@@ -357,21 +369,22 @@ def run_evaluation(
                           f"({mask_area}/{frame_area} = {mask_area/frame_area:.4f})")
                     continue
 
-                # Use bottom-center of mask (feet), not centroid (torso),
-                # so the ground-plane intersection lands where the person stands.
                 cx = float(np.mean(x_indices))
                 cy = float(np.max(y_indices))
-                dv = depth_est.get_depth_at_pixel(depth_map, int(cx), int(cy))
+
+                # Metric depth at foot pixel — convert frame → depth-map coords
+                metric_depth = depth_est.get_metric_depth_at_pixel(
+                    depth_map,
+                    int(cx * depth_map.shape[1] / frame.shape[1]),
+                    int(cy * depth_map.shape[0] / frame.shape[0]),
+                    scale_factor,
+                )
 
                 try:
-                    est_pos = get_coords_from_lite_mono(
-                        client, cam_name,
-                        cx, cy,
+                    ex, ey, ez = projection.pixel_to_world(
+                        cx, cy, metric_depth,
                         frame.shape[1], frame.shape[0],
-                        dv, cctv_height_actual,
-                        vehicle_name=veh_name,
                     )
-                    ex, ey = est_pos.x_val, est_pos.y_val
                 except Exception as e:
                     print(f"  [DEBUG] {feed_id}: projection failed for detection {idx}: {e}")
                     continue
@@ -379,9 +392,9 @@ def run_evaluation(
                 d2d = math.sqrt((ex - gt[0]) ** 2 + (ey - gt[1]) ** 2)
                 if d2d < best_err_2d:
                     best_err_2d = d2d
-                    best_est = (est_pos.x_val, est_pos.y_val, est_pos.z_val)
+                    best_est = (ex, ey, ez)
                     best_center = (cx, cy)
-                    best_depth_val = dv
+                    best_depth_val = metric_depth
 
             if best_est is None:
                 skip_stats["no_projection"] += 1

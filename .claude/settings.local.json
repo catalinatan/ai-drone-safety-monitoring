@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m pytest tests/unit/detection/test_depth_estimator.py -v)"
+    ]
+  }
+}
