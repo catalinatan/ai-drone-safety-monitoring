@@ -41,7 +41,7 @@ MODELS_ROOT       = Path("runs/segment/runs/segment")
 VIS_OUTPUT_ROOT   = Path("eval_output")
 
 CONF_THRESHOLD  = 0.25
-INFERENCE_IMGSZ = 640
+INFERENCE_IMGSZ = 1280
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png"}
 
 
