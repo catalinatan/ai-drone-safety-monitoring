@@ -1,5 +1,5 @@
 """
-Benchmark YOLO model inference latency across scenes and image sizes.
+Benchmark YOLO model inference latency for scene segmentation and human detection.
 
 Measures both inference-only time (forward pass) and end-to-end time
 (preprocess + forward + postprocess), using CUDA events for accurate GPU
@@ -7,28 +7,25 @@ timing. Captures peak GPU memory, model file size, and parameter count.
 The benchmarking hardware is auto-documented to hardware.json so results
 remain interpretable later.
 
-Models are discovered from:
-    runs/segment/runs/segment/{scene}_hazard_*/weights/best.pt    (scenes)
-    runs/segment/runs/segment/human_detection_real_*/weights/best.pt (human)
-
-Test images are loaded from:
-    data/test_dataset/images/{scene}/train/images/
+Two evaluation groups:
+  - scene_segmentation (imgsz=640): averages across bridge, ship, railway models
+  - human_detection    (imgsz=1280): human detection models
 
 Outputs are written to:
-    eval_output/model_latency/{scene}_segmentation/   (or human_detection/)
+    eval_output/model_latency/{group}/
         hardware.json
         results.csv
-        raw_{model}_imgsz{N}.csv
+        raw_{scene}_{model}_imgsz{N}.csv
         latency_distribution.png
         latency_bars.png
         memory_size.png
-        pareto.png              (only with --pareto, requires eval_scene.py CSV)
+        pareto.png              (only with --pareto, requires eval accuracy CSVs)
 
 Usage:
-    python -m src.eval.eval_latency --scene bridge
-    python -m src.eval.eval_latency --scene all --pareto
-    python -m src.eval.eval_latency --scene railway --imgsz 640 1280
-    python -m src.eval.eval_latency --scene ship --warmup 30 --iterations 300
+    python -m src.eval.eval_latency
+    python -m src.eval.eval_latency --group scene_segmentation
+    python -m src.eval.eval_latency --group human_detection --pareto
+    python -m src.eval.eval_latency --warmup 30 --iterations 300
 """
 
 from __future__ import annotations
@@ -40,6 +37,7 @@ import json
 import platform
 import subprocess
 import time
+from collections import defaultdict
 from pathlib import Path
 
 import cv2
@@ -62,15 +60,25 @@ CONF_THRESHOLD    = 0.25
 
 DEFAULT_WARMUP    = 20
 DEFAULT_ITERS     = 200
-DEFAULT_IMGSZS    = [640, 1280]
-MAX_TEST_IMAGES   = 50    # cap so we aren't bottlenecked on image loading
+MAX_TEST_IMAGES   = 50
 
-# Scene → (model glob, display folder name, accuracy CSV scene key)
-SCENE_CONFIG = {
-    "bridge":  ("bridge_hazard_*/weights/best.pt",          "bridge_segmentation",  "bridge"),
-    "ship":    ("ship_hazard_*/weights/best.pt",            "ship_segmentation",    "ship"),
-    "railway": ("railway_hazard_*/weights/best.pt",         "railway_segmentation", "railway"),
-    "human":   ("human_detection_real_*/weights/best.pt",   "human_detection",      "human"),
+# Scene → (model glob, accuracy CSV subfolder)
+SCENE_INFO = {
+    "bridge":  ("bridge_hazard_*/weights/best.pt",        "bridge"),
+    "ship":    ("ship_hazard_*/weights/best.pt",           "ship"),
+    "railway": ("railway_hazard_*/weights/best.pt",        "railway"),
+    "human":   ("human_detection_real_*/weights/best.pt",  "human_bridge"),
+}
+
+GROUP_CONFIG = {
+    "scene_segmentation": {
+        "scenes": ["bridge", "ship", "railway"],
+        "imgsz":  640,
+    },
+    "human_detection": {
+        "scenes": ["human"],
+        "imgsz":  1280,
+    },
 }
 
 MODEL_NAME_PREFIXES = (
@@ -94,7 +102,7 @@ def capture_hardware_info() -> dict:
         "torch_version":   torch.__version__,
         "cuda_available":  torch.cuda.is_available(),
         "cudnn_benchmark": torch.backends.cudnn.benchmark,
-        "precision":       "fp32",   # ultralytics default for .predict()
+        "precision":       "fp32",
         "batch_size":      1,
     }
     if torch.cuda.is_available():
@@ -124,8 +132,8 @@ def capture_hardware_info() -> dict:
 # ---------------------------------------------------------------------------
 
 def discover_models(scene: str) -> list[Path]:
-    glob, _, _ = SCENE_CONFIG[scene]
-    return sorted(MODELS_ROOT.glob(glob))
+    glob_pattern = SCENE_INFO[scene][0]
+    return sorted(MODELS_ROOT.glob(glob_pattern))
 
 
 def display_model_name(model_path: Path) -> str:
@@ -137,8 +145,11 @@ def display_model_name(model_path: Path) -> str:
     return parent
 
 
+SCENE_IMAGE_DIR = {"human": "human_bridge"}
+
+
 def load_test_images(scene: str) -> list[np.ndarray]:
-    images_dir = TEST_DATASET_ROOT / scene / "train" / "images"
+    images_dir = TEST_DATASET_ROOT / SCENE_IMAGE_DIR.get(scene, scene) / "train" / "images"
     if not images_dir.exists():
         return []
     paths = sorted(p for p in images_dir.iterdir()
@@ -172,15 +183,10 @@ def _stats(arr: list[float]) -> dict:
 
 def benchmark_model(model_path: Path, images: list[np.ndarray], imgsz: int,
                     warmup: int, iterations: int) -> dict:
-    """Benchmark one model at one image size.
-
-    Returns a result dict containing inference-only and end-to-end timing
-    stats, peak GPU memory, model size on disk, and parameter count.
-    """
+    """Benchmark one model at one image size."""
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model  = YOLO(str(model_path))
 
-    # Warmup — first few forward passes include kernel autotune and allocation
     for i in range(warmup):
         _ = model(images[i % len(images)], imgsz=imgsz, conf=CONF_THRESHOLD,
                   verbose=False, device=device)
@@ -210,7 +216,6 @@ def benchmark_model(model_path: Path, images: list[np.ndarray], imgsz: int,
                             verbose=False, device=device)
             e2e_ms.append((time.perf_counter() - t0) * 1000.0)
 
-        # Ultralytics records an internal inference-only timer
         speed = getattr(results[0], "speed", None) or {}
         if "inference" in speed:
             inference_ms.append(float(speed["inference"]))
@@ -233,13 +238,54 @@ def benchmark_model(model_path: Path, images: list[np.ndarray], imgsz: int,
         "raw_e2e":       e2e_ms,
     }
 
-    # Clean up so peak memory on the next model is isolated
     del model
     gc.collect()
     if device == "cuda":
         torch.cuda.empty_cache()
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Averaging across scenes
+# ---------------------------------------------------------------------------
+
+def average_by_variant(raw_results: list[dict], imgsz: int) -> list[dict]:
+    """Pool raw timings across scenes for each YOLO variant and recompute stats."""
+    grouped: dict[str, list[dict]] = defaultdict(list)
+    for r in raw_results:
+        grouped[r["model"]].append(r)
+
+    averaged: list[dict] = []
+    for model_name, entries in sorted(grouped.items()):
+        pooled_inference: list[float] = []
+        pooled_e2e: list[float] = []
+        total_peak_mb = 0.0
+        total_size_mb = 0.0
+        total_params = 0
+
+        for e in entries:
+            pooled_inference.extend(e.get("raw_inference", []))
+            pooled_e2e.extend(e.get("raw_e2e", []))
+            total_peak_mb += e["peak_gpu_mb"]
+            total_size_mb += e["model_size_mb"]
+            total_params += e["params"]
+
+        n = len(entries)
+        averaged.append({
+            "model":        model_name,
+            "imgsz":        imgsz,
+            "inference_ms": _stats(pooled_inference),
+            "e2e_ms":       _stats(pooled_e2e),
+            "fps_median":   (1000.0 / np.median(pooled_e2e)) if pooled_e2e else 0.0,
+            "peak_gpu_mb":  total_peak_mb / n,
+            "model_size_mb": total_size_mb / n,
+            "params":       total_params // n,
+            "raw_inference": pooled_inference,
+            "raw_e2e":      pooled_e2e,
+        })
+
+    return averaged
 
 
 # ---------------------------------------------------------------------------
@@ -278,9 +324,10 @@ def save_results_csv(out_dir: Path, results: list[dict]) -> Path:
 
 
 def save_raw_csv(out_dir: Path, results: list[dict]) -> None:
-    """Per-iteration raw timings for report appendix / reproducibility."""
+    """Per-iteration raw timings for reproducibility."""
     for r in results:
-        path = out_dir / f"raw_{r['model']}_imgsz{r['imgsz']}.csv"
+        scene_tag = f"{r['scene']}_" if "scene" in r else ""
+        path = out_dir / f"raw_{scene_tag}{r['model']}_imgsz{r['imgsz']}.csv"
         with open(path, "w", newline="") as f:
             writer = csv.writer(f)
             writer.writerow(["iteration", "inference_ms", "e2e_ms"])
@@ -299,48 +346,33 @@ def save_raw_csv(out_dir: Path, results: list[dict]) -> None:
 # ---------------------------------------------------------------------------
 
 def plot_latency_distribution(out_dir: Path, results: list[dict], title: str) -> None:
-    imgszs = sorted(set(r["imgsz"] for r in results))
-    fig, axes = plt.subplots(1, len(imgszs),
-                             figsize=(max(7, 5 * len(imgszs)), 5),
-                             squeeze=False)
-    for ax, sz in zip(axes[0], imgszs):
-        group  = [r for r in results if r["imgsz"] == sz]
-        data   = [r["raw_e2e"] for r in group]
-        labels = [r["model"] for r in group]
-        ax.boxplot(data, labels=labels, showfliers=False)
-        ax.set_title(f"{title} @ imgsz={sz}")
-        ax.set_ylabel("End-to-end latency (ms)")
-        ax.grid(True, axis="y", linestyle="--", alpha=0.5)
-        plt.setp(ax.get_xticklabels(), rotation=30, ha="right")
+    fig, ax = plt.subplots(figsize=(max(7, len(results) * 1.2), 5))
+    data   = [r["raw_e2e"] for r in results]
+    labels = [r["model"] for r in results]
+    ax.boxplot(data, labels=labels, showfliers=False)
+    ax.set_title(f"{title} — end-to-end latency distribution")
+    ax.set_ylabel("End-to-end latency (ms)")
+    ax.grid(True, axis="y", linestyle="--", alpha=0.5)
+    plt.setp(ax.get_xticklabels(), rotation=30, ha="right")
     fig.tight_layout()
     fig.savefig(out_dir / "latency_distribution.png", dpi=150)
     plt.close(fig)
 
 
 def plot_latency_bars(out_dir: Path, results: list[dict], title: str) -> None:
-    imgszs = sorted(set(r["imgsz"] for r in results))
-    models = sorted(set(r["model"] for r in results))
-    x      = np.arange(len(models))
-    width  = 0.8 / max(len(imgszs), 1)
+    models = [r["model"] for r in results]
+    x = np.arange(len(models))
+
+    medians = [r["e2e_ms"]["median"] for r in results]
+    p95s    = [r["e2e_ms"]["p95"] for r in results]
+    err_high = [p - med for p, med in zip(p95s, medians)]
 
     fig, ax = plt.subplots(figsize=(max(8, len(models) * 1.6), 5))
-
-    for i, sz in enumerate(imgszs):
-        medians, p95s = [], []
-        for m in models:
-            rec = next((r for r in results if r["model"] == m and r["imgsz"] == sz), None)
-            medians.append(rec["e2e_ms"]["median"] if rec else 0.0)
-            p95s.append(rec["e2e_ms"]["p95"] if rec else 0.0)
-        err_high = [p - med for p, med in zip(p95s, medians)]
-        offset   = (i - (len(imgszs) - 1) / 2) * width
-        ax.bar(x + offset, medians, width, label=f"imgsz={sz}",
-               yerr=[[0] * len(err_high), err_high], capsize=3)
-
+    ax.bar(x, medians, 0.6, yerr=[[0] * len(err_high), err_high], capsize=3)
     ax.set_xticks(x)
     ax.set_xticklabels(models, rotation=30, ha="right")
     ax.set_ylabel("End-to-end latency (ms)")
     ax.set_title(f"{title} — median latency (error bars = P95)")
-    ax.legend()
     ax.grid(True, axis="y", linestyle="--", alpha=0.5)
     fig.tight_layout()
     fig.savefig(out_dir / "latency_bars.png", dpi=150)
@@ -348,14 +380,12 @@ def plot_latency_bars(out_dir: Path, results: list[dict], title: str) -> None:
 
 
 def plot_memory_size(out_dir: Path, results: list[dict], title: str) -> None:
-    imgszs = sorted(set(r["imgsz"] for r in results))
-    models = sorted(set(r["model"] for r in results))
-    x      = np.arange(len(models))
+    models = [r["model"] for r in results]
+    x = np.arange(len(models))
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(max(12, len(models) * 2), 5))
 
-    sizes = [next((r["model_size_mb"] for r in results if r["model"] == m), 0.0)
-             for m in models]
+    sizes = [r["model_size_mb"] for r in results]
     ax1.bar(x, sizes, color="steelblue")
     ax1.set_xticks(x)
     ax1.set_xticklabels(models, rotation=30, ha="right")
@@ -363,20 +393,12 @@ def plot_memory_size(out_dir: Path, results: list[dict], title: str) -> None:
     ax1.set_title("Model size on disk")
     ax1.grid(True, axis="y", linestyle="--", alpha=0.5)
 
-    width = 0.8 / max(len(imgszs), 1)
-    for i, sz in enumerate(imgszs):
-        peaks = []
-        for m in models:
-            rec = next((r for r in results if r["model"] == m and r["imgsz"] == sz), None)
-            peaks.append(rec["peak_gpu_mb"] if rec else 0.0)
-        offset = (i - (len(imgszs) - 1) / 2) * width
-        ax2.bar(x + offset, peaks, width, label=f"imgsz={sz}")
-
+    peaks = [r["peak_gpu_mb"] for r in results]
+    ax2.bar(x, peaks, color="coral")
     ax2.set_xticks(x)
     ax2.set_xticklabels(models, rotation=30, ha="right")
     ax2.set_ylabel("Peak GPU memory (MB)")
     ax2.set_title("Peak GPU memory during inference")
-    ax2.legend()
     ax2.grid(True, axis="y", linestyle="--", alpha=0.5)
 
     fig.suptitle(title)
@@ -385,85 +407,100 @@ def plot_memory_size(out_dir: Path, results: list[dict], title: str) -> None:
     plt.close(fig)
 
 
-def plot_pareto(out_dir: Path, results: list[dict], scene: str, title: str) -> None:
-    """Overlay latency (x) vs IoU (y) using eval_scene.py's results.csv.
+def plot_pareto(out_dir: Path, results: list[dict], scenes: list[str],
+                title: str) -> None:
+    """Overlay latency (x) vs IoU (y) using accuracy CSVs.
 
-    Prints a warning and skips the plot if no accuracy data is available.
+    For multi-scene groups, averages IoU across scenes per variant.
     """
-    accuracy_csv = ACCURACY_ROOT / scene / "results.csv"
-    if not accuracy_csv.exists():
-        print(f"  [pareto] no accuracy data at {accuracy_csv} — skipping")
-        return
-
-    accuracy: dict[str, float] = {}
-    with open(accuracy_csv, "r", newline="") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            full = row.get("model", "")
-            for prefix in MODEL_NAME_PREFIXES:
-                if full.startswith(prefix):
-                    full = full[len(prefix):]
-                    break
-            try:
-                accuracy[full] = float(row.get("mean_iou", "nan"))
-            except ValueError:
-                continue
-
-    if not accuracy:
-        print(f"  [pareto] accuracy CSV had no usable rows — skipping")
-        return
-
-    imgszs = sorted(set(r["imgsz"] for r in results))
-    fig, ax = plt.subplots(figsize=(9, 6))
-
-    for sz in imgszs:
-        xs, ys, labels = [], [], []
-        for r in results:
-            if r["imgsz"] != sz or r["model"] not in accuracy:
-                continue
-            xs.append(r["e2e_ms"]["median"])
-            ys.append(accuracy[r["model"]])
-            labels.append(r["model"])
-        if not xs:
+    # Collect accuracy per variant across all scenes
+    variant_ious: dict[str, list[float]] = defaultdict(list)
+    for scene in scenes:
+        accuracy_csv = ACCURACY_ROOT / scene / "results.csv"
+        if not accuracy_csv.exists():
+            print(f"  [pareto] no accuracy data at {accuracy_csv}")
             continue
-        ax.scatter(xs, ys, s=90, label=f"imgsz={sz}")
-        for xv, yv, lbl in zip(xs, ys, labels):
-            ax.annotate(lbl, (xv, yv), xytext=(6, 4),
-                        textcoords="offset points", fontsize=8)
+        with open(accuracy_csv, "r", newline="") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                full = row.get("model", "")
+                for prefix in MODEL_NAME_PREFIXES:
+                    if full.startswith(prefix):
+                        full = full[len(prefix):]
+                        break
+                try:
+                    variant_ious[full].append(float(row.get("mean_iou", "nan")))
+                except ValueError:
+                    continue
+
+    if not variant_ious:
+        print(f"  [pareto] no usable accuracy data — skipping")
+        return
+
+    accuracy = {k: float(np.mean(v)) for k, v in variant_ious.items()}
+
+    fig, ax = plt.subplots(figsize=(9, 6))
+    xs, ys, labels = [], [], []
+    for r in results:
+        if r["model"] not in accuracy:
+            continue
+        xs.append(r["e2e_ms"]["median"])
+        ys.append(accuracy[r["model"]])
+        labels.append(r["model"])
+
+    if not xs:
+        print(f"  [pareto] no matching models between latency and accuracy — skipping")
+        plt.close(fig)
+        return
+
+    ax.scatter(xs, ys, s=90)
+    for xv, yv, lbl in zip(xs, ys, labels):
+        ax.annotate(lbl, (xv, yv), xytext=(6, 4),
+                    textcoords="offset points", fontsize=8)
 
     ax.set_xlabel("Median end-to-end latency (ms) — lower is better")
     ax.set_ylabel("Mean IoU — higher is better")
     ax.set_title(f"{title} — accuracy vs latency")
     ax.grid(True, linestyle="--", alpha=0.5)
-    ax.legend()
     fig.tight_layout()
     fig.savefig(out_dir / "pareto.png", dpi=150)
     plt.close(fig)
 
 
 # ---------------------------------------------------------------------------
-# Per-scene driver
+# Per-group driver
 # ---------------------------------------------------------------------------
 
-def evaluate_scene(scene: str, imgszs: list[int], warmup: int, iterations: int,
+def evaluate_group(group_name: str, warmup: int, iterations: int,
                    make_pareto: bool) -> None:
-    _, display, scene_key = SCENE_CONFIG[scene]
-    out_dir = OUTPUT_ROOT / display
+    cfg = GROUP_CONFIG[group_name]
+    scenes = cfg["scenes"]
+    imgsz = cfg["imgsz"]
+    out_dir = OUTPUT_ROOT / group_name
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    models = discover_models(scene)
-    if not models:
-        print(f"[{scene.upper()}] No models found under {MODELS_ROOT} — skipping.")
+    # Discover models from all scenes in this group
+    all_models: list[tuple[str, Path]] = []
+    for scene in scenes:
+        for mp in discover_models(scene):
+            all_models.append((scene, mp))
+
+    if not all_models:
+        print(f"[{group_name.upper()}] No models found — skipping.")
         return
 
-    images = load_test_images(scene)
+    # Pool test images from all scenes
+    images: list[np.ndarray] = []
+    for scene in scenes:
+        images.extend(load_test_images(scene))
     if not images:
-        print(f"[{scene.upper()}] No test images at "
-              f"{TEST_DATASET_ROOT / scene / 'train' / 'images'} — skipping.")
+        print(f"[{group_name.upper()}] No test images found — skipping.")
         return
+    images = images[:MAX_TEST_IMAGES]
 
     print(f"\n{'=' * 70}")
-    print(f"  {display.upper()}  |  {len(models)} model(s)  |  {len(images)} images")
+    print(f"  {group_name.upper()}  |  {len(all_models)} model(s)  |  "
+          f"{len(images)} images  |  imgsz={imgsz}")
     print(f"{'=' * 70}")
 
     hw = capture_hardware_info()
@@ -476,33 +513,47 @@ def evaluate_scene(scene: str, imgszs: list[int], warmup: int, iterations: int,
           f"cuDNN {hw.get('cudnn_version', 'N/A')}")
     print(f"  Driver:  {hw.get('nvidia_driver', 'N/A')}")
 
-    results: list[dict] = []
-    for model_path in models:
+    # Benchmark each model
+    raw_results: list[dict] = []
+    for scene, model_path in all_models:
         name = display_model_name(model_path)
-        for sz in imgszs:
-            print(f"\n  [{name} @ imgsz={sz}]  "
-                  f"warmup={warmup}, iterations={iterations}")
-            stats = benchmark_model(model_path, images, sz, warmup, iterations)
-            results.append({"model": name, "imgsz": sz, **stats})
+        print(f"\n  [{scene}/{name} @ imgsz={imgsz}]  "
+              f"warmup={warmup}, iterations={iterations}")
+        stats = benchmark_model(model_path, images, imgsz, warmup, iterations)
+        raw_results.append({
+            "model": name, "scene": scene, "imgsz": imgsz, **stats,
+        })
 
-            e2e = stats["e2e_ms"]
-            print(f"    end-to-end    median={e2e['median']:.2f} ms  "
-                  f"P95={e2e['p95']:.2f} ms  "
-                  f"std={e2e['std']:.2f} ms  "
-                  f"FPS={stats['fps_median']:.1f}")
-            print(f"    inference     median={stats['inference_ms']['median']:.2f} ms")
-            print(f"    peak GPU      {stats['peak_gpu_mb']:.1f} MB  "
-                  f"size={stats['model_size_mb']:.1f} MB  "
-                  f"params={stats['params']:,}")
+        e2e = stats["e2e_ms"]
+        print(f"    end-to-end    median={e2e['median']:.2f} ms  "
+              f"P95={e2e['p95']:.2f} ms  "
+              f"std={e2e['std']:.2f} ms  "
+              f"FPS={stats['fps_median']:.1f}")
+        print(f"    inference     median={stats['inference_ms']['median']:.2f} ms")
+        print(f"    peak GPU      {stats['peak_gpu_mb']:.1f} MB  "
+              f"size={stats['model_size_mb']:.1f} MB  "
+              f"params={stats['params']:,}")
+
+    # Save per-model raw CSVs
+    save_raw_csv(out_dir, raw_results)
+
+    # Average results by variant name (pools timings across scenes)
+    averaged = average_by_variant(raw_results, imgsz)
+
+    print(f"\n  Averaged across {len(scenes)} scene(s): "
+          f"{', '.join(scenes)}")
+    for r in averaged:
+        e2e = r["e2e_ms"]
+        print(f"    {r['model']:20s}  median={e2e['median']:.2f} ms  "
+              f"FPS={r['fps_median']:.1f}")
 
     print(f"\n  Writing outputs to {out_dir}")
-    save_results_csv(out_dir, results)
-    save_raw_csv(out_dir, results)
-    plot_latency_distribution(out_dir, results, display)
-    plot_latency_bars(out_dir, results, display)
-    plot_memory_size(out_dir, results, display)
+    save_results_csv(out_dir, averaged)
+    plot_latency_distribution(out_dir, averaged, group_name)
+    plot_latency_bars(out_dir, averaged, group_name)
+    plot_memory_size(out_dir, averaged, group_name)
     if make_pareto:
-        plot_pareto(out_dir, results, scene_key, display)
+        plot_pareto(out_dir, averaged, scenes, group_name)
 
 
 # ---------------------------------------------------------------------------
@@ -513,18 +564,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Benchmark YOLO model inference latency.")
     parser.add_argument(
-        "--scene",
-        choices=["bridge", "ship", "railway", "human", "all"],
+        "--group",
+        choices=["scene_segmentation", "human_detection", "all"],
         default="all",
-        help="Which scene/task to benchmark (default: all).",
-    )
-    parser.add_argument(
-        "--imgsz",
-        type=int,
-        nargs="+",
-        default=DEFAULT_IMGSZS,
-        help="One or more inference image sizes. Each model is benchmarked "
-             "at every size (default: 640 1280).",
+        help="Which group to benchmark (default: all).",
     )
     parser.add_argument(
         "--warmup",
@@ -541,20 +584,17 @@ def main() -> None:
     parser.add_argument(
         "--pareto",
         action="store_true",
-        help="Overlay latency vs IoU using eval_scene.py's results.csv "
-             "(if available) and save pareto.png.",
+        help="Overlay latency vs IoU using accuracy CSVs (if available).",
     )
     args = parser.parse_args()
 
-    # Match production runtime flags so latency reflects real deployment
     torch.backends.cudnn.benchmark = True
 
-    scenes = (["bridge", "ship", "railway", "human"]
-              if args.scene == "all" else [args.scene])
+    groups = (["scene_segmentation", "human_detection"]
+              if args.group == "all" else [args.group])
 
-    for scene in scenes:
-        evaluate_scene(scene, args.imgsz, args.warmup,
-                       args.iterations, args.pareto)
+    for group in groups:
+        evaluate_group(group, args.warmup, args.iterations, args.pareto)
 
     print(f"\nAll results under: {OUTPUT_ROOT}/")
 
