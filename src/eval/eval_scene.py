@@ -18,10 +18,10 @@ Test dataset structure expected:
     data/test_dataset/images/{scene}/train/labels/
 
 Usage:
-    python -m src.eval.eval
-    python -m src.eval.eval --scene bridge
-    python -m src.eval.eval --output-csv results.csv
-    python -m src.eval.eval --n-examples 5
+    python -m src.eval.eval_scene
+    python -m src.eval.eval_scene --scene bridge
+    python -m src.eval.eval_scene --output-csv results.csv
+    python -m src.eval.eval_scene --n-examples 5
 """
 
 import argparse
