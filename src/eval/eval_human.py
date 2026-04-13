@@ -13,18 +13,17 @@ TP/FP/FN are accumulated across all images, then:
   F1        = 2 * Precision * Recall / (Precision + Recall)
 
 Visualisations saved to:
-    eval_output/{scene}/{model_name}/all/
+    eval_output/human/{model_name}/all/
 Each image shows ground truth (green) and predicted (blue) instance outlines,
 with TP/FP/FN counts in the header.
 
 Test dataset structure expected:
-    data/test_dataset/images/human_{scene}/train/images/
-    data/test_dataset/images/human_{scene}/train/labels/
+    data/test_dataset/images/human/train/images/   (mixed scenes, all in one folder)
+    data/test_dataset/images/human/train/labels/
 
 Usage:
     python -m src.eval.eval_human
-    python -m src.eval.eval_human --scene human_bridge
-    python -m src.eval.eval_human --iou-threshold 0.5
+    python -m src.eval.eval_human --overlap-threshold 0.5
     python -m src.eval.eval_human --output-csv results_human.csv
 """
 
@@ -199,13 +198,12 @@ def make_visualisation(img: np.ndarray,
 
 
 # ---------------------------------------------------------------------------
-# Per-scene evaluation
+# Per-model evaluation
 # ---------------------------------------------------------------------------
 
-def evaluate_scene(scene: str, model_path: Path,
-                   overlap_threshold: float) -> dict:
-    images_dir = TEST_DATASET_ROOT / scene / "train" / "images"
-    labels_dir = TEST_DATASET_ROOT / scene / "train" / "labels"
+def evaluate_model(model_path: Path, overlap_threshold: float) -> dict:
+    images_dir = TEST_DATASET_ROOT / "human" / "train" / "images"
+    labels_dir = TEST_DATASET_ROOT / "human" / "train" / "labels"
 
     if not images_dir.exists():
         return {"error": f"No test images at {images_dir}"}
@@ -218,7 +216,7 @@ def evaluate_scene(scene: str, model_path: Path,
     model      = YOLO(str(model_path))
     model_name = model_path.parent.parent.name
 
-    out_dir = VIS_OUTPUT_ROOT / scene / model_name / "all"
+    out_dir = VIS_OUTPUT_ROOT / "human" / model_name / "all"
     if out_dir.exists():
         shutil.rmtree(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -280,15 +278,7 @@ def discover_human_models() -> list[Path]:
 # ---------------------------------------------------------------------------
 
 def main():
-    available_scenes = [
-        d.name for d in TEST_DATASET_ROOT.iterdir()
-        if d.is_dir() and d.name.startswith("human_")
-        and (d / "train" / "images").exists()
-    ] if TEST_DATASET_ROOT.exists() else []
-
     parser = argparse.ArgumentParser(description="Evaluate human detection F1 on test images")
-    parser.add_argument("--scene", choices=available_scenes + ["all"], default="all",
-                        help="Which human test scene to evaluate (default: all)")
     parser.add_argument("--overlap-threshold", type=float, default=DANGER_ZONE_OVERLAP_THRESHOLD,
                         help=f"GT coverage threshold for TP matching (default: {DANGER_ZONE_OVERLAP_THRESHOLD})")
     parser.add_argument("--output-csv", type=str, default=None,
@@ -300,46 +290,39 @@ def main():
         print(f"No human detection models found under {MODELS_ROOT}")
         return
 
-    scenes      = available_scenes if args.scene == "all" else [args.scene]
+    print(f"\n{'='*65}")
+    print(f"  HUMAN DETECTION  |  {len(human_models)} model(s)  "
+          f"|  overlap threshold: {args.overlap_threshold}")
+    print(f"{'='*65}")
+
     all_results = []
+    for model_path in human_models:
+        model_name = model_path.parent.parent.name
+        print(f"\n  [{model_name}]")
 
-    for scene in scenes:
-        print(f"\n{'='*65}")
-        print(f"  SCENE: {scene.upper()}  |  {len(human_models)} model(s)  "
-              f"|  overlap threshold: {args.overlap_threshold}")
-        print(f"{'='*65}")
+        result = evaluate_model(model_path, args.overlap_threshold)
 
-        scene_results = []
+        if "error" in result:
+            print(f"  ERROR — {result['error']}")
+            continue
 
-        for model_path in human_models:
-            model_name = model_path.parent.parent.name
-            print(f"\n  [{model_name}]")
-
-            result = evaluate_scene(scene, model_path, args.overlap_threshold)
-
-            if "error" in result:
-                print(f"  ERROR — {result['error']}")
-            else:
-                print(f"  F1={result['f1']}  precision={result['precision']}  "
-                      f"recall={result['recall']}  "
-                      f"TP={result['tp']} FP={result['fp']} FN={result['fn']}  "
-                      f"(n={result['n_images']})")
-                row = {"scene": scene, "model": model_name, **result}
-                scene_results.append(row)
-                all_results.append(row)
-
-        if scene_results:
-            scene_csv = VIS_OUTPUT_ROOT / scene / "results.csv"
-            scene_csv.parent.mkdir(parents=True, exist_ok=True)
-            fields = ["scene", "model", "f1", "precision", "recall",
-                      "tp", "fp", "fn", "n_images"]
-            with open(scene_csv, "w", newline="") as f:
-                writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
-                writer.writeheader()
-                writer.writerows(sorted(scene_results, key=lambda x: -x["f1"]))
-            print(f"\n  Scene results saved → {scene_csv}")
+        print(f"  F1={result['f1']}  precision={result['precision']}  "
+              f"recall={result['recall']}  "
+              f"TP={result['tp']} FP={result['fp']} FN={result['fn']}  "
+              f"(n={result['n_images']})")
+        all_results.append({"model": model_name, **result})
 
     if all_results:
+        results_csv = VIS_OUTPUT_ROOT / "human" / "results.csv"
+        results_csv.parent.mkdir(parents=True, exist_ok=True)
+        fields = ["model", "f1", "precision", "recall",
+                  "tp", "fp", "fn", "n_images"]
+        with open(results_csv, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
+            writer.writeheader()
+            writer.writerows(sorted(all_results, key=lambda x: -x["f1"]))
+        print(f"\n  Results saved → {results_csv}")
+
         print(f"\n\n{'='*65}")
         print("  SUMMARY")
         print(f"{'='*65}")
@@ -350,15 +333,13 @@ def main():
                   f"{r['tp']:>5} {r['fp']:>5} {r['fn']:>5}")
 
         if args.output_csv:
-            fields = ["scene", "model", "f1", "precision", "recall",
-                      "tp", "fp", "fn", "n_images"]
             with open(args.output_csv, "w", newline="") as f:
                 writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
                 writer.writeheader()
                 writer.writerows(all_results)
             print(f"\nSaved to {args.output_csv}")
 
-    print(f"\nVisualisations saved under: {VIS_OUTPUT_ROOT}/")
+    print(f"\nVisualisations saved under: {VIS_OUTPUT_ROOT}/human/")
 
 
 if __name__ == "__main__":

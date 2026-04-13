@@ -67,7 +67,7 @@ SCENE_INFO = {
     "bridge":  ("bridge_hazard_*/weights/best.pt",        "bridge"),
     "ship":    ("ship_hazard_*/weights/best.pt",           "ship"),
     "railway": ("railway_hazard_*/weights/best.pt",        "railway"),
-    "human":   ("human_detection_real_*/weights/best.pt",  "human_bridge"),
+    "human":   ("human_detection_real_*/weights/best.pt",  "human"),
 }
 
 GROUP_CONFIG = {
@@ -145,11 +145,8 @@ def display_model_name(model_path: Path) -> str:
     return parent
 
 
-SCENE_IMAGE_DIR = {"human": "human_bridge"}
-
-
 def load_test_images(scene: str) -> list[np.ndarray]:
-    images_dir = TEST_DATASET_ROOT / SCENE_IMAGE_DIR.get(scene, scene) / "train" / "images"
+    images_dir = TEST_DATASET_ROOT / scene / "train" / "images"
     if not images_dir.exists():
         return []
     paths = sorted(p for p in images_dir.iterdir()
