@@ -372,7 +372,7 @@ def save_results_csv(out_dir: Path, agg: dict) -> Path:
     fields = ["stage", "display_name",
               "median_ms", "mean_ms", "p95_ms", "p99_ms", "std_ms",
               "share_of_total_pct"]
-    with open(path, "w", newline="") as f:
+    with open(path, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=fields)
         w.writeheader()
         for stage in STAGE_ORDER:
@@ -405,7 +405,7 @@ def save_per_image_csv(out_dir: Path, rows: list[dict]) -> Path:
     path = out_dir / "per_image.csv"
     fields = (["iteration", "scene", "seg_source", "human_source"]
               + STAGE_ORDER + ["total_ms", "max_overlap", "n_humans"])
-    with open(path, "w", newline="") as f:
+    with open(path, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=fields)
         w.writeheader()
         for r in rows:
@@ -440,7 +440,8 @@ def plot_breakdown(out_dir: Path, agg: dict) -> None:
     p95s    = [agg[s]["p95"] for s in STAGE_ORDER]
     total   = agg["total_ms"]["median"]
 
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 7),
+                                    gridspec_kw={"width_ratios": [2.2, 1.0]})
 
     # Left: horizontal bar with median + p95
     y = np.arange(len(labels))
@@ -458,16 +459,23 @@ def plot_breakdown(out_dir: Path, agg: dict) -> None:
     # Right: stacked single bar showing share of total
     bottom = 0.0
     colours = plt.get_cmap("tab10")(np.linspace(0, 1, len(labels)))
+    legend_labels = []
     for label, med, c in zip(labels, medians, colours):
-        ax2.bar(["Pipeline"], [med], bottom=bottom, color=c, label=label)
         share = 100.0 * med / (total or 1.0)
-        if share >= 1.5:
-            ax2.text(0, bottom + med / 2, f"{label}\n{med:.1f}ms ({share:.0f}%)",
-                     ha="center", va="center", fontsize=8)
+        ax2.bar(["Pipeline"], [med], bottom=bottom, color=c,
+                label=f"{label} — {med:.1f} ms ({share:.1f}%)")
+        # Only inline-label segments that are large enough not to overlap
+        if share >= 8.0:
+            ax2.text(0, bottom + med / 2,
+                     f"{med:.1f}ms ({share:.0f}%)",
+                     ha="center", va="center", fontsize=9, color="white",
+                     fontweight="bold")
         bottom += med
     ax2.set_ylabel("Cumulative latency (ms)")
     ax2.set_title("Response time composition")
     ax2.grid(True, axis="y", linestyle="--", alpha=0.4)
+    ax2.legend(loc="center left", bbox_to_anchor=(1.02, 0.5),
+               fontsize=8, frameon=False)
 
     fig.suptitle("Alarm-trigger pipeline response time", fontsize=14)
     fig.tight_layout()
