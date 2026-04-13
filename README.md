@@ -879,6 +879,38 @@ ai-safety-monitoring/
 
 ---
 
+## Evaluation
+
+The `src/eval/` directory contains scripts that generated the results under `eval_output/` (scene segmentation, human detection, alarm trigger, latency benchmarks). These are provided for transparency — they document how each reported metric was produced.
+
+**Reproducing the evaluation requires trained model weights and the original datasets**, neither of which are committed to this repo (both are large binary artefacts).
+
+### Datasets and simulation environments
+
+Training datasets, test datasets, and AirSim simulation environment builds are hosted externally on OneDrive:
+
+**[Download data + simulation environments](https://imperiallondon-my.sharepoint.com/:f:/g/personal/wc125_ic_ac_uk/IgDuNhLNC-lRQoHmfB91PcXwASz4-pcokfKdteSI1Pnt-wo?e=hAmMAM)**
+
+To reproduce training / evaluation / simulation:
+
+1. Download the archives from the OneDrive link above.
+2. Place the training and test datasets under `data/` using the same folder layout they ship with (e.g. `data/bridge_dataset/`, `data/test_dataset/images/<scene>/`, etc.). The eval and training scripts reference these paths directly.
+3. Unpack the simulation environment builds and point AirSim at them to run the depth-estimation / drone-control pipeline end-to-end.
+
+### Trained model weights
+
+The eval scripts expect YOLO training outputs at:
+
+```
+runs/segment/runs/segment/<run_name>/weights/best.pt
+```
+
+where `<run_name>` matches the patterns in `src/eval/eval_latency.py` / `eval_scene.py` / `eval_human.py` / `eval_alarm_trigger.py` (e.g. `bridge_hazard_yolo11s-seg`, `human_detection_real_yolo11s-seg`). To regenerate these, train the relevant YOLO variants on the datasets placed in `data/` — Ultralytics writes output to `runs/segment/...` by default, which is the path the eval scripts read from.
+
+Only the final deployed model weights (`yolo11n-seg.pt` / production config paths) are needed to run the live system; the extra variants exist only for comparative evaluation.
+
+---
+
 ## Depth Estimation Evaluation
 
 The system includes an evaluation script (`src/eval/eval_depth_estimation.py`) for measuring depth estimation and projection accuracy against AirSim ground truth. It compares the system's estimated world coordinates with the actual position of a `ThirdPersonCharacter` actor in the AirSim environment.
