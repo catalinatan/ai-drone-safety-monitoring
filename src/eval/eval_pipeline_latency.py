@@ -43,11 +43,25 @@ import torch
 from ultralytics import YOLO
 
 from src.eval.eval_alarm_trigger import (
-    SEG_MODELS, HUMAN_MODEL_PATH,
     SEG_IMGSZ, HUMAN_IMGSZ, CONF_THRESHOLD,
     OVERLAP_ROOT, POSITIVE_DIR, NEGATIVE_DIR,
     IMAGE_EXTENSIONS, detect_scene, find_cleanup,
 )
+
+
+# ---------------------------------------------------------------------------
+# Model paths — point at the deployment copies under models/ rather than the
+# raw ultralytics run folders.
+# ---------------------------------------------------------------------------
+
+MODELS_ROOT = Path("models")
+
+SEG_MODELS = {
+    "bridge":  MODELS_ROOT / "scene_segmentation/bridge/bridge_hazard_yolo11s-seg/weights/best.pt",
+    "railway": MODELS_ROOT / "scene_segmentation/railway/railway_hazard_yolo11s-seg/weights/best.pt",
+    "ship":    MODELS_ROOT / "scene_segmentation/ship/ship_hazard_yolo11s-seg/weights/best.pt",
+}
+HUMAN_MODEL_PATH = MODELS_ROOT / "human_detection/yolo11s-seg/weights/best.pt"
 
 
 OUTPUT_DIR    = Path("eval_output/pipeline_latency")
