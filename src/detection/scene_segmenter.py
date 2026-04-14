@@ -93,7 +93,7 @@ class SceneSegmenter:
         conf = confidence if confidence is not None else self.confidence
         print(f"[SceneSegmenter] segment_frame: scene_type='{scene_type}', confidence={conf}")
 
-        results = model(frame, conf=conf, verbose=False, save=False)[0]
+        results = model(frame, conf=conf, imgsz=640, verbose=False, save=False)[0]
 
         num_detections = len(results.boxes) if results.boxes is not None else 0
         num_masks = len(results.masks.data) if results.masks is not None else 0

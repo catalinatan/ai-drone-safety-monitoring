@@ -53,34 +53,26 @@ def _generate_frames(feed_id: str, fm: FeedManager, stream_interval: float):
                 caution = state.caution_active
 
             if frame is not None:
-                frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                frame_rgb = frame  # Frame is already in RGB from AirSim
 
                 # Composite detection mask — overlay is a combined binary
                 # mask (H, W) uint8 with 1 = person pixel.  Paint cyan
                 # directly on masked pixels (much faster than full-frame
                 # addWeighted that the old RGB overlay path required).
                 if overlay is not None:
-                    if overlay.shape[:2] != frame_bgr.shape[:2]:
-                        overlay = cv2.resize(overlay, (frame_bgr.shape[1], frame_bgr.shape[0]),
+                    if overlay.shape[:2] != frame_rgb.shape[:2]:
+                        overlay = cv2.resize(overlay, (frame_rgb.shape[1], frame_rgb.shape[0]),
                                              interpolation=cv2.INTER_NEAREST)
                     mask_bool = overlay.astype(bool)
-                    # Blend: 60% original + 40% cyan (0, 255, 255 in BGR)
-                    frame_bgr[mask_bool] = (
-                        frame_bgr[mask_bool] * 0.6 +
-                        np.array([255, 255, 0], dtype=np.float32) * 0.4
+                    # Blend: 60% original + 40% cyan (0, 255, 255 in RGB)
+                    frame_rgb[mask_bool] = (
+                        frame_rgb[mask_bool] * 0.6 +
+                        np.array([0, 255, 255], dtype=np.float32) * 0.4
                     ).astype(np.uint8)
 
-                h, w = frame_bgr.shape[:2]
-                if caution and not alarm:
-                    cv2.rectangle(frame_bgr, (0, 0), (w - 1, h - 1), (0, 255, 255), 4)
-                    cv2.putText(frame_bgr, "CAUTION", (10, 30),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
-                if alarm:
-                    cv2.rectangle(frame_bgr, (0, 0), (w - 1, h - 1), (0, 0, 255), 4)
-                    cv2.putText(frame_bgr, "ALARM", (10, 30),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+                h, w = frame_rgb.shape[:2]
 
-                ret, buf = cv2.imencode(".jpg", frame_bgr, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                ret, buf = cv2.imencode(".jpg", frame_rgb, [cv2.IMWRITE_JPEG_QUALITY, 80])
                 if ret:
                     last_jpeg = buf.tobytes()
 
@@ -102,8 +94,7 @@ async def get_feed_snapshot(
     if frame is None:
         raise HTTPException(status_code=404, detail="No frame available")
 
-    frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-    ret, buf = cv2.imencode(".jpg", frame_bgr, [cv2.IMWRITE_JPEG_QUALITY, 90])
+    ret, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
     if not ret:
         raise HTTPException(status_code=500, detail="JPEG encoding failed")
 
