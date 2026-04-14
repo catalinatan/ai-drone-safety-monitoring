@@ -26,9 +26,23 @@ function connect() {
 
   ws.onmessage = (event) => {
     try {
-      const status: DetectionStatus = JSON.parse(event.data);
-      sharedStatuses = { ...sharedStatuses, [status.feed_id]: status };
-      notify();
+      const msg = JSON.parse(event.data);
+
+      // Backend sends { feeds: [...], timestamp } — unwrap the array
+      if (msg.feeds && Array.isArray(msg.feeds)) {
+        let changed = false;
+        for (const status of msg.feeds as DetectionStatus[]) {
+          if (status.feed_id) {
+            sharedStatuses = { ...sharedStatuses, [status.feed_id]: status };
+            changed = true;
+          }
+        }
+        if (changed) notify();
+      } else if (msg.feed_id) {
+        // Also handle single-status messages for forward compatibility
+        sharedStatuses = { ...sharedStatuses, [msg.feed_id]: msg as DetectionStatus };
+        notify();
+      }
     } catch {
       // ignore malformed messages
     }

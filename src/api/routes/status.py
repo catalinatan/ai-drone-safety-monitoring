@@ -43,8 +43,8 @@ async def websocket_status(
 
     try:
         while True:
-            # Send status every 1 second
-            await asyncio.sleep(1.0)
+            # Send status every 250ms for responsive UI updates
+            await asyncio.sleep(0.25)
 
             # Collect status for all feeds
             feeds_status = []
