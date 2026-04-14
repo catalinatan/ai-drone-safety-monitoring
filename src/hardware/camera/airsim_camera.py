@@ -32,8 +32,8 @@ class AirSimCamera(CameraBackend):
 
     def connect(self) -> bool:
         try:
+
             import airsim
-            import time as time_module
 
             print(f"[AirSimCamera {self.vehicle_name}] Attempting to connect...")
 
@@ -49,7 +49,8 @@ class AirSimCamera(CameraBackend):
                 pose = self._client.simGetVehiclePose(vehicle_name=self.vehicle_name)
                 print(
                     f"[AirSimCamera {self.vehicle_name}] Verified vehicle exists at position "
-                    f"({pose.position.x_val:.1f}, {pose.position.y_val:.1f}, {pose.position.z_val:.1f})"
+                    f"({pose.position.x_val:.1f}, "
+                    f"{pose.position.y_val:.1f}, {pose.position.z_val:.1f})"
                 )
             except Exception as ve:
                 print(f"[AirSimCamera {self.vehicle_name}] WARNING: Vehicle check failed: {ve}")
@@ -67,7 +68,7 @@ class AirSimCamera(CameraBackend):
             print(f"  Type: {type(e).__name__}")
             print(f"  Expected vehicle: {self.vehicle_name}")
             print(f"  Camera name: {self.camera_name}")
-            print(f"\nFull traceback:")
+            print("\nFull traceback:")
             traceback.print_exc()
             self._client = None
             return False

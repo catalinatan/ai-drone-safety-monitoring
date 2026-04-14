@@ -43,17 +43,16 @@ import torch
 from ultralytics import YOLO
 
 from src.eval.eval_alarm_trigger import (
-    SEG_IMGSZ,
-    HUMAN_IMGSZ,
     CONF_THRESHOLD,
+    HUMAN_IMGSZ,
+    IMAGE_EXTENSIONS,
+    NEGATIVE_DIR,
     OVERLAP_ROOT,
     POSITIVE_DIR,
-    NEGATIVE_DIR,
-    IMAGE_EXTENSIONS,
+    SEG_IMGSZ,
     detect_scene,
     find_cleanup,
 )
-
 
 # ---------------------------------------------------------------------------
 # Model paths — point at the deployment copies under models/ rather than the
@@ -450,7 +449,7 @@ def save_per_image_csv(out_dir: Path, rows: list[dict]) -> Path:
 
 def print_report_table(agg: dict) -> None:
     print(f"\n{'=' * 78}")
-    print(f"  PIPELINE RESPONSE TIME BREAKDOWN")
+    print("  PIPELINE RESPONSE TIME BREAKDOWN")
     print(f"{'=' * 78}")
     header = f"  {'Stage':<38} {'median':>9} {'p95':>9} {'share':>8}"
     print(header)
@@ -466,7 +465,10 @@ def print_report_table(agg: dict) -> None:
     t = agg["total_ms"]
     print(f"  {'TOTAL RESPONSE TIME':<38} {t['median']:>7.2f}ms {t['p95']:>7.2f}ms {100.0:>6.1f}%")
     print(
-        f"  {'(mean=%.2fms, std=%.2fms, throughput=%.1f FPS)' % (t['mean'], t['std'], 1000.0 / t['median'] if t['median'] else 0.0):<78}"
+        "  " + (
+            '(mean=%.2fms, std=%.2fms, throughput=%.1f FPS)'
+            % (t['mean'], t['std'], 1000.0 / t['median'] if t['median'] else 0.0)
+        ).ljust(78)
     )
 
 
@@ -499,7 +501,6 @@ def plot_breakdown(out_dir: Path, agg: dict) -> None:
     # Right: stacked single bar showing share of total
     bottom = 0.0
     colours = plt.get_cmap("tab10")(np.linspace(0, 1, len(labels)))
-    legend_labels = []
     for label, med, c in zip(labels, medians, colours):
         share = 100.0 * med / (total or 1.0)
         ax2.bar(

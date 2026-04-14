@@ -12,8 +12,7 @@ Admin routes:
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
 import yaml
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -21,13 +20,13 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from src.api.dependencies import get_config, get_event_logger, get_feed_manager
-from src.services.feed_manager import FeedManager
 from src.core.config import (
     PROJECT_ROOT,
+    _deep_merge,
     get_feeds_config,
     reset_feeds_config,
-    _deep_merge,
 )
+from src.services.feed_manager import FeedManager
 
 router = APIRouter()
 

@@ -13,7 +13,7 @@ import numpy as np
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response, StreamingResponse
 
-from src.api.dependencies import get_feed_manager, get_config
+from src.api.dependencies import get_config, get_feed_manager
 from src.services.feed_manager import FeedManager
 
 router = APIRouter()
@@ -49,8 +49,6 @@ def _generate_frames(feed_id: str, fm: FeedManager, stream_interval: float):
             with state.lock:
                 frame = state.last_frame.copy() if state.last_frame is not None else None
                 overlay = state.last_mask_overlay
-                alarm = state.alarm_active
-                caution = state.caution_active
 
             if frame is not None:
                 frame_rgb = frame  # Frame is already in RGB from AirSim

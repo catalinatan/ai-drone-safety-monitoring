@@ -1,7 +1,7 @@
 import logging
 import sys
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 from src.utils import find_project_root

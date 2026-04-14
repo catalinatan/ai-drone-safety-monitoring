@@ -30,7 +30,6 @@ from fastapi.responses import StreamingResponse
 from .control_loop import drone_control_loop
 from .drone_state import GotoRequest, ModeRequest, MoveRequest, drone_state
 
-
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
@@ -76,11 +75,10 @@ def _generate_frames_down():
 async def lifespan(app: FastAPI):
     """Startup: connect to AirSim and launch the control loop thread.
     Shutdown: signal the loop to stop and wait for the drone to land."""
-    client = None
     control_thread = None
 
     try:
-        import airsim  # just verify airsim is installed; client created inside the loop thread
+        import airsim  # noqa: F401  # verify airsim is installed; client created inside the loop thread
 
         control_thread = threading.Thread(
             target=drone_control_loop,
@@ -158,7 +156,10 @@ def create_app() -> FastAPI:
         if drone_state.get_returning_home():
             raise HTTPException(
                 status_code=409,
-                detail="Drone is returning home. New goto commands are blocked until landing completes.",
+                detail=(
+                    "Drone is returning home. New goto commands are blocked "
+                    "until landing completes."
+                ),
             )
 
         target_ned = (request.x, request.y, request.z)

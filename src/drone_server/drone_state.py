@@ -19,7 +19,6 @@ from typing import Optional, Tuple
 
 from pydantic import BaseModel
 
-
 # ---------------------------------------------------------------------------
 # Pydantic request models (used by FastAPI route handlers in app.py)
 # ---------------------------------------------------------------------------

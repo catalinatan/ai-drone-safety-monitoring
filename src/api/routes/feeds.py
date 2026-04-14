@@ -10,8 +10,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from src.api.dependencies import get_feed_manager, get_config
-from src.core.models import DetectionStatus, TargetCoordinate
+from src.api.dependencies import get_config, get_feed_manager
 from src.services.feed_manager import FeedManager
 
 router = APIRouter()

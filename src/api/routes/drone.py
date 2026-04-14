@@ -16,7 +16,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse, Response
 
-from src.api.dependencies import get_drone_api, get_trigger_store, TriggerStore
+from src.api.dependencies import TriggerStore, get_drone_api, get_trigger_store
 
 router = APIRouter()
 

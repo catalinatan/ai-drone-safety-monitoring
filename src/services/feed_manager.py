@@ -24,8 +24,7 @@ import numpy as np
 from src.core.models import Zone
 from src.core.zone_manager import ZoneManager
 from src.hardware.camera.base import CameraBackend
-from src.services.event_logger import log_event, AuditEventType
-
+from src.services.event_logger import AuditEventType, log_event
 
 # ---------------------------------------------------------------------------
 # Per-feed state

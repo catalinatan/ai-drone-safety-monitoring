@@ -38,7 +38,6 @@ from __future__ import annotations
 import argparse
 import csv
 import math
-import os
 import threading
 import time
 from pathlib import Path
@@ -210,8 +209,8 @@ def run_evaluation(
       5. Query AirSim for the person's true position
       6. Compute the error
     """
-    from src.detection.human_detector import HumanDetector
     from src.detection.depth_estimator_wrapper import DepthEstimator
+    from src.detection.human_detector import HumanDetector
     from src.spatial.projection import get_coords_from_lite_mono
 
     cameras = {k: v for k, v in CAMERA_FEEDS.items() if camera_ids is None or k in camera_ids}
@@ -317,7 +316,7 @@ def run_evaluation(
                 if show:
                     cv2.putText(
                         vis,
-                        f"NO DETECTIONS",
+                        "NO DETECTIONS",
                         (10, 30),
                         cv2.FONT_HERSHEY_SIMPLEX,
                         0.7,
@@ -356,12 +355,13 @@ def run_evaluation(
             if gt is None:
                 skip_stats["no_gt"] += 1
                 print(
-                    f"  [DEBUG] {feed_id}: ground truth unavailable (ThirdPersonCharacter not found)"
+                    f"  [DEBUG] {feed_id}: ground truth unavailable "
+                    f"(ThirdPersonCharacter not found)"
                 )
                 if show:
                     cv2.putText(
                         vis,
-                        f"GT UNAVAILABLE",
+                        "GT UNAVAILABLE",
                         (10, 30),
                         cv2.FONT_HERSHEY_SIMPLEX,
                         0.7,
@@ -375,7 +375,8 @@ def run_evaluation(
                 cam_info_dbg = client.simGetCameraInfo(cam_name, vehicle_name=veh_name)
                 actual_height = gt[2] - cam_info_dbg.pose.position.z_val
                 print(
-                    f"  [DEBUG] Actor Z = {gt[2]:.2f}, Camera Z = {cam_info_dbg.pose.position.z_val:.2f}"
+                    f"  [DEBUG] Actor Z = {gt[2]:.2f}, "
+                    f"Camera Z = {cam_info_dbg.pose.position.z_val:.2f}"
                 )
                 print(
                     f"  [DEBUG] Actual camera-to-ground height = {actual_height:.2f}m  "
@@ -452,7 +453,7 @@ def run_evaluation(
                 if show:
                     cv2.putText(
                         vis,
-                        f"PROJECTION FAILED",
+                        "PROJECTION FAILED",
                         (10, 30),
                         cv2.FONT_HERSHEY_SIMPLEX,
                         0.7,
@@ -656,7 +657,7 @@ def save_results(records: list[dict], output_dir: Path) -> None:
 
     # --- Print summary table ---
     print(f"\n{'=' * 65}")
-    print(f"  DEPTH ESTIMATION EVALUATION RESULTS")
+    print("  DEPTH ESTIMATION EVALUATION RESULTS")
     print(f"{'=' * 65}")
     print(f"  Samples collected:  {summary['n_samples']}")
     print(f"  Mean 2D error:      {summary['mean_2d_error_m']:.3f} m")
@@ -848,7 +849,7 @@ def aggregate_results() -> None:
 
     # Print table
     print(f"\n{'=' * 80}")
-    print(f"  CROSS-ENVIRONMENT COMPARISON")
+    print("  CROSS-ENVIRONMENT COMPARISON")
     print(f"{'=' * 80}")
     print(f"  {'Environment':<15} {'N':>5} {'Mean 2D':>10} {'Median 2D':>10} {'Std':>8} {'Max':>8}")
     print(f"  {'-' * 58}")

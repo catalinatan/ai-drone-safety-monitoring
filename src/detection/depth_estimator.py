@@ -7,7 +7,6 @@ The Lite-Mono vendored code remains at src/cctv_monitoring/Lite-Mono/.
 
 from __future__ import annotations
 
-import os
 import sys
 from collections import OrderedDict
 from pathlib import Path
@@ -28,7 +27,6 @@ if _LITEMONO_ROOT not in sys.path:
     sys.path.insert(0, _LITEMONO_ROOT)
 
 from networks.depth_encoder import LiteMono  # noqa: E402 (vendor import)
-
 
 # ---------------------------------------------------------------------------
 # Decoder

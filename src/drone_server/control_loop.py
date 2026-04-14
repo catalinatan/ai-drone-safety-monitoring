@@ -180,7 +180,8 @@ def drone_control_loop(state: DroneState, client, cfg: dict) -> None:
                                 client.armDisarm(True, **vn_kw)
 
                             print(
-                                f"[AUTO] Navigating to ({target[0]:.1f}, {target[1]:.1f}, {target[2]:.1f}) "
+                                f"[AUTO] Navigating to "
+                                f"({target[0]:.1f}, {target[1]:.1f}, {target[2]:.1f}) "
                                 f"at {fly_speed:.0f} m/s"
                             )
                             task = client.moveToPositionAsync(
@@ -237,7 +238,8 @@ def drone_control_loop(state: DroneState, client, cfg: dict) -> None:
                                     state.set_mode("automatic")
                                     state.mark_idle_hover_sent()
                                     print(
-                                        "[AUTO] Drone grounded in automatic mode — ready for next trigger"
+                                        "[AUTO] Drone grounded in automatic "
+                                        "mode — ready for next trigger"
                                     )
                                 else:
                                     # Normal arrival — hover and hand over to manual control.

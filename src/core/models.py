@@ -8,6 +8,7 @@ they carry no FastAPI or AirSim dependencies.
 from __future__ import annotations
 
 from typing import List, Optional
+
 from pydantic import BaseModel
 
 

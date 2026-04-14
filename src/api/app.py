@@ -17,7 +17,7 @@ from __future__ import annotations
 import os
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, Future
+from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from typing import Any, Dict
 
@@ -31,20 +31,18 @@ from src.core.config import get_config, get_feeds_config
 from src.hardware import create_camera_backend
 from src.services.feed_manager import FeedManager
 
-
 # ---------------------------------------------------------------------------
 # Projection factory
 # ---------------------------------------------------------------------------
 
 
-def _create_projection(feed_id: str, feed_def: dict, cfg: dict) -> "ProjectionBackend":
+def _create_projection(feed_id: str, feed_def: dict, cfg: dict):
     """
     Create the appropriate projection backend for a feed.
 
     AirSim cameras get AirSimProjection (client set later from detection thread).
     Config-based cameras get ConfigProjection using position/orientation from feeds.yaml.
     """
-    from src.spatial.projection_base import ProjectionBackend
 
     camera_type = feed_def.get("camera", {}).get("type", "")
     safe_z = cfg.get("drone", {}).get("safe_altitude", -10.0)
@@ -63,7 +61,6 @@ def _create_projection(feed_id: str, feed_def: dict, cfg: dict) -> "ProjectionBa
         )
     else:
         from src.spatial.config_projection import ConfigProjection
-        from src.spatial.gps_utils import gps_to_ned
 
         pos_cfg = feed_def.get("position", {})
         ori_cfg = feed_def.get("orientation", {})
@@ -107,8 +104,9 @@ def _create_projection(feed_id: str, feed_def: dict, cfg: dict) -> "ProjectionBa
 
 def _capture_loop(fm: FeedManager, cfg: Dict[str, Any]) -> None:
     """Continuously grab frames from all registered camera backends."""
-    import cv2
     from datetime import datetime
+
+    import cv2
 
     fps = cfg.get("streaming", {}).get("capture_fps", 30)
     interval = 1.0 / max(1, fps)
@@ -226,7 +224,8 @@ def _detection_loop(
                         _proj.set_client(_depth_airsim_client)
         except Exception as _e:
             print(
-                f"[DETECTION] Could not create dedicated AirSim client: {_e} — will use camera position fallback"
+                f"[DETECTION] Could not create dedicated AirSim client: {_e} "
+                "— will use camera position fallback"
             )
 
     det_cfg = cfg.get("detection", {})
@@ -541,7 +540,8 @@ def _detection_loop(
                             if now - nav["last_deployment_time"] > cooldown:
                                 tx, ty, tz = coords
                                 print(
-                                    f"[DRONE] First auto-deploy to ({tx:.2f}, {ty:.2f}, {tz:.2f}) for {feed_id}"
+                                    f"[DRONE] First auto-deploy to "
+                                    f"({tx:.2f}, {ty:.2f}, {tz:.2f}) for {feed_id}"
                                 )
                                 if drone_api.goto_position(tx, ty, tz):
                                     nav["last_deployment_time"] = now
@@ -549,7 +549,8 @@ def _detection_loop(
                                     nav["first_auto_deployed"] = True
                                     event.deployed = True
                                     print(
-                                        "[DRONE] Deployment command sent — subsequent deploys are manual only"
+                                        "[DRONE] Deployment command sent "
+                                    "— subsequent deploys are manual only"
                                     )
                                 else:
                                     print("[DRONE] Deployment command failed")
@@ -584,7 +585,8 @@ def _detection_loop(
                 f"avg {avg_fps:.1f} FPS | "
                 f"inference {avg_infer:.1f}ms | "
                 f"post {avg_post:.1f}ms "
-                f"[zone {avg_zone:.1f} | mask {avg_mask:.1f} | update {avg_update:.1f} | alarm {avg_alarm:.1f} | drone {avg_drone:.1f}] | "
+                f"[zone {avg_zone:.1f} | mask {avg_mask:.1f} | update {avg_update:.1f} | "
+                f"alarm {avg_alarm:.1f} | drone {avg_drone:.1f}] | "
                 f"lock-wait {avg_lock:.1f}ms | "
                 f"total {avg_total:.1f}ms"
             )
@@ -643,7 +645,8 @@ def _auto_seg_loop(
         if scene_type != last_scene_type:
             if last_scene_type is not None:
                 print(
-                    f"[AUTO-SEG] Scene type changed: {last_scene_type} -> {scene_type}, re-segmenting all feeds"
+                    f"[AUTO-SEG] Scene type changed: {last_scene_type} "
+                    f"-> {scene_type}, re-segmenting all feeds"
                 )
                 initial_seg_done.clear()
             last_scene_type = scene_type
@@ -984,8 +987,8 @@ async def lifespan(app: FastAPI):
     pipelines = {}
     if detector is not None:
         try:
-            from src.core.detection_pipeline import DetectionPipeline
             from src.core.alarm import AlarmState
+            from src.core.detection_pipeline import DetectionPipeline
 
             cooldown = cfg.get("zones", {}).get("alarm_cooldown_seconds", 5.0)
             warmup = cfg.get("detection", {}).get("warmup_frames", 20)

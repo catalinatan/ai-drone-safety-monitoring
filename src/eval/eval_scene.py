@@ -202,7 +202,7 @@ def evaluate_scene(scene: str, seg_model_path: Path) -> dict:
 
     ious = [r["iou"] for r in records]
 
-    print(f"  Saving visualisations...")
+    print("  Saving visualisations...")
     save_all_visualisations(records, model, model_name, labels_dir, scene=scene)
 
     return {

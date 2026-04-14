@@ -454,7 +454,7 @@ def plot_pareto(out_dir: Path, results: list[dict], scenes: list[str], title: st
                     continue
 
     if not variant_ious:
-        print(f"  [pareto] no usable accuracy data — skipping")
+        print("  [pareto] no usable accuracy data — skipping")
         return
 
     accuracy = {k: float(np.mean(v)) for k, v in variant_ious.items()}
@@ -469,7 +469,7 @@ def plot_pareto(out_dir: Path, results: list[dict], scenes: list[str], title: st
         labels.append(r["model"])
 
     if not xs:
-        print(f"  [pareto] no matching models between latency and accuracy — skipping")
+        print("  [pareto] no matching models between latency and accuracy — skipping")
         plt.close(fig)
         return
 

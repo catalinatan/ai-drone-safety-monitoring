@@ -8,10 +8,10 @@ exposes them as FastAPI `Depends()` callables so tests can override them.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
-from src.services.feed_manager import FeedManager
 from src.services.event_logger import get_event_logger as _get_event_logger
+from src.services.feed_manager import FeedManager
 
 # ---------------------------------------------------------------------------
 # Trigger history (lives in app state, not in FeedManager)

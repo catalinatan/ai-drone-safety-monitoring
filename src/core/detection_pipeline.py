@@ -7,13 +7,12 @@ Pure orchestration layer: no I/O, no threading. All dependencies are injected.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List, Optional, Protocol
+from typing import List, Protocol
 
 import numpy as np
 
 from src.core.alarm import AlarmState
 from src.core.zone_manager import ZoneManager
-
 
 # ---------------------------------------------------------------------------
 # Result type

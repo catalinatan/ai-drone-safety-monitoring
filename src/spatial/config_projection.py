@@ -11,12 +11,13 @@ GPS coordinates are converted to local NED using a shared origin.
 
 from __future__ import annotations
 
-import numpy as np
-from scipy.spatial.transform import Rotation as R
 from typing import Optional, Tuple
 
-from src.spatial.projection_base import ProjectionBackend
+import numpy as np
+from scipy.spatial.transform import Rotation as R
+
 from src.spatial.gps_utils import gps_to_ned
+from src.spatial.projection_base import ProjectionBackend
 
 
 class ConfigProjection(ProjectionBackend):

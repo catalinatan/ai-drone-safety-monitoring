@@ -428,13 +428,13 @@ def main() -> None:
     print("  MODEL SELECTION SUMMARY")
     print(f"{'=' * 90}")
     print(f"  Scene seg tasks: {seg_keys}  (weights: {dict(zip(seg_keys, seg_weights))})")
-    print(f"  Scene seg aggregate: Weighted Harmonic Mean of IoU")
-    print(f"  Human detection: F1 (reported separately)")
+    print("  Scene seg aggregate: Weighted Harmonic Mean of IoU")
+    print("  Human detection: F1 (reported separately)")
     print(f"  Latency: imgsz={args.imgsz}")
 
     # ── Scene Segmentation Table ──
     print(f"\n  {'─' * 80}")
-    print(f"  SCENE SEGMENTATION")
+    print("  SCENE SEGMENTATION")
     print(f"  {'─' * 80}")
 
     seg_header = f"  {'Model':<12}"
@@ -461,7 +461,7 @@ def main() -> None:
 
     # ── Human Detection Table ──
     print(f"\n  {'─' * 80}")
-    print(f"  HUMAN DETECTION")
+    print("  HUMAN DETECTION")
     print(f"  {'─' * 80}")
 
     hum_header = f"  {'Model':<12} {'F1':>8} {'Latency(ms)':>12} {'FPS':>8}"
@@ -491,8 +491,8 @@ def main() -> None:
         lbl = VARIANT_LABELS[VARIANT_ORDER.index(best_seg)]
         print(f"\n  >>> CLEAR WINNER: {lbl} — best at both tasks")
     elif best_seg and best_hum:
-        print(f"\n  >>> Different models lead each task — review the Pareto plots")
-        print(f"      to find the best tradeoff for your latency budget.")
+        print("\n  >>> Different models lead each task — review the Pareto plots")
+        print("      to find the best tradeoff for your latency budget.")
 
     # ── Save CSV ──
     csv_path = OUTPUT_DIR / "model_selection.csv"
@@ -521,13 +521,13 @@ def main() -> None:
     print(f"\n  CSV saved → {csv_path}")
 
     # ── Generate plots ──
-    print(f"  Generating plots...")
+    print("  Generating plots...")
     plot_grouped_bars(seg_scores, seg_agg, human_scores, seg_keys, OUTPUT_DIR)
     plot_radar(seg_scores, human_scores, seg_keys, OUTPUT_DIR)
     if latency:
         plot_dual_pareto(seg_agg, human_scores, latency, args.imgsz, OUTPUT_DIR)
     print(f"  Plots saved → {OUTPUT_DIR}/")
-    print(f"\n  Files:")
+    print("\n  Files:")
     print(f"    {OUTPUT_DIR}/per_task_scores.png  — side-by-side bar charts")
     print(f"    {OUTPUT_DIR}/radar_chart.png      — model profile spider chart")
     if latency:

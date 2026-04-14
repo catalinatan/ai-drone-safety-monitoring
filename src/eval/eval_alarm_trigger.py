@@ -35,7 +35,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 from ultralytics import YOLO
 
-
 # ---------------------------------------------------------------------------
 # *** SET THESE TO YOUR BEST MODELS BEFORE RUNNING ***
 # ---------------------------------------------------------------------------
@@ -488,7 +487,6 @@ def print_sweep_table(
     best_thresh = thresholds[0]
     for thresh in thresholds:
         s = score_at_threshold(records, thresh)
-        marker = ""
         if s["f1"] > best_f1:
             best_f1 = s["f1"]
             best_thresh = thresh
@@ -517,7 +515,7 @@ def main():
     )
     args = parser.parse_args()
 
-    print(f"Scene seg models:")
+    print("Scene seg models:")
     for scene, path in SEG_MODELS.items():
         print(f"  {scene:>8}: {path}")
     print(f"Human det model : {HUMAN_MODEL_PATH}")
@@ -553,7 +551,7 @@ def main():
     scene_best_thresh: dict[str, float] = {}
 
     print(f"\n{'=' * 90}")
-    print(f"  PER-SCENE THRESHOLD SWEEP")
+    print("  PER-SCENE THRESHOLD SWEEP")
     print(f"{'=' * 90}")
 
     for scene in scenes:
@@ -565,15 +563,15 @@ def main():
 
     # ── Overall threshold sweep (single threshold for all) ──
     print(f"\n{'=' * 90}")
-    print(f"  OVERALL THRESHOLD SWEEP (single threshold)")
+    print("  OVERALL THRESHOLD SWEEP (single threshold)")
     print(f"{'=' * 90}")
     overall_best_thresh, overall_best_f1 = print_sweep_table("ALL SCENES", records, thresholds)
 
     # ── Per-scene optimal: use each scene's best threshold ──
     print(f"\n{'=' * 90}")
-    print(f"  PER-SCENE OPTIMAL THRESHOLDS")
+    print("  PER-SCENE OPTIMAL THRESHOLDS")
     print(f"{'=' * 90}")
-    print(f"\n  Best threshold per scene:")
+    print("\n  Best threshold per scene:")
     for scene, thresh in scene_best_thresh.items():
         print(f"    {scene:>8}: {thresh:.2f}")
 
@@ -599,7 +597,7 @@ def main():
     accuracy = (tp + tn) / total if total > 0 else 0.0
     fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0
 
-    print(f"\n  Combined results with per-scene thresholds:")
+    print("\n  Combined results with per-scene thresholds:")
     print(f"    TP={tp}  FP={fp}  TN={tn}  FN={fn}")
     print(
         f"    Precision={precision:.3f}  Recall={recall:.3f}  "
@@ -608,7 +606,7 @@ def main():
 
     # ── Compare: single vs per-scene ──
     print(f"\n  {'─' * 60}")
-    print(f"  COMPARISON")
+    print("  COMPARISON")
     print(f"  {'─' * 60}")
     print(f"    Single threshold (={overall_best_thresh:.2f}):    F1={overall_best_f1:.4f}")
     print(f"    Per-scene thresholds:              F1={f1:.4f}")
@@ -617,7 +615,7 @@ def main():
     elif f1 < overall_best_f1:
         print(f"    >>> Single threshold is better by {overall_best_f1 - f1:.4f}")
     else:
-        print(f"    >>> Both are equal")
+        print("    >>> Both are equal")
 
     # Use per-scene thresholds for vis and CSVs
     use_per_scene = f1 >= overall_best_f1
@@ -766,7 +764,7 @@ def main():
     print(f"  Summary CSV       → {summary_path}")
 
     # ── Plots ──
-    print(f"  Generating plots...")
+    print("  Generating plots...")
     plot_threshold_curves(
         records, thresholds, scenes, scene_best_thresh, overall_best_thresh, out_dir
     )

@@ -10,9 +10,8 @@ No direct AirSim dependency — communicates with the drone server via HTTP.
 from __future__ import annotations
 
 import time
-from typing import Optional
 
-from src.services.event_logger import log_event, AuditEventType
+from src.services.event_logger import AuditEventType, log_event
 
 
 class DroneDispatcher:
