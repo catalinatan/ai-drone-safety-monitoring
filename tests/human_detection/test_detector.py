@@ -63,12 +63,9 @@ class TestHumanDetector:
         # Setup the chains
         mock_result.boxes = [mock_box]
 
-        # The result.masks.data[i] chain is complex, so we mock the data access
-        # We need to simulate: result.masks.data[i].cpu().numpy()
-        mock_mask_wrapper = MagicMock()
-        mock_mask_wrapper.cpu.return_value.numpy.return_value = mock_raw_mask
-
-        mock_result.masks.data = [mock_mask_wrapper]
+        # masks.data must be a tensor so list-indexing (data[person_idx]) works
+        import torch
+        mock_result.masks.data = torch.ones((1, 10, 10), dtype=torch.float32)
 
         # Connect it all to the YOLO call
         mock_yolo_instance = mock_yolo.return_value
