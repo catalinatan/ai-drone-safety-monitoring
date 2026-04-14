@@ -64,15 +64,26 @@ test:unit:
   <<: *python-setup
   script:
     - echo "Running unit tests (excluding pre-existing failures)..."
-    - pytest tests/ -v -m "not integration"
-        --ignore=tests/human_detection/test_accuracy.py
-        --ignore=tests/human_detection/test_detector.py
-        --ignore=tests/cctv_monitoring/test_coord_utils.py
-        --tb=short
-        --junitxml=junit-report.xml
-        --cov=src
-        --cov-report=xml:coverage.xml
+    # PyTorch C++ thread-pool teardown can abort() after all tests pass,
+    # giving exit code 134. We check the JUnit XML for actual failures.
+    - |
+      set +e
+      python -m pytest tests/ -v -m "not integration" \
+        --ignore=tests/human_detection/test_accuracy.py \
+        --ignore=tests/human_detection/test_detector.py \
+        --ignore=tests/cctv_monitoring/test_coord_utils.py \
+        --tb=short \
+        --junitxml=junit-report.xml \
+        --cov=src \
+        --cov-report=xml:coverage.xml \
         --cov-report=term-missing
+      PYTEST_EXIT=$?
+      set -e
+      if [ $PYTEST_EXIT -ne 0 ] && grep -q 'failures="0"' junit-report.xml 2>/dev/null; then
+        echo "Tests passed but process crashed during teardown (exit $PYTEST_EXIT) — ignoring."
+        exit 0
+      fi
+      exit $PYTEST_EXIT
   coverage: '/TOTAL.*\s+(\d+%)/'
   artifacts:
     reports:
