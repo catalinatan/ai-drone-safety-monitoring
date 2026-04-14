@@ -43,9 +43,15 @@ import torch
 from ultralytics import YOLO
 
 from src.eval.eval_alarm_trigger import (
-    SEG_IMGSZ, HUMAN_IMGSZ, CONF_THRESHOLD,
-    OVERLAP_ROOT, POSITIVE_DIR, NEGATIVE_DIR,
-    IMAGE_EXTENSIONS, detect_scene, find_cleanup,
+    SEG_IMGSZ,
+    HUMAN_IMGSZ,
+    CONF_THRESHOLD,
+    OVERLAP_ROOT,
+    POSITIVE_DIR,
+    NEGATIVE_DIR,
+    IMAGE_EXTENSIONS,
+    detect_scene,
+    find_cleanup,
 )
 
 
@@ -57,17 +63,18 @@ from src.eval.eval_alarm_trigger import (
 MODELS_ROOT = Path("models")
 
 SEG_MODELS = {
-    "bridge":  MODELS_ROOT / "scene_segmentation/bridge/bridge_hazard_yolo11s-seg/weights/best.pt",
-    "railway": MODELS_ROOT / "scene_segmentation/railway/railway_hazard_yolo11s-seg/weights/best.pt",
-    "ship":    MODELS_ROOT / "scene_segmentation/ship/ship_hazard_yolo11s-seg/weights/best.pt",
+    "bridge": MODELS_ROOT / "scene_segmentation/bridge/bridge_hazard_yolo11s-seg/weights/best.pt",
+    "railway": MODELS_ROOT
+    / "scene_segmentation/railway/railway_hazard_yolo11s-seg/weights/best.pt",
+    "ship": MODELS_ROOT / "scene_segmentation/ship/ship_hazard_yolo11s-seg/weights/best.pt",
 }
 HUMAN_MODEL_PATH = MODELS_ROOT / "human_detection/yolo11s-seg/weights/best.pt"
 
 
-OUTPUT_DIR    = Path("eval_output/pipeline_latency")
-DEFAULT_WARMUP     = 20
+OUTPUT_DIR = Path("eval_output/pipeline_latency")
+DEFAULT_WARMUP = 20
 DEFAULT_ITERATIONS = 100
-ALARM_THRESHOLD    = 0.15   # matches the typical operating point
+ALARM_THRESHOLD = 0.15  # matches the typical operating point
 
 
 STAGE_ORDER = [
@@ -81,13 +88,13 @@ STAGE_ORDER = [
 ]
 
 STAGE_DISPLAY = {
-    "image_load_ms":        "Image load (disk → BGR)",
-    "seg_inference_ms":     "Scene seg forward (imgsz=640)",
-    "seg_postprocess_ms":   "Scene seg postprocess",
-    "human_inference_ms":   "Human det forward (imgsz=1280)",
+    "image_load_ms": "Image load (disk → BGR)",
+    "seg_inference_ms": "Scene seg forward (imgsz=640)",
+    "seg_postprocess_ms": "Scene seg postprocess",
+    "human_inference_ms": "Human det forward (imgsz=1280)",
     "human_postprocess_ms": "Human det postprocess",
-    "overlap_ms":           "Overlap computation",
-    "alarm_decision_ms":    "Alarm decision",
+    "overlap_ms": "Overlap computation",
+    "alarm_decision_ms": "Alarm decision",
 }
 
 
@@ -95,31 +102,35 @@ STAGE_DISPLAY = {
 # Hardware info (same format as eval_latency so results are comparable)
 # ---------------------------------------------------------------------------
 
+
 def capture_hardware_info() -> dict:
     info: dict = {
-        "platform":        platform.platform(),
-        "processor":       platform.processor(),
-        "python_version":  platform.python_version(),
-        "torch_version":   torch.__version__,
-        "cuda_available":  torch.cuda.is_available(),
+        "platform": platform.platform(),
+        "processor": platform.processor(),
+        "python_version": platform.python_version(),
+        "torch_version": torch.__version__,
+        "cuda_available": torch.cuda.is_available(),
         "cudnn_benchmark": torch.backends.cudnn.benchmark,
-        "precision":       "fp32",
-        "batch_size":      1,
+        "precision": "fp32",
+        "batch_size": 1,
     }
     if torch.cuda.is_available():
         props = torch.cuda.get_device_properties(0)
-        info.update({
-            "cuda_version":           torch.version.cuda,
-            "cudnn_version":          torch.backends.cudnn.version(),
-            "gpu_name":               torch.cuda.get_device_name(0),
-            "gpu_vram_gb":            round(props.total_memory / 1e9, 2),
-            "gpu_compute_capability": f"{props.major}.{props.minor}",
-        })
+        info.update(
+            {
+                "cuda_version": torch.version.cuda,
+                "cudnn_version": torch.backends.cudnn.version(),
+                "gpu_name": torch.cuda.get_device_name(0),
+                "gpu_vram_gb": round(props.total_memory / 1e9, 2),
+                "gpu_compute_capability": f"{props.major}.{props.minor}",
+            }
+        )
         try:
             result = subprocess.run(
-                ["nvidia-smi", "--query-gpu=driver_version",
-                 "--format=csv,noheader"],
-                capture_output=True, text=True, timeout=5,
+                ["nvidia-smi", "--query-gpu=driver_version", "--format=csv,noheader"],
+                capture_output=True,
+                text=True,
+                timeout=5,
             )
             if result.returncode == 0:
                 info["nvidia_driver"] = result.stdout.strip()
@@ -132,6 +143,7 @@ def capture_hardware_info() -> dict:
 # Timing primitives
 # ---------------------------------------------------------------------------
 
+
 class GpuTimer:
     """Wall-clock stopwatch that syncs CUDA when available.
 
@@ -139,6 +151,7 @@ class GpuTimer:
     are CPU (cv2.imread, numpy ops). Using synchronised wall-clock gives a
     consistent number that fairly reflects the response time a user sees.
     """
+
     def __init__(self, use_cuda: bool):
         self.use_cuda = use_cuda
         self.t = 0.0
@@ -160,13 +173,13 @@ def _stats(arr: list[float]) -> dict:
         return {k: 0.0 for k in ("mean", "median", "std", "p95", "p99", "min", "max")}
     a = np.asarray(arr, dtype=np.float64)
     return {
-        "mean":   float(np.mean(a)),
+        "mean": float(np.mean(a)),
         "median": float(np.median(a)),
-        "std":    float(np.std(a)),
-        "p95":    float(np.percentile(a, 95)),
-        "p99":    float(np.percentile(a, 99)),
-        "min":    float(np.min(a)),
-        "max":    float(np.max(a)),
+        "std": float(np.std(a)),
+        "p95": float(np.percentile(a, 95)),
+        "p99": float(np.percentile(a, 99)),
+        "min": float(np.min(a)),
+        "max": float(np.max(a)),
     }
 
 
@@ -174,14 +187,17 @@ def _stats(arr: list[float]) -> dict:
 # Pipeline stage wrappers (instrumented versions of eval_alarm_trigger ops)
 # ---------------------------------------------------------------------------
 
+
 def run_seg_inference(model: YOLO, source, device: str):
-    return model(source, conf=CONF_THRESHOLD, imgsz=SEG_IMGSZ,
-                 verbose=False, save=False, device=device)
+    return model(
+        source, conf=CONF_THRESHOLD, imgsz=SEG_IMGSZ, verbose=False, save=False, device=device
+    )
 
 
 def run_human_inference(model: YOLO, source, device: str):
-    return model(source, conf=CONF_THRESHOLD, imgsz=HUMAN_IMGSZ,
-                 verbose=False, save=False, device=device)
+    return model(
+        source, conf=CONF_THRESHOLD, imgsz=HUMAN_IMGSZ, verbose=False, save=False, device=device
+    )
 
 
 def postprocess_seg(results, img_w: int, img_h: int) -> np.ndarray:
@@ -206,8 +222,7 @@ def postprocess_human(results, img_w: int, img_h: int) -> list[np.ndarray]:
     return masks
 
 
-def compute_overlap(danger_zone: np.ndarray,
-                    human_masks: list[np.ndarray]) -> float:
+def compute_overlap(danger_zone: np.ndarray, human_masks: list[np.ndarray]) -> float:
     max_overlap = 0.0
     for person in human_masks:
         area = int(person.sum())
@@ -226,6 +241,7 @@ def decide_alarm(max_overlap: float, threshold: float) -> bool:
 # ---------------------------------------------------------------------------
 # Image collection
 # ---------------------------------------------------------------------------
+
 
 def collect_images() -> list[tuple[Path, Path, str]]:
     """
@@ -256,12 +272,13 @@ def collect_images() -> list[tuple[Path, Path, str]]:
 # Benchmark driver
 # ---------------------------------------------------------------------------
 
+
 def benchmark(warmup: int, iterations: int) -> tuple[list[dict], dict]:
-    device  = "cuda" if torch.cuda.is_available() else "cpu"
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     use_cuda = device == "cuda"
 
     print(f"\nLoading models on {device}...")
-    seg_models  = {s: YOLO(str(p)) for s, p in SEG_MODELS.items()}
+    seg_models = {s: YOLO(str(p)) for s, p in SEG_MODELS.items()}
     human_model = YOLO(str(HUMAN_MODEL_PATH))
 
     triples = collect_images()
@@ -276,10 +293,8 @@ def benchmark(warmup: int, iterations: int) -> tuple[list[dict], dict]:
         seg_src, hum_src, scene = triples[i % len(triples)]
         seg_results = run_seg_inference(seg_models[scene], str(seg_src), device)
         hum_results = run_human_inference(human_model, str(hum_src), device)
-        _ = postprocess_seg(seg_results,
-                            *cv2.imread(str(seg_src)).shape[1::-1])
-        _ = postprocess_human(hum_results,
-                              *cv2.imread(str(hum_src)).shape[1::-1])
+        _ = postprocess_seg(seg_results, *cv2.imread(str(seg_src)).shape[1::-1])
+        _ = postprocess_human(hum_results, *cv2.imread(str(hum_src)).shape[1::-1])
     if use_cuda:
         torch.cuda.synchronize()
         torch.cuda.reset_peak_memory_stats()
@@ -294,8 +309,8 @@ def benchmark(warmup: int, iterations: int) -> tuple[list[dict], dict]:
 
         row: dict = {
             "iteration": i,
-            "scene":     scene,
-            "seg_source":   seg_src.name,
+            "scene": scene,
+            "seg_source": seg_src.name,
             "human_source": hum_src.name,
         }
 
@@ -347,12 +362,11 @@ def benchmark(warmup: int, iterations: int) -> tuple[list[dict], dict]:
 
         row["total_ms"] = sum(row[s] for s in STAGE_ORDER)
         row["max_overlap"] = max_overlap
-        row["n_humans"]    = len(human_masks)
+        row["n_humans"] = len(human_masks)
         rows.append(row)
 
         if (i + 1) % 20 == 0:
-            print(f"  iter {i+1}/{iterations}  "
-                  f"last total={row['total_ms']:.1f} ms")
+            print(f"  iter {i + 1}/{iterations}  last total={row['total_ms']:.1f} ms")
 
     # ── Aggregate stats per stage + total
     agg: dict[str, dict] = {}
@@ -366,58 +380,78 @@ def benchmark(warmup: int, iterations: int) -> tuple[list[dict], dict]:
 # Output
 # ---------------------------------------------------------------------------
 
+
 def save_results_csv(out_dir: Path, agg: dict) -> Path:
     path = out_dir / "results.csv"
     total_median = agg["total_ms"]["median"] or 1.0
-    fields = ["stage", "display_name",
-              "median_ms", "mean_ms", "p95_ms", "p99_ms", "std_ms",
-              "share_of_total_pct"]
+    fields = [
+        "stage",
+        "display_name",
+        "median_ms",
+        "mean_ms",
+        "p95_ms",
+        "p99_ms",
+        "std_ms",
+        "share_of_total_pct",
+    ]
     with open(path, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=fields)
         w.writeheader()
         for stage in STAGE_ORDER:
             s = agg[stage]
-            w.writerow({
-                "stage":              stage,
-                "display_name":       STAGE_DISPLAY[stage],
-                "median_ms":          round(s["median"], 3),
-                "mean_ms":            round(s["mean"], 3),
-                "p95_ms":             round(s["p95"], 3),
-                "p99_ms":             round(s["p99"], 3),
-                "std_ms":             round(s["std"], 3),
-                "share_of_total_pct": round(100.0 * s["median"] / total_median, 1),
-            })
+            w.writerow(
+                {
+                    "stage": stage,
+                    "display_name": STAGE_DISPLAY[stage],
+                    "median_ms": round(s["median"], 3),
+                    "mean_ms": round(s["mean"], 3),
+                    "p95_ms": round(s["p95"], 3),
+                    "p99_ms": round(s["p99"], 3),
+                    "std_ms": round(s["std"], 3),
+                    "share_of_total_pct": round(100.0 * s["median"] / total_median, 1),
+                }
+            )
         s = agg["total_ms"]
-        w.writerow({
-            "stage":              "total_ms",
-            "display_name":       "TOTAL RESPONSE TIME",
-            "median_ms":          round(s["median"], 3),
-            "mean_ms":            round(s["mean"], 3),
-            "p95_ms":             round(s["p95"], 3),
-            "p99_ms":             round(s["p99"], 3),
-            "std_ms":             round(s["std"], 3),
-            "share_of_total_pct": 100.0,
-        })
+        w.writerow(
+            {
+                "stage": "total_ms",
+                "display_name": "TOTAL RESPONSE TIME",
+                "median_ms": round(s["median"], 3),
+                "mean_ms": round(s["mean"], 3),
+                "p95_ms": round(s["p95"], 3),
+                "p99_ms": round(s["p99"], 3),
+                "std_ms": round(s["std"], 3),
+                "share_of_total_pct": 100.0,
+            }
+        )
     return path
 
 
 def save_per_image_csv(out_dir: Path, rows: list[dict]) -> Path:
     path = out_dir / "per_image.csv"
-    fields = (["iteration", "scene", "seg_source", "human_source"]
-              + STAGE_ORDER + ["total_ms", "max_overlap", "n_humans"])
+    fields = (
+        ["iteration", "scene", "seg_source", "human_source"]
+        + STAGE_ORDER
+        + ["total_ms", "max_overlap", "n_humans"]
+    )
     with open(path, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=fields)
         w.writeheader()
         for r in rows:
-            w.writerow({k: (round(v, 4) if isinstance(v, float) else v)
-                        for k, v in r.items() if k in fields})
+            w.writerow(
+                {
+                    k: (round(v, 4) if isinstance(v, float) else v)
+                    for k, v in r.items()
+                    if k in fields
+                }
+            )
     return path
 
 
 def print_report_table(agg: dict) -> None:
-    print(f"\n{'='*78}")
+    print(f"\n{'=' * 78}")
     print(f"  PIPELINE RESPONSE TIME BREAKDOWN")
-    print(f"{'='*78}")
+    print(f"{'=' * 78}")
     header = f"  {'Stage':<38} {'median':>9} {'p95':>9} {'share':>8}"
     print(header)
     print(f"  {'─' * (len(header) - 2)}")
@@ -425,29 +459,35 @@ def print_report_table(agg: dict) -> None:
     for stage in STAGE_ORDER:
         s = agg[stage]
         share = 100.0 * s["median"] / total_median
-        print(f"  {STAGE_DISPLAY[stage]:<38} "
-              f"{s['median']:>7.2f}ms {s['p95']:>7.2f}ms {share:>6.1f}%")
+        print(
+            f"  {STAGE_DISPLAY[stage]:<38} {s['median']:>7.2f}ms {s['p95']:>7.2f}ms {share:>6.1f}%"
+        )
     print(f"  {'─' * (len(header) - 2)}")
     t = agg["total_ms"]
-    print(f"  {'TOTAL RESPONSE TIME':<38} "
-          f"{t['median']:>7.2f}ms {t['p95']:>7.2f}ms {100.0:>6.1f}%")
-    print(f"  {'(mean=%.2fms, std=%.2fms, throughput=%.1f FPS)' % (t['mean'], t['std'], 1000.0 / t['median'] if t['median'] else 0.0):<78}")
+    print(f"  {'TOTAL RESPONSE TIME':<38} {t['median']:>7.2f}ms {t['p95']:>7.2f}ms {100.0:>6.1f}%")
+    print(
+        f"  {'(mean=%.2fms, std=%.2fms, throughput=%.1f FPS)' % (t['mean'], t['std'], 1000.0 / t['median'] if t['median'] else 0.0):<78}"
+    )
 
 
 def plot_breakdown(out_dir: Path, agg: dict) -> None:
-    labels  = [STAGE_DISPLAY[s] for s in STAGE_ORDER]
+    labels = [STAGE_DISPLAY[s] for s in STAGE_ORDER]
     medians = [agg[s]["median"] for s in STAGE_ORDER]
-    p95s    = [agg[s]["p95"] for s in STAGE_ORDER]
-    total   = agg["total_ms"]["median"]
+    p95s = [agg[s]["p95"] for s in STAGE_ORDER]
+    total = agg["total_ms"]["median"]
 
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 7),
-                                    gridspec_kw={"width_ratios": [2.2, 1.0]})
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 7), gridspec_kw={"width_ratios": [2.2, 1.0]})
 
     # Left: horizontal bar with median + p95
     y = np.arange(len(labels))
     ax1.barh(y, medians, color="steelblue", label="median")
-    ax1.barh(y, [p - m for p, m in zip(p95s, medians)],
-             left=medians, color="lightsteelblue", label="p95 - median")
+    ax1.barh(
+        y,
+        [p - m for p, m in zip(p95s, medians)],
+        left=medians,
+        color="lightsteelblue",
+        label="p95 - median",
+    )
     ax1.set_yticks(y)
     ax1.set_yticklabels(labels)
     ax1.invert_yaxis()
@@ -462,20 +502,30 @@ def plot_breakdown(out_dir: Path, agg: dict) -> None:
     legend_labels = []
     for label, med, c in zip(labels, medians, colours):
         share = 100.0 * med / (total or 1.0)
-        ax2.bar(["Pipeline"], [med], bottom=bottom, color=c,
-                label=f"{label} — {med:.1f} ms ({share:.1f}%)")
+        ax2.bar(
+            ["Pipeline"],
+            [med],
+            bottom=bottom,
+            color=c,
+            label=f"{label} — {med:.1f} ms ({share:.1f}%)",
+        )
         # Only inline-label segments that are large enough not to overlap
         if share >= 8.0:
-            ax2.text(0, bottom + med / 2,
-                     f"{med:.1f}ms ({share:.0f}%)",
-                     ha="center", va="center", fontsize=9, color="white",
-                     fontweight="bold")
+            ax2.text(
+                0,
+                bottom + med / 2,
+                f"{med:.1f}ms ({share:.0f}%)",
+                ha="center",
+                va="center",
+                fontsize=9,
+                color="white",
+                fontweight="bold",
+            )
         bottom += med
     ax2.set_ylabel("Cumulative latency (ms)")
     ax2.set_title("Response time composition")
     ax2.grid(True, axis="y", linestyle="--", alpha=0.4)
-    ax2.legend(loc="center left", bbox_to_anchor=(1.02, 0.5),
-               fontsize=8, frameon=False)
+    ax2.legend(loc="center left", bbox_to_anchor=(1.02, 0.5), fontsize=8, frameon=False)
 
     fig.suptitle("Alarm-trigger pipeline response time", fontsize=14)
     fig.tight_layout()
@@ -487,9 +537,11 @@ def plot_breakdown(out_dir: Path, agg: dict) -> None:
 # Main
 # ---------------------------------------------------------------------------
 
+
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Benchmark end-to-end alarm-trigger pipeline latency.")
+        description="Benchmark end-to-end alarm-trigger pipeline latency."
+    )
     parser.add_argument("--warmup", type=int, default=DEFAULT_WARMUP)
     parser.add_argument("--iterations", type=int, default=DEFAULT_ITERATIONS)
     args = parser.parse_args()
@@ -502,9 +554,11 @@ def main() -> None:
     with open(OUTPUT_DIR / "hardware.json", "w") as f:
         json.dump(hw, f, indent=2)
     print(f"GPU     : {hw.get('gpu_name', 'N/A')} ({hw.get('gpu_vram_gb', '?')} GB)")
-    print(f"Torch   : {hw.get('torch_version')}  "
-          f"CUDA {hw.get('cuda_version', 'N/A')}  "
-          f"cuDNN {hw.get('cudnn_version', 'N/A')}")
+    print(
+        f"Torch   : {hw.get('torch_version')}  "
+        f"CUDA {hw.get('cuda_version', 'N/A')}  "
+        f"cuDNN {hw.get('cudnn_version', 'N/A')}"
+    )
     print(f"Driver  : {hw.get('nvidia_driver', 'N/A')}")
 
     rows, agg = benchmark(args.warmup, args.iterations)

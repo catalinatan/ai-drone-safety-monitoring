@@ -44,6 +44,7 @@ with open(_CONFIG_PATH, "r") as _f:
 # MJPEG streaming helpers
 # ---------------------------------------------------------------------------
 
+
 def _generate_frames_forward():
     """Yield MJPEG frames from the forward-looking camera (camera 3)."""
     while True:
@@ -51,10 +52,7 @@ def _generate_frames_forward():
         if frame is not None:
             ret, buffer = cv2.imencode(".jpg", frame)
             if ret:
-                yield (
-                    b"--frame\r\n"
-                    b"Content-Type: image/jpeg\r\n\r\n" + buffer.tobytes() + b"\r\n"
-                )
+                yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + buffer.tobytes() + b"\r\n")
         time.sleep(0.033)
 
 
@@ -65,16 +63,14 @@ def _generate_frames_down():
         if frame is not None:
             ret, buffer = cv2.imencode(".jpg", frame)
             if ret:
-                yield (
-                    b"--frame\r\n"
-                    b"Content-Type: image/jpeg\r\n\r\n" + buffer.tobytes() + b"\r\n"
-                )
+                yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + buffer.tobytes() + b"\r\n")
         time.sleep(0.033)
 
 
 # ---------------------------------------------------------------------------
 # Lifespan
 # ---------------------------------------------------------------------------
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -85,6 +81,7 @@ async def lifespan(app: FastAPI):
 
     try:
         import airsim  # just verify airsim is installed; client created inside the loop thread
+
         control_thread = threading.Thread(
             target=drone_control_loop,
             args=(drone_state, None, _cfg),  # None: loop creates its own client
@@ -112,6 +109,7 @@ async def lifespan(app: FastAPI):
 # ---------------------------------------------------------------------------
 # FastAPI application
 # ---------------------------------------------------------------------------
+
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Drone Control API", lifespan=lifespan)

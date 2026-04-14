@@ -41,6 +41,7 @@ class AirSimDrone(DroneBackend):
     def connect(self) -> bool:
         try:
             import airsim
+
             self._client = airsim.MultirotorClient()
             self._client.confirmConnection()
             self._client.enableApiControl(True, vehicle_name=self.vehicle_name)
@@ -56,7 +57,10 @@ class AirSimDrone(DroneBackend):
             return False
         try:
             self._client.moveToPositionAsync(
-                position.x, position.y, position.z, speed,
+                position.x,
+                position.y,
+                position.z,
+                speed,
                 vehicle_name=self.vehicle_name,
             )
             self._is_navigating = True
@@ -106,9 +110,11 @@ class AirSimDrone(DroneBackend):
             return None
         try:
             import airsim
-            responses = self._client.simGetImages([
-                airsim.ImageRequest(self.camera_name, airsim.ImageType.Scene, False, False)
-            ], vehicle_name=self.vehicle_name)
+
+            responses = self._client.simGetImages(
+                [airsim.ImageRequest(self.camera_name, airsim.ImageType.Scene, False, False)],
+                vehicle_name=self.vehicle_name,
+            )
             if not responses or len(responses[0].image_data_uint8) == 0:
                 return None
             r = responses[0]

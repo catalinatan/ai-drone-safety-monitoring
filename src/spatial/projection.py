@@ -132,13 +132,15 @@ def get_coords_from_lite_mono(
         else:
             min_distance = max(1.0, cctv_height_meters * 0.5)
             max_distance = t_ground
-            distance = min_distance + (max_distance - min_distance) * (ai_depth_val ** 0.5)
+            distance = min_distance + (max_distance - min_distance) * (ai_depth_val**0.5)
 
-    point_world = np.array([
-        cam_pos.x_val + distance * ray_world[0],
-        cam_pos.y_val + distance * ray_world[1],
-        cam_pos.z_val + distance * ray_world[2],
-    ])
+    point_world = np.array(
+        [
+            cam_pos.x_val + distance * ray_world[0],
+            cam_pos.y_val + distance * ray_world[1],
+            cam_pos.z_val + distance * ray_world[2],
+        ]
+    )
     point_world[2] = min(point_world[2], 0.0)
 
     return airsim.Vector3r(point_world[0], point_world[1], point_world[2])

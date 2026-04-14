@@ -29,6 +29,7 @@ import numpy as np
 
 try:
     import keyboard
+
     _KEYBOARD_AVAILABLE = True
 except Exception:
     _KEYBOARD_AVAILABLE = False
@@ -105,10 +106,13 @@ def drone_control_loop(state: DroneState, client, cfg: dict) -> None:
         while not state.get_should_stop():
             try:
                 # --- Camera feeds (every iteration, both modes) ---
-                responses = client.simGetImages([
-                    airsim.ImageRequest("0", airsim.ImageType.Scene, False, False),
-                    airsim.ImageRequest("3", airsim.ImageType.Scene, False, False),
-                ], **vn_kw)
+                responses = client.simGetImages(
+                    [
+                        airsim.ImageRequest("0", airsim.ImageType.Scene, False, False),
+                        airsim.ImageRequest("3", airsim.ImageType.Scene, False, False),
+                    ],
+                    **vn_kw,
+                )
 
                 if responses[0] and len(responses[0].image_data_uint8) > 0:
                     img1d = np.frombuffer(responses[0].image_data_uint8, dtype=np.uint8)
@@ -124,8 +128,15 @@ def drone_control_loop(state: DroneState, client, cfg: dict) -> None:
                     if img_forward.size > 0:
                         state.set_frame_forward(img_forward.copy())
                         mode_text = f"Mode: {state.get_mode().upper()}"
-                        cv2.putText(img_forward, mode_text, (10, 30),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                        cv2.putText(
+                            img_forward,
+                            mode_text,
+                            (10, 30),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            1,
+                            (0, 255, 0),
+                            2,
+                        )
                         cv2.imshow("Drone Camera", img_forward)
 
                 cv2.waitKey(1)
@@ -168,10 +179,14 @@ def drone_control_loop(state: DroneState, client, cfg: dict) -> None:
                                 client.enableApiControl(True, **vn_kw)
                                 client.armDisarm(True, **vn_kw)
 
-                            print(f"[AUTO] Navigating to ({target[0]:.1f}, {target[1]:.1f}, {target[2]:.1f}) "
-                                  f"at {fly_speed:.0f} m/s")
+                            print(
+                                f"[AUTO] Navigating to ({target[0]:.1f}, {target[1]:.1f}, {target[2]:.1f}) "
+                                f"at {fly_speed:.0f} m/s"
+                            )
                             task = client.moveToPositionAsync(
-                                target[0], target[1], target[2],
+                                target[0],
+                                target[1],
+                                target[2],
                                 velocity=fly_speed,
                                 drivetrain=airsim.DrivetrainType.MaxDegreeOfFreedom,
                                 yaw_mode=airsim.YawMode(is_rate=False, yaw_or_rate=0),
@@ -182,20 +197,23 @@ def drone_control_loop(state: DroneState, client, cfg: dict) -> None:
                         else:
                             # PHASE 2 — poll until arrival
                             pose = client.simGetVehiclePose(**vn_kw)
-                            current = (pose.position.x_val, pose.position.y_val, pose.position.z_val)
+                            current = (
+                                pose.position.x_val,
+                                pose.position.y_val,
+                                pose.position.z_val,
+                            )
 
                             is_rth = state.get_returning_home()
                             if is_rth:
                                 # RTH: only 2D distance (altitude handled by takeoff)
                                 distance = math.sqrt(
-                                    (current[0] - target[0]) ** 2 +
-                                    (current[1] - target[1]) ** 2
+                                    (current[0] - target[0]) ** 2 + (current[1] - target[1]) ** 2
                                 )
                             else:
                                 distance = math.sqrt(
-                                    (current[0] - target[0]) ** 2 +
-                                    (current[1] - target[1]) ** 2 +
-                                    (current[2] - target[2]) ** 2
+                                    (current[0] - target[0]) ** 2
+                                    + (current[1] - target[1]) ** 2
+                                    + (current[2] - target[2]) ** 2
                                 )
 
                             now = time.monotonic()
@@ -218,7 +236,9 @@ def drone_control_loop(state: DroneState, client, cfg: dict) -> None:
                                     state.set_grounded(True)
                                     state.set_mode("automatic")
                                     state.mark_idle_hover_sent()
-                                    print("[AUTO] Drone grounded in automatic mode — ready for next trigger")
+                                    print(
+                                        "[AUTO] Drone grounded in automatic mode — ready for next trigger"
+                                    )
                                 else:
                                     # Normal arrival — hover and hand over to manual control.
                                     # Matches pre-refactor: operator gets manual control at the
@@ -243,23 +263,23 @@ def drone_control_loop(state: DroneState, client, cfg: dict) -> None:
                         client.hoverAsync(**vn_kw).join()
                         state.set_grounded(False)
 
-                    if _KEYBOARD_AVAILABLE and keyboard.is_pressed('q'):
+                    if _KEYBOARD_AVAILABLE and keyboard.is_pressed("q"):
                         state.request_stop()
                         break
 
                     vx = vy = vz = 0.0
                     if _KEYBOARD_AVAILABLE:
-                        if keyboard.is_pressed('w'):
+                        if keyboard.is_pressed("w"):
                             vx = 3.0
-                        elif keyboard.is_pressed('s'):
+                        elif keyboard.is_pressed("s"):
                             vx = -3.0
-                        if keyboard.is_pressed('d'):
+                        if keyboard.is_pressed("d"):
                             vy = 3.0
-                        elif keyboard.is_pressed('a'):
+                        elif keyboard.is_pressed("a"):
                             vy = -3.0
-                        if keyboard.is_pressed('z'):
+                        if keyboard.is_pressed("z"):
                             vz = -2.0
-                        elif keyboard.is_pressed('x'):
+                        elif keyboard.is_pressed("x"):
                             vz = 2.0
 
                     api_vx, api_vy, api_vz = state.get_manual_velocity()
@@ -268,7 +288,9 @@ def drone_control_loop(state: DroneState, client, cfg: dict) -> None:
                     vz = vz or api_vz
 
                     client.moveByVelocityAsync(
-                        vx, vy, vz,
+                        vx,
+                        vy,
+                        vz,
                         duration=0.1,
                         drivetrain=airsim.DrivetrainType.MaxDegreeOfFreedom,
                         yaw_mode=airsim.YawMode(is_rate=False, yaw_or_rate=0),

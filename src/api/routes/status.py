@@ -51,14 +51,16 @@ async def websocket_status(
             for feed_id in fm.feed_ids():
                 state = fm.get_state(feed_id)
                 if state:
-                    feeds_status.append({
-                        "feed_id": feed_id,
-                        "alarm_active": state.alarm_active,
-                        "caution_active": state.caution_active,
-                        "people_count": state.people_count,
-                        "danger_count": state.danger_count,
-                        "caution_count": state.caution_count,
-                    })
+                    feeds_status.append(
+                        {
+                            "feed_id": feed_id,
+                            "alarm_active": state.alarm_active,
+                            "caution_active": state.caution_active,
+                            "people_count": state.people_count,
+                            "danger_count": state.danger_count,
+                            "caution_count": state.caution_count,
+                        }
+                    )
 
             # Send as JSON
             message = {

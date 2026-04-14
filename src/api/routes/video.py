@@ -61,13 +61,15 @@ def _generate_frames(feed_id: str, fm: FeedManager, stream_interval: float):
                 # addWeighted that the old RGB overlay path required).
                 if overlay is not None:
                     if overlay.shape[:2] != frame_rgb.shape[:2]:
-                        overlay = cv2.resize(overlay, (frame_rgb.shape[1], frame_rgb.shape[0]),
-                                             interpolation=cv2.INTER_NEAREST)
+                        overlay = cv2.resize(
+                            overlay,
+                            (frame_rgb.shape[1], frame_rgb.shape[0]),
+                            interpolation=cv2.INTER_NEAREST,
+                        )
                     mask_bool = overlay.astype(bool)
                     # Blend: 60% original + 40% cyan (0, 255, 255 in RGB)
                     frame_rgb[mask_bool] = (
-                        frame_rgb[mask_bool] * 0.6 +
-                        np.array([0, 255, 255], dtype=np.float32) * 0.4
+                        frame_rgb[mask_bool] * 0.6 + np.array([0, 255, 255], dtype=np.float32) * 0.4
                     ).astype(np.uint8)
 
                 h, w = frame_rgb.shape[:2]

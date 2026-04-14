@@ -23,6 +23,7 @@ from typing import Any, List, Optional
 
 class AuditEventType(str, Enum):
     """Types of audit events."""
+
     ALARM_FIRED = "alarm_fired"
     DRONE_AUTO_DEPLOYED = "drone_auto_deployed"
     DRONE_MANUAL_DEPLOYED = "drone_manual_deployed"
@@ -32,6 +33,7 @@ class AuditEventType(str, Enum):
 @dataclass
 class AuditEvent:
     """Single audit event record."""
+
     id: int
     type: AuditEventType
     timestamp: str  # ISO 8601

@@ -42,28 +42,30 @@ from ultralytics import YOLO
 
 # One scene segmentation model per scene type
 SEG_MODELS = {
-    "bridge":  Path("runs/segment/runs/segment/bridge_hazard_yolo11s-seg/weights/best.pt"),
+    "bridge": Path("runs/segment/runs/segment/bridge_hazard_yolo11s-seg/weights/best.pt"),
     "railway": Path("runs/segment/runs/segment/railway_hazard_yolo11s-seg/weights/best.pt"),
-    "ship":    Path("runs/segment/runs/segment/ship_hazard_yolo11s-seg/weights/best.pt"),
+    "ship": Path("runs/segment/runs/segment/ship_hazard_yolo11s-seg/weights/best.pt"),
 }
 
 # Single human detection model (shared across all scenes)
-HUMAN_MODEL_PATH = Path("runs/segment/runs/segment/human_detection_real_yolo11s-seg/weights/best.pt")
+HUMAN_MODEL_PATH = Path(
+    "runs/segment/runs/segment/human_detection_real_yolo11s-seg/weights/best.pt"
+)
 
 # ---------------------------------------------------------------------------
 # Dataset paths
 # ---------------------------------------------------------------------------
 
-OVERLAP_ROOT   = Path("data/test_dataset/images/overlap")
-POSITIVE_DIR   = OVERLAP_ROOT / "Positive"
-EMPTY_VER_DIR  = OVERLAP_ROOT / "Positive" / "empty_ver"
-NEGATIVE_DIR   = OVERLAP_ROOT / "Negative"
+OVERLAP_ROOT = Path("data/test_dataset/images/overlap")
+POSITIVE_DIR = OVERLAP_ROOT / "Positive"
+EMPTY_VER_DIR = OVERLAP_ROOT / "Positive" / "empty_ver"
+NEGATIVE_DIR = OVERLAP_ROOT / "Negative"
 VIS_OUTPUT_ROOT = Path("eval_output/alarm_trigger")
 
-CONF_THRESHOLD     = 0.25
-SEG_IMGSZ          = 640   # Scene structures are large — 640 is sufficient
-HUMAN_IMGSZ        = 1280  # Humans can be small/distant — need higher resolution
-IMAGE_EXTENSIONS   = {".jpg", ".jpeg", ".png"}
+CONF_THRESHOLD = 0.25
+SEG_IMGSZ = 640  # Scene structures are large — 640 is sufficient
+HUMAN_IMGSZ = 1280  # Humans can be small/distant — need higher resolution
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png"}
 
 SCENE_PREFIXES = ("bridge", "railway", "ship")
 
@@ -81,10 +83,12 @@ def detect_scene(filename: str) -> str | None:
 # Inference helpers
 # ---------------------------------------------------------------------------
 
+
 def get_seg_mask(model: YOLO, image_path: Path, img_w: int, img_h: int) -> np.ndarray:
     """Run scene segmentation → single combined binary danger zone mask."""
-    results = model(str(image_path), conf=CONF_THRESHOLD,
-                    imgsz=SEG_IMGSZ, verbose=False, save=False)
+    results = model(
+        str(image_path), conf=CONF_THRESHOLD, imgsz=SEG_IMGSZ, verbose=False, save=False
+    )
     mask = np.zeros((img_h, img_w), dtype=np.uint8)
     if results[0].masks is None:
         return mask
@@ -94,11 +98,11 @@ def get_seg_mask(model: YOLO, image_path: Path, img_w: int, img_h: int) -> np.nd
     return mask
 
 
-def get_human_masks(model: YOLO, image_path: Path,
-                    img_w: int, img_h: int) -> list[np.ndarray]:
+def get_human_masks(model: YOLO, image_path: Path, img_w: int, img_h: int) -> list[np.ndarray]:
     """Run human detection → list of individual person binary masks."""
-    results = model(str(image_path), conf=CONF_THRESHOLD,
-                    imgsz=HUMAN_IMGSZ, verbose=False, save=False)
+    results = model(
+        str(image_path), conf=CONF_THRESHOLD, imgsz=HUMAN_IMGSZ, verbose=False, save=False
+    )
     masks = []
     if results[0].masks is None:
         return masks
@@ -110,8 +114,7 @@ def get_human_masks(model: YOLO, image_path: Path,
     return masks
 
 
-def compute_max_overlap(danger_zone: np.ndarray,
-                        human_masks: list[np.ndarray]) -> float:
+def compute_max_overlap(danger_zone: np.ndarray, human_masks: list[np.ndarray]) -> float:
     """Return the maximum overlap fraction of any person inside the danger zone.
 
     This is the raw value that gets compared against a threshold to decide
@@ -136,12 +139,15 @@ def alarm_fires_at(max_overlap: float, threshold: float) -> bool:
 # Visualisation
 # ---------------------------------------------------------------------------
 
-def make_visualisation(orig_img: np.ndarray,
-                       danger_zone: np.ndarray,
-                       human_masks: list[np.ndarray],
-                       fired: bool,
-                       gt_label: str,
-                       max_overlap: float) -> np.ndarray:
+
+def make_visualisation(
+    orig_img: np.ndarray,
+    danger_zone: np.ndarray,
+    human_masks: list[np.ndarray],
+    fired: bool,
+    gt_label: str,
+    max_overlap: float,
+) -> np.ndarray:
     """
     Single panel showing:
       - Red overlay   = danger zone
@@ -177,8 +183,16 @@ def make_visualisation(orig_img: np.ndarray,
         # Label each person with their overlap %
         if contours:
             x, y, _, _ = cv2.boundingRect(contours[0])
-            cv2.putText(out, f"{overlap:.0%}", (x, max(y - 5, 15)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
+            cv2.putText(
+                out,
+                f"{overlap:.0%}",
+                (x, max(y - 5, 15)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                (0, 255, 0),
+                1,
+                cv2.LINE_AA,
+            )
 
     # Header
     h, w = orig_img.shape[:2]
@@ -186,17 +200,18 @@ def make_visualisation(orig_img: np.ndarray,
     panel = np.zeros((h + label_h, w, 3), dtype=np.uint8)
     panel[label_h:] = out
 
-    alarm_str  = "ALARM" if fired else "no alarm"
-    correct    = (fired and gt_label == "positive") or (not fired and gt_label == "negative")
+    alarm_str = "ALARM" if fired else "no alarm"
+    correct = (fired and gt_label == "positive") or (not fired and gt_label == "negative")
     result_str = "CORRECT" if correct else "WRONG"
-    colour     = (0, 220, 0) if correct else (0, 0, 220)
+    colour = (0, 220, 0) if correct else (0, 0, 220)
 
-    text = f"GT={gt_label}  pred={alarm_str}  [{result_str}]  " \
-           f"overlap={max_overlap:.1%}  " \
-           f"zone={'yes' if danger_zone.sum()>0 else 'no'}  " \
-           f"humans={len(human_masks)}"
-    cv2.putText(panel, text, (8, 24),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.55, colour, 1, cv2.LINE_AA)
+    text = (
+        f"GT={gt_label}  pred={alarm_str}  [{result_str}]  "
+        f"overlap={max_overlap:.1%}  "
+        f"zone={'yes' if danger_zone.sum() > 0 else 'no'}  "
+        f"humans={len(human_masks)}"
+    )
+    cv2.putText(panel, text, (8, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.55, colour, 1, cv2.LINE_AA)
 
     return panel
 
@@ -204,6 +219,7 @@ def make_visualisation(orig_img: np.ndarray,
 # ---------------------------------------------------------------------------
 # Evaluation
 # ---------------------------------------------------------------------------
+
 
 def find_cleanup(img_path: Path) -> Path | None:
     """Find the empty_ver counterpart for a positive image."""
@@ -220,11 +236,9 @@ def evaluate(seg_models: dict[str, YOLO], human_model: YOLO) -> dict:
     skipped = []
 
     for gt_label, folder in [("positive", POSITIVE_DIR), ("negative", NEGATIVE_DIR)]:
-        image_paths = sorted([
-            p for p in folder.iterdir()
-            if p.suffix.lower() in IMAGE_EXTENSIONS
-            and p.is_file()
-        ])
+        image_paths = sorted(
+            [p for p in folder.iterdir() if p.suffix.lower() in IMAGE_EXTENSIONS and p.is_file()]
+        )
 
         for img_path in image_paths:
             scene = detect_scene(img_path.name)
@@ -258,18 +272,20 @@ def evaluate(seg_models: dict[str, YOLO], human_model: YOLO) -> dict:
             else:
                 danger_zone = get_seg_mask(seg_model, img_path, w, h)
 
-            human_masks  = get_human_masks(human_model, img_path, w, h)
-            max_overlap  = compute_max_overlap(danger_zone, human_masks)
+            human_masks = get_human_masks(human_model, img_path, w, h)
+            max_overlap = compute_max_overlap(danger_zone, human_masks)
 
-            records.append({
-                "img_path":     img_path,
-                "gt_label":     gt_label,
-                "scene":        scene,
-                "max_overlap":  max_overlap,
-                "orig":         orig,
-                "danger":       danger_zone,
-                "humans":       human_masks,
-            })
+            records.append(
+                {
+                    "img_path": img_path,
+                    "gt_label": gt_label,
+                    "scene": scene,
+                    "max_overlap": max_overlap,
+                    "orig": orig,
+                    "danger": danger_zone,
+                    "humans": human_masks,
+                }
+            )
 
     if skipped:
         print(f"\n  WARNING: {len(skipped)} images skipped (no scene prefix detected):")
@@ -285,31 +301,41 @@ def evaluate(seg_models: dict[str, YOLO], human_model: YOLO) -> dict:
 # Main
 # ---------------------------------------------------------------------------
 
+
 def score_at_threshold(records: list[dict], threshold: float) -> dict:
     """Compute TP/FP/TN/FN and derived metrics at a given overlap threshold."""
     tp = fp = tn = fn = 0
     for rec in records:
         fired = alarm_fires_at(rec["max_overlap"], threshold)
         if rec["gt_label"] == "positive":
-            if fired: tp += 1
-            else:     fn += 1
+            if fired:
+                tp += 1
+            else:
+                fn += 1
         else:
-            if fired: fp += 1
-            else:     tn += 1
+            if fired:
+                fp += 1
+            else:
+                tn += 1
 
     total = tp + fp + tn + fn
     precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
-    recall    = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-    f1        = (2 * precision * recall / (precision + recall)
-                 if (precision + recall) > 0 else 0.0)
-    accuracy  = (tp + tn) / total if total > 0 else 0.0
-    fpr       = fp / (fp + tn) if (fp + tn) > 0 else 0.0
+    recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
+    accuracy = (tp + tn) / total if total > 0 else 0.0
+    fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0
 
     return {
         "threshold": threshold,
-        "tp": tp, "fp": fp, "tn": tn, "fn": fn,
-        "precision": precision, "recall": recall,
-        "f1": f1, "accuracy": accuracy, "fpr": fpr,
+        "tp": tp,
+        "fp": fp,
+        "tn": tn,
+        "fn": fn,
+        "precision": precision,
+        "recall": recall,
+        "f1": f1,
+        "accuracy": accuracy,
+        "fpr": fpr,
     }
 
 
@@ -317,9 +343,15 @@ def score_at_threshold(records: list[dict], threshold: float) -> dict:
 # Plots
 # ---------------------------------------------------------------------------
 
-def plot_threshold_curves(records: list[dict], thresholds: list[float],
-                          scenes: list[str], scene_best: dict[str, float],
-                          overall_best: float, out_dir: Path) -> None:
+
+def plot_threshold_curves(
+    records: list[dict],
+    thresholds: list[float],
+    scenes: list[str],
+    scene_best: dict[str, float],
+    overall_best: float,
+    out_dir: Path,
+) -> None:
     """Plot F1 / Precision / Recall vs threshold, one subplot per scene + overall."""
     groups = [(s, [r for r in records if r["scene"] == s]) for s in scenes]
     groups.append(("all", records))
@@ -347,9 +379,14 @@ def plot_threshold_curves(records: list[dict], thresholds: list[float],
         best_s = score_at_threshold(recs, best_t)
         ax.axvline(best_t, color="red", linestyle=":", alpha=0.7)
         ax.plot(best_t, best_s["f1"], "*", color="red", markersize=14, zorder=5)
-        ax.annotate(f"best={best_t:.2f}\nF1={best_s['f1']:.3f}",
-                    (best_t, best_s["f1"]), xytext=(8, -20),
-                    textcoords="offset points", fontsize=8, color="red")
+        ax.annotate(
+            f"best={best_t:.2f}\nF1={best_s['f1']:.3f}",
+            (best_t, best_s["f1"]),
+            xytext=(8, -20),
+            textcoords="offset points",
+            fontsize=8,
+            color="red",
+        )
 
         n_pos = sum(1 for r in recs if r["gt_label"] == "positive")
         n_neg = sum(1 for r in recs if r["gt_label"] == "negative")
@@ -370,9 +407,13 @@ def plot_threshold_curves(records: list[dict], thresholds: list[float],
     plt.close(fig)
 
 
-def plot_confusion_matrices(records: list[dict], scenes: list[str],
-                            scene_best: dict[str, float],
-                            overall_best: float, out_dir: Path) -> None:
+def plot_confusion_matrices(
+    records: list[dict],
+    scenes: list[str],
+    scene_best: dict[str, float],
+    overall_best: float,
+    out_dir: Path,
+) -> None:
     """Plot confusion matrix heatmaps, one per scene + overall."""
     groups = [(s, [r for r in records if r["scene"] == s]) for s in scenes]
     groups.append(("all", records))
@@ -387,8 +428,7 @@ def plot_confusion_matrices(records: list[dict], scenes: list[str],
         thresh = scene_best.get(label, overall_best)
         s = score_at_threshold(recs, thresh)
 
-        matrix = np.array([[s["tp"], s["fn"]],
-                           [s["fp"], s["tn"]]])
+        matrix = np.array([[s["tp"], s["fn"]], [s["fp"], s["tn"]]])
         # Normalise per row for colour intensity
         row_sums = matrix.sum(axis=1, keepdims=True)
         row_sums[row_sums == 0] = 1
@@ -401,10 +441,16 @@ def plot_confusion_matrices(records: list[dict], scenes: list[str],
             for j in range(2):
                 count = matrix[i, j]
                 pct = norm[i, j]
-                ax.text(j, i, f"{count}\n({pct:.0%})",
-                        ha="center", va="center", fontsize=11,
-                        color="white" if pct > 0.5 else "black",
-                        fontweight="bold")
+                ax.text(
+                    j,
+                    i,
+                    f"{count}\n({pct:.0%})",
+                    ha="center",
+                    va="center",
+                    fontsize=11,
+                    color="white" if pct > 0.5 else "black",
+                    fontweight="bold",
+                )
 
         ax.set_xticks([0, 1])
         ax.set_xticklabels(["Alarm", "No Alarm"])
@@ -412,8 +458,7 @@ def plot_confusion_matrices(records: list[dict], scenes: list[str],
         ax.set_yticklabels(["Positive", "Negative"])
         ax.set_xlabel("Predicted")
         ax.set_ylabel("Actual")
-        ax.set_title(f"{label.capitalize()}  (t={thresh:.2f}, F1={s['f1']:.3f})",
-                     fontsize=11)
+        ax.set_title(f"{label.capitalize()}  (t={thresh:.2f}, F1={s['f1']:.3f})", fontsize=11)
 
     for idx in range(len(groups), rows * cols):
         axes[idx // cols][idx % cols].set_visible(False)
@@ -424,15 +469,18 @@ def plot_confusion_matrices(records: list[dict], scenes: list[str],
     plt.close(fig)
 
 
-def print_sweep_table(label: str, records: list[dict],
-                      thresholds: list[float]) -> tuple[float, float]:
+def print_sweep_table(
+    label: str, records: list[dict], thresholds: list[float]
+) -> tuple[float, float]:
     """Print a threshold sweep table for a set of records. Returns (best_thresh, best_f1)."""
     n_pos = sum(1 for r in records if r["gt_label"] == "positive")
     n_neg = sum(1 for r in records if r["gt_label"] == "negative")
     print(f"\n  {label}  ({len(records)} images: {n_pos} pos, {n_neg} neg)")
 
-    header = (f"  {'Thresh':>7} │ {'TP':>4} {'FP':>4} {'TN':>4} {'FN':>4} │ "
-              f"{'Prec':>6} {'Recall':>6} {'F1':>6} {'Acc':>6} {'FPR':>6}")
+    header = (
+        f"  {'Thresh':>7} │ {'TP':>4} {'FP':>4} {'TN':>4} {'FN':>4} │ "
+        f"{'Prec':>6} {'Recall':>6} {'F1':>6} {'Acc':>6} {'FPR':>6}"
+    )
     print(header)
     print(f"  {'─' * (len(header) - 2)}")
 
@@ -444,10 +492,12 @@ def print_sweep_table(label: str, records: list[dict],
         if s["f1"] > best_f1:
             best_f1 = s["f1"]
             best_thresh = thresh
-        line = (f"  {s['threshold']:>7.2f} │ "
-                f"{s['tp']:>4} {s['fp']:>4} {s['tn']:>4} {s['fn']:>4} │ "
-                f"{s['precision']:>6.3f} {s['recall']:>6.3f} {s['f1']:>6.3f} "
-                f"{s['accuracy']:>6.3f} {s['fpr']:>6.3f}")
+        line = (
+            f"  {s['threshold']:>7.2f} │ "
+            f"{s['tp']:>4} {s['fp']:>4} {s['tn']:>4} {s['fn']:>4} │ "
+            f"{s['precision']:>6.3f} {s['recall']:>6.3f} {s['f1']:>6.3f} "
+            f"{s['accuracy']:>6.3f} {s['fpr']:>6.3f}"
+        )
         print(line)
 
     # Mark the best row
@@ -458,9 +508,13 @@ def print_sweep_table(label: str, records: list[dict],
 def main():
     parser = argparse.ArgumentParser(description="Evaluate end-to-end alarm trigger")
     parser.add_argument("--output-csv", type=str, default=None)
-    parser.add_argument("--thresholds", type=float, nargs="+",
-                        default=[0.05, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5],
-                        help="Overlap thresholds to evaluate")
+    parser.add_argument(
+        "--thresholds",
+        type=float,
+        nargs="+",
+        default=[0.05, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5],
+        help="Overlap thresholds to evaluate",
+    )
     args = parser.parse_args()
 
     print(f"Scene seg models:")
@@ -489,7 +543,7 @@ def main():
 
     total_pos = sum(1 for r in records if r["gt_label"] == "positive")
     total_neg = sum(1 for r in records if r["gt_label"] == "negative")
-    total     = len(records)
+    total = len(records)
     print(f"  {total} images evaluated ({total_pos} positive, {total_neg} negative)")
 
     thresholds = sorted(args.thresholds)
@@ -498,27 +552,27 @@ def main():
     scenes = sorted(set(r["scene"] for r in records))
     scene_best_thresh: dict[str, float] = {}
 
-    print(f"\n{'='*90}")
+    print(f"\n{'=' * 90}")
     print(f"  PER-SCENE THRESHOLD SWEEP")
-    print(f"{'='*90}")
+    print(f"{'=' * 90}")
 
     for scene in scenes:
         scene_records = [r for r in records if r["scene"] == scene]
         best_thresh, best_f1 = print_sweep_table(
-            f"SCENE: {scene.upper()}", scene_records, thresholds)
+            f"SCENE: {scene.upper()}", scene_records, thresholds
+        )
         scene_best_thresh[scene] = best_thresh
 
     # ── Overall threshold sweep (single threshold for all) ──
-    print(f"\n{'='*90}")
+    print(f"\n{'=' * 90}")
     print(f"  OVERALL THRESHOLD SWEEP (single threshold)")
-    print(f"{'='*90}")
-    overall_best_thresh, overall_best_f1 = print_sweep_table(
-        "ALL SCENES", records, thresholds)
+    print(f"{'=' * 90}")
+    overall_best_thresh, overall_best_f1 = print_sweep_table("ALL SCENES", records, thresholds)
 
     # ── Per-scene optimal: use each scene's best threshold ──
-    print(f"\n{'='*90}")
+    print(f"\n{'=' * 90}")
     print(f"  PER-SCENE OPTIMAL THRESHOLDS")
-    print(f"{'='*90}")
+    print(f"{'=' * 90}")
     print(f"\n  Best threshold per scene:")
     for scene, thresh in scene_best_thresh.items():
         print(f"    {scene:>8}: {thresh:.2f}")
@@ -529,28 +583,33 @@ def main():
         thresh = scene_best_thresh[rec["scene"]]
         fired = alarm_fires_at(rec["max_overlap"], thresh)
         if rec["gt_label"] == "positive":
-            if fired: tp += 1
-            else:     fn += 1
+            if fired:
+                tp += 1
+            else:
+                fn += 1
         else:
-            if fired: fp += 1
-            else:     tn += 1
+            if fired:
+                fp += 1
+            else:
+                tn += 1
 
     precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
-    recall    = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-    f1        = (2 * precision * recall / (precision + recall)
-                 if (precision + recall) > 0 else 0.0)
-    accuracy  = (tp + tn) / total if total > 0 else 0.0
-    fpr       = fp / (fp + tn) if (fp + tn) > 0 else 0.0
+    recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
+    accuracy = (tp + tn) / total if total > 0 else 0.0
+    fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0
 
     print(f"\n  Combined results with per-scene thresholds:")
     print(f"    TP={tp}  FP={fp}  TN={tn}  FN={fn}")
-    print(f"    Precision={precision:.3f}  Recall={recall:.3f}  "
-          f"F1={f1:.3f}  Accuracy={accuracy:.3f}  FPR={fpr:.3f}")
+    print(
+        f"    Precision={precision:.3f}  Recall={recall:.3f}  "
+        f"F1={f1:.3f}  Accuracy={accuracy:.3f}  FPR={fpr:.3f}"
+    )
 
     # ── Compare: single vs per-scene ──
-    print(f"\n  {'─'*60}")
+    print(f"\n  {'─' * 60}")
     print(f"  COMPARISON")
-    print(f"  {'─'*60}")
+    print(f"  {'─' * 60}")
     print(f"    Single threshold (={overall_best_thresh:.2f}):    F1={overall_best_f1:.4f}")
     print(f"    Per-scene thresholds:              F1={f1:.4f}")
     if f1 > overall_best_f1:
@@ -577,23 +636,23 @@ def main():
             thresh = overall_best_thresh
         fired = alarm_fires_at(rec["max_overlap"], thresh)
         vis = make_visualisation(
-            rec["orig"], rec["danger"], rec["humans"],
-            fired, rec["gt_label"], rec["max_overlap"]
+            rec["orig"], rec["danger"], rec["humans"], fired, rec["gt_label"], rec["max_overlap"]
         )
-        correct = (fired and rec["gt_label"] == "positive") or \
-                  (not fired and rec["gt_label"] == "negative")
+        correct = (fired and rec["gt_label"] == "positive") or (
+            not fired and rec["gt_label"] == "negative"
+        )
         label = "correct" if correct else "WRONG"
         out_path = out_dir / f"{rank:03d}_{rec['scene']}_{rec['img_path'].stem}_{label}.jpg"
         cv2.imwrite(str(out_path), vis)
 
-    thresh_desc = (f"per-scene: {scene_best_thresh}" if use_per_scene
-                   else f"single: {overall_best_thresh:.2f}")
+    thresh_desc = (
+        f"per-scene: {scene_best_thresh}" if use_per_scene else f"single: {overall_best_thresh:.2f}"
+    )
     print(f"\n  Visualisations saved → {out_dir}  ({thresh_desc})")
 
     # ── CSV: per-image results ──
     csv_path = out_dir / "results.csv"
-    fields = ["image", "scene", "gt_label", "max_overlap",
-              "alarm_fired", "correct", "threshold"]
+    fields = ["image", "scene", "gt_label", "max_overlap", "alarm_fired", "correct", "threshold"]
     with open(csv_path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fields)
         writer.writeheader()
@@ -603,22 +662,36 @@ def main():
             else:
                 thresh = overall_best_thresh
             fired = alarm_fires_at(rec["max_overlap"], thresh)
-            correct = (fired and rec["gt_label"] == "positive") or \
-                      (not fired and rec["gt_label"] == "negative")
-            writer.writerow({
-                "image":       rec["img_path"].name,
-                "scene":       rec["scene"],
-                "gt_label":    rec["gt_label"],
-                "max_overlap": round(rec["max_overlap"], 4),
-                "alarm_fired": fired,
-                "correct":     correct,
-                "threshold":   thresh,
-            })
+            correct = (fired and rec["gt_label"] == "positive") or (
+                not fired and rec["gt_label"] == "negative"
+            )
+            writer.writerow(
+                {
+                    "image": rec["img_path"].name,
+                    "scene": rec["scene"],
+                    "gt_label": rec["gt_label"],
+                    "max_overlap": round(rec["max_overlap"], 4),
+                    "alarm_fired": fired,
+                    "correct": correct,
+                    "threshold": thresh,
+                }
+            )
 
     # ── CSV: per-scene threshold sweep ──
     sweep_path = out_dir / "threshold_sweep.csv"
-    sweep_fields = ["scene", "threshold", "tp", "fp", "tn", "fn",
-                    "precision", "recall", "f1", "accuracy", "fpr"]
+    sweep_fields = [
+        "scene",
+        "threshold",
+        "tp",
+        "fp",
+        "tn",
+        "fn",
+        "precision",
+        "recall",
+        "f1",
+        "accuracy",
+        "fpr",
+    ]
     with open(sweep_path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=sweep_fields)
         writer.writeheader()
@@ -627,43 +700,66 @@ def main():
             for thresh in thresholds:
                 s = score_at_threshold(recs, thresh)
                 row = {"scene": scene}
-                row.update({k: round(v, 4) if isinstance(v, float) else v
-                            for k, v in s.items()})
+                row.update({k: round(v, 4) if isinstance(v, float) else v for k, v in s.items()})
                 writer.writerow(row)
 
     # ── CSV: summary ──
     summary_path = out_dir / "summary.csv"
     seg_model_str = ", ".join(f"{s}={p.parent.parent.name}" for s, p in SEG_MODELS.items())
     with open(summary_path, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=[
-            "seg_models", "human_model", "mode", "thresholds",
-            "tp", "fp", "tn", "fn", "precision", "recall", "f1", "accuracy"
-        ])
+        writer = csv.DictWriter(
+            f,
+            fieldnames=[
+                "seg_models",
+                "human_model",
+                "mode",
+                "thresholds",
+                "tp",
+                "fp",
+                "tn",
+                "fn",
+                "precision",
+                "recall",
+                "f1",
+                "accuracy",
+            ],
+        )
         writer.writeheader()
         # Per-scene row
-        writer.writerow({
-            "seg_models":  seg_model_str,
-            "human_model": HUMAN_MODEL_PATH.parent.parent.name,
-            "mode":        "per_scene",
-            "thresholds":  str(scene_best_thresh),
-            "tp": tp, "fp": fp, "tn": tn, "fn": fn,
-            "precision": round(precision, 4), "recall": round(recall, 4),
-            "f1": round(f1, 4), "accuracy": round(accuracy, 4),
-        })
+        writer.writerow(
+            {
+                "seg_models": seg_model_str,
+                "human_model": HUMAN_MODEL_PATH.parent.parent.name,
+                "mode": "per_scene",
+                "thresholds": str(scene_best_thresh),
+                "tp": tp,
+                "fp": fp,
+                "tn": tn,
+                "fn": fn,
+                "precision": round(precision, 4),
+                "recall": round(recall, 4),
+                "f1": round(f1, 4),
+                "accuracy": round(accuracy, 4),
+            }
+        )
         # Single threshold row
         overall = score_at_threshold(records, overall_best_thresh)
-        writer.writerow({
-            "seg_models":  seg_model_str,
-            "human_model": HUMAN_MODEL_PATH.parent.parent.name,
-            "mode":        "single",
-            "thresholds":  str(overall_best_thresh),
-            "tp": overall["tp"], "fp": overall["fp"],
-            "tn": overall["tn"], "fn": overall["fn"],
-            "precision": round(overall["precision"], 4),
-            "recall": round(overall["recall"], 4),
-            "f1": round(overall["f1"], 4),
-            "accuracy": round(overall["accuracy"], 4),
-        })
+        writer.writerow(
+            {
+                "seg_models": seg_model_str,
+                "human_model": HUMAN_MODEL_PATH.parent.parent.name,
+                "mode": "single",
+                "thresholds": str(overall_best_thresh),
+                "tp": overall["tp"],
+                "fp": overall["fp"],
+                "tn": overall["tn"],
+                "fn": overall["fn"],
+                "precision": round(overall["precision"], 4),
+                "recall": round(overall["recall"], 4),
+                "f1": round(overall["f1"], 4),
+                "accuracy": round(overall["accuracy"], 4),
+            }
+        )
 
     print(f"\n  Per-image CSV     → {csv_path}")
     print(f"  Threshold sweep   → {sweep_path}")
@@ -671,15 +767,16 @@ def main():
 
     # ── Plots ──
     print(f"  Generating plots...")
-    plot_threshold_curves(records, thresholds, scenes, scene_best_thresh,
-                          overall_best_thresh, out_dir)
-    plot_confusion_matrices(records, scenes, scene_best_thresh,
-                            overall_best_thresh, out_dir)
+    plot_threshold_curves(
+        records, thresholds, scenes, scene_best_thresh, overall_best_thresh, out_dir
+    )
+    plot_confusion_matrices(records, scenes, scene_best_thresh, overall_best_thresh, out_dir)
     print(f"  threshold_curves.png    → {out_dir}/threshold_curves.png")
     print(f"  confusion_matrices.png  → {out_dir}/confusion_matrices.png")
 
     if args.output_csv:
         import shutil
+
         shutil.copy(summary_path, args.output_csv)
         print(f"  Summary also saved → {args.output_csv}")
 

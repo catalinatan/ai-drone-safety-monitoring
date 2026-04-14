@@ -44,17 +44,18 @@ from src.human_detection.config import DANGER_ZONE_OVERLAP_THRESHOLD
 # ---------------------------------------------------------------------------
 
 TEST_DATASET_ROOT = Path("data/test_dataset/images")
-MODELS_ROOT       = Path("runs/segment/runs/segment")
-VIS_OUTPUT_ROOT   = Path("eval_output")
+MODELS_ROOT = Path("runs/segment/runs/segment")
+VIS_OUTPUT_ROOT = Path("eval_output")
 
-CONF_THRESHOLD   = 0.25
-INFERENCE_IMGSZ  = 1280
+CONF_THRESHOLD = 0.25
+INFERENCE_IMGSZ = 1280
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png"}
 
 
 # ---------------------------------------------------------------------------
 # Instance mask helpers
 # ---------------------------------------------------------------------------
+
 
 def yolo_polygons_to_instances(label_path: Path, img_w: int, img_h: int) -> list[np.ndarray]:
     """Parse YOLO polygon label file → list of individual binary masks (one per instance)."""
@@ -66,10 +67,10 @@ def yolo_polygons_to_instances(label_path: Path, img_w: int, img_h: int) -> list
         return instances
     for line in text.splitlines():
         parts = line.split()
-        coords = list(map(float, parts[1:]))   # skip class id
+        coords = list(map(float, parts[1:]))  # skip class id
         if len(coords) < 6:
             continue
-        xs = [round(coords[i]     * img_w) for i in range(0, len(coords), 2)]
+        xs = [round(coords[i] * img_w) for i in range(0, len(coords), 2)]
         ys = [round(coords[i + 1] * img_h) for i in range(0, len(coords), 2)]
         mask = np.zeros((img_h, img_w), dtype=np.uint8)
         cv2.fillPoly(mask, [np.array(list(zip(xs, ys)), dtype=np.int32)], color=1)
@@ -78,11 +79,13 @@ def yolo_polygons_to_instances(label_path: Path, img_w: int, img_h: int) -> list
     return instances
 
 
-def get_predicted_instances(model: YOLO, image_path: Path,
-                             img_w: int, img_h: int) -> list[np.ndarray]:
+def get_predicted_instances(
+    model: YOLO, image_path: Path, img_w: int, img_h: int
+) -> list[np.ndarray]:
     """Run model → list of individual binary masks (one per detected instance)."""
-    results = model(str(image_path), conf=CONF_THRESHOLD,
-                    imgsz=INFERENCE_IMGSZ, verbose=False, save=False)
+    results = model(
+        str(image_path), conf=CONF_THRESHOLD, imgsz=INFERENCE_IMGSZ, verbose=False, save=False
+    )
     instances = []
     if results[0].masks is None:
         return instances
@@ -106,9 +109,10 @@ def gt_coverage(gt: np.ndarray, pred: np.ndarray) -> float:
 # Instance matching
 # ---------------------------------------------------------------------------
 
-def match_instances(gt_instances: list[np.ndarray],
-                    pred_instances: list[np.ndarray],
-                    overlap_threshold: float) -> tuple[int, int, int]:
+
+def match_instances(
+    gt_instances: list[np.ndarray], pred_instances: list[np.ndarray], overlap_threshold: float
+) -> tuple[int, int, int]:
     """
     Optimal (Hungarian) matching of GT to predictions using GT coverage as the
     score — identical logic to DANGER_ZONE_OVERLAP_THRESHOLD in config.py.
@@ -137,7 +141,7 @@ def match_instances(gt_instances: list[np.ndarray],
     # Hungarian algorithm on negated matrix (minimises cost = maximises coverage)
     row_ind, col_ind = linear_sum_assignment(-cov_matrix)
 
-    matched_gt   = set()
+    matched_gt = set()
     matched_pred = set()
     for i, j in zip(row_ind, col_ind):
         if cov_matrix[i, j] >= overlap_threshold:
@@ -145,7 +149,7 @@ def match_instances(gt_instances: list[np.ndarray],
             matched_pred.add(j)
 
     tp = len(matched_gt)
-    fn = len(gt_instances)   - tp
+    fn = len(gt_instances) - tp
     fp = len(pred_instances) - len(matched_pred)
     return tp, fp, fn
 
@@ -154,16 +158,22 @@ def match_instances(gt_instances: list[np.ndarray],
 # Visualisation
 # ---------------------------------------------------------------------------
 
-def make_visualisation(img: np.ndarray,
-                       gt_instances: list[np.ndarray],
-                       pred_instances: list[np.ndarray],
-                       tp: int, fp: int, fn: int) -> np.ndarray:
+
+def make_visualisation(
+    img: np.ndarray,
+    gt_instances: list[np.ndarray],
+    pred_instances: list[np.ndarray],
+    tp: int,
+    fp: int,
+    fn: int,
+) -> np.ndarray:
     """
     Side-by-side:
       Left:  original + green GT instance outlines
       Right: original + blue predicted instance outlines
     Header shows TP / FP / FN counts.
     """
+
     def draw_instances(base, instances, colour):
         out = base.copy()
         for mask in instances:
@@ -176,8 +186,8 @@ def make_visualisation(img: np.ndarray,
             cv2.drawContours(out, contours, -1, colour, 2)
         return out
 
-    left  = draw_instances(img, gt_instances,   (0, 200, 0))   # green = GT
-    right = draw_instances(img, pred_instances, (220, 0, 0))   # blue  = predicted
+    left = draw_instances(img, gt_instances, (0, 200, 0))  # green = GT
+    right = draw_instances(img, pred_instances, (220, 0, 0))  # blue  = predicted
 
     h, w = img.shape[:2]
     label_h = 30
@@ -185,13 +195,14 @@ def make_visualisation(img: np.ndarray,
     def add_label(panel, text):
         labelled = np.zeros((h + label_h, w, 3), dtype=np.uint8)
         labelled[label_h:] = panel
-        cv2.putText(labelled, text, (8, 20),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
+        cv2.putText(
+            labelled, text, (8, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA
+        )
         return labelled
 
-    n_gt   = len(gt_instances)
+    n_gt = len(gt_instances)
     n_pred = len(pred_instances)
-    left  = add_label(left,  f"GT (green)  n={n_gt}")
+    left = add_label(left, f"GT (green)  n={n_gt}")
     right = add_label(right, f"Predicted (blue)  n={n_pred}  TP={tp} FP={fp} FN={fn}")
 
     return np.hstack([left, right])
@@ -201,6 +212,7 @@ def make_visualisation(img: np.ndarray,
 # Per-model evaluation
 # ---------------------------------------------------------------------------
 
+
 def evaluate_model(model_path: Path, overlap_threshold: float) -> dict:
     images_dir = TEST_DATASET_ROOT / "human" / "train" / "images"
     labels_dir = TEST_DATASET_ROOT / "human" / "train" / "labels"
@@ -208,12 +220,11 @@ def evaluate_model(model_path: Path, overlap_threshold: float) -> dict:
     if not images_dir.exists():
         return {"error": f"No test images at {images_dir}"}
 
-    image_paths = [p for p in sorted(images_dir.iterdir())
-                   if p.suffix.lower() in IMAGE_EXTENSIONS]
+    image_paths = [p for p in sorted(images_dir.iterdir()) if p.suffix.lower() in IMAGE_EXTENSIONS]
     if not image_paths:
         return {"error": "No images found"}
 
-    model      = YOLO(str(model_path))
+    model = YOLO(str(model_path))
     model_name = model_path.parent.parent.name
 
     out_dir = VIS_OUTPUT_ROOT / "human" / model_name / "all"
@@ -231,7 +242,7 @@ def evaluate_model(model_path: Path, overlap_threshold: float) -> dict:
             continue
         h, w = img.shape[:2]
 
-        gt_instances   = yolo_polygons_to_instances(label_path, w, h)
+        gt_instances = yolo_polygons_to_instances(label_path, w, h)
         pred_instances = get_predicted_instances(model, img_path, w, h)
 
         tp, fp, fn = match_instances(gt_instances, pred_instances, overlap_threshold)
@@ -248,26 +259,26 @@ def evaluate_model(model_path: Path, overlap_threshold: float) -> dict:
         return {"error": "No valid images processed"}
 
     precision = total_tp / (total_tp + total_fp) if (total_tp + total_fp) > 0 else 0.0
-    recall    = total_tp / (total_tp + total_fn) if (total_tp + total_fn) > 0 else 0.0
-    f1        = (2 * precision * recall / (precision + recall)
-                 if (precision + recall) > 0 else 0.0)
+    recall = total_tp / (total_tp + total_fn) if (total_tp + total_fn) > 0 else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
 
     print(f"    Saved {n_images} visualisations → {out_dir}")
 
     return {
-        "n_images":  n_images,
-        "tp":        total_tp,
-        "fp":        total_fp,
-        "fn":        total_fn,
+        "n_images": n_images,
+        "tp": total_tp,
+        "fp": total_fp,
+        "fn": total_fn,
         "precision": round(precision, 4),
-        "recall":    round(recall,    4),
-        "f1":        round(f1,        4),
+        "recall": round(recall, 4),
+        "f1": round(f1, 4),
     }
 
 
 # ---------------------------------------------------------------------------
 # Model discovery
 # ---------------------------------------------------------------------------
+
 
 def discover_human_models() -> list[Path]:
     return sorted(MODELS_ROOT.glob("human_detection_*/weights/best.pt"))
@@ -277,12 +288,21 @@ def discover_human_models() -> list[Path]:
 # Main
 # ---------------------------------------------------------------------------
 
+
 def main():
     parser = argparse.ArgumentParser(description="Evaluate human detection F1 on test images")
-    parser.add_argument("--overlap-threshold", type=float, default=DANGER_ZONE_OVERLAP_THRESHOLD,
-                        help=f"GT coverage threshold for TP matching (default: {DANGER_ZONE_OVERLAP_THRESHOLD})")
-    parser.add_argument("--output-csv", type=str, default=None,
-                        help="Optional path to save combined CSV of all results")
+    parser.add_argument(
+        "--overlap-threshold",
+        type=float,
+        default=DANGER_ZONE_OVERLAP_THRESHOLD,
+        help=f"GT coverage threshold for TP matching (default: {DANGER_ZONE_OVERLAP_THRESHOLD})",
+    )
+    parser.add_argument(
+        "--output-csv",
+        type=str,
+        default=None,
+        help="Optional path to save combined CSV of all results",
+    )
     args = parser.parse_args()
 
     human_models = discover_human_models()
@@ -290,10 +310,12 @@ def main():
         print(f"No human detection models found under {MODELS_ROOT}")
         return
 
-    print(f"\n{'='*65}")
-    print(f"  HUMAN DETECTION  |  {len(human_models)} model(s)  "
-          f"|  overlap threshold: {args.overlap_threshold}")
-    print(f"{'='*65}")
+    print(f"\n{'=' * 65}")
+    print(
+        f"  HUMAN DETECTION  |  {len(human_models)} model(s)  "
+        f"|  overlap threshold: {args.overlap_threshold}"
+    )
+    print(f"{'=' * 65}")
 
     all_results = []
     for model_path in human_models:
@@ -306,31 +328,34 @@ def main():
             print(f"  ERROR — {result['error']}")
             continue
 
-        print(f"  F1={result['f1']}  precision={result['precision']}  "
-              f"recall={result['recall']}  "
-              f"TP={result['tp']} FP={result['fp']} FN={result['fn']}  "
-              f"(n={result['n_images']})")
+        print(
+            f"  F1={result['f1']}  precision={result['precision']}  "
+            f"recall={result['recall']}  "
+            f"TP={result['tp']} FP={result['fp']} FN={result['fn']}  "
+            f"(n={result['n_images']})"
+        )
         all_results.append({"model": model_name, **result})
 
     if all_results:
         results_csv = VIS_OUTPUT_ROOT / "human" / "results.csv"
         results_csv.parent.mkdir(parents=True, exist_ok=True)
-        fields = ["model", "f1", "precision", "recall",
-                  "tp", "fp", "fn", "n_images"]
+        fields = ["model", "f1", "precision", "recall", "tp", "fp", "fn", "n_images"]
         with open(results_csv, "w", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
             writer.writeheader()
             writer.writerows(sorted(all_results, key=lambda x: -x["f1"]))
         print(f"\n  Results saved → {results_csv}")
 
-        print(f"\n\n{'='*65}")
+        print(f"\n\n{'=' * 65}")
         print("  SUMMARY")
-        print(f"{'='*65}")
+        print(f"{'=' * 65}")
         print(f"{'Model':<50} {'F1':>6} {'Prec':>7} {'Rec':>7} {'TP':>5} {'FP':>5} {'FN':>5}")
         print("-" * 65)
         for r in sorted(all_results, key=lambda x: -x["f1"]):
-            print(f"{r['model']:<50} {r['f1']:>6} {r['precision']:>7} {r['recall']:>7} "
-                  f"{r['tp']:>5} {r['fp']:>5} {r['fn']:>5}")
+            print(
+                f"{r['model']:<50} {r['f1']:>6} {r['precision']:>7} {r['recall']:>7} "
+                f"{r['tp']:>5} {r['fp']:>5} {r['fn']:>5}"
+            )
 
         if args.output_csv:
             with open(args.output_csv, "w", newline="") as f:

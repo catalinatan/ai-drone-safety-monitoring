@@ -17,7 +17,7 @@ class DronePosition:
 
 @dataclass
 class DroneStatus:
-    mode: str               # "manual" | "automatic"
+    mode: str  # "manual" | "automatic"
     is_navigating: bool
     position: DronePosition
     is_connected: bool

@@ -76,11 +76,13 @@ class ConfigProjection(ProjectionBackend):
         c_x, c_y = frame_w / 2, frame_h / 2
 
         # Ray in camera frame (camera looks along +X, Y=right, Z=down)
-        ray_cam = np.array([
-            1.0,
-            (pixel_x - c_x) / focal_len,
-            (pixel_y - c_y) / focal_len,
-        ])
+        ray_cam = np.array(
+            [
+                1.0,
+                (pixel_x - c_x) / focal_len,
+                (pixel_y - c_y) / focal_len,
+            ]
+        )
         ray_cam /= np.linalg.norm(ray_cam)
 
         # Rotate to world frame
@@ -103,7 +105,7 @@ class ConfigProjection(ProjectionBackend):
             else:
                 min_distance = max(1.0, abs(cam_z) * 0.5)
                 max_distance = t_ground
-                distance = min_distance + (max_distance - min_distance) * (depth ** 0.5)
+                distance = min_distance + (max_distance - min_distance) * (depth**0.5)
 
         point_world = self._position + distance * ray_world
         return (float(point_world[0]), float(point_world[1]), self._safe_z)
@@ -134,8 +136,12 @@ class ConfigProjection(ProjectionBackend):
             self._position = np.array([0.0, 0.0, 0.0], dtype=np.float64)
         else:
             ned = gps_to_ned(
-                lat, lon, alt,
-                self._gps_origin[0], self._gps_origin[1], self._gps_origin[2],
+                lat,
+                lon,
+                alt,
+                self._gps_origin[0],
+                self._gps_origin[1],
+                self._gps_origin[2],
             )
             self._position = np.array(ned, dtype=np.float64)
 
@@ -166,11 +172,13 @@ class ConfigProjection(ProjectionBackend):
         focal_len = (frame_w / 2) / np.tan(fov_rad / 2)
         c_x, c_y = frame_w / 2, frame_h / 2
 
-        ray_cam = np.array([
-            1.0,
-            (pixel_x - c_x) / focal_len,
-            (pixel_y - c_y) / focal_len,
-        ])
+        ray_cam = np.array(
+            [
+                1.0,
+                (pixel_x - c_x) / focal_len,
+                (pixel_y - c_y) / focal_len,
+            ]
+        )
         ray_cam /= np.linalg.norm(ray_cam)
 
         ray_world = self._rotation.as_matrix() @ ray_cam

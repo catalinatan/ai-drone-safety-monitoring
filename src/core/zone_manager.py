@@ -36,10 +36,7 @@ def zones_to_mask(
     mask = np.zeros((image_height, image_width), dtype=np.uint8)
     for zone in zones:
         pts = np.array(
-            [
-                [int(p.x * image_width / 100), int(p.y * image_height / 100)]
-                for p in zone.points
-            ],
+            [[int(p.x * image_width / 100), int(p.y * image_height / 100)] for p in zone.points],
             dtype=np.int32,
         )
         cv2.fillPoly(mask, [pts], 1)
@@ -175,9 +172,7 @@ class ZoneManager:
     def yellow_mask(self) -> Optional[np.ndarray]:
         return self._yellow_mask
 
-    def check_red(
-        self, person_masks: List[np.ndarray]
-    ) -> tuple[bool, List[np.ndarray]]:
+    def check_red(self, person_masks: List[np.ndarray]) -> tuple[bool, List[np.ndarray]]:
         """Check person overlap against RED zone mask."""
         return check_overlap(
             person_masks,

@@ -31,18 +31,20 @@ from src.services.event_logger import log_event, AuditEventType
 # Per-feed state
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class FeedState:
     """All mutable runtime state for a single camera feed."""
+
     feed_id: str
     name: str
     location: str
     scene_type: Optional[str] = None
 
     # Zone state — manual zones always take priority over auto-segmented zones
-    zones: List[Zone] = field(default_factory=list)          # effective zones (manual ▶ auto fallback)
-    manual_zones: List[Zone] = field(default_factory=list)   # set by user via UI
-    auto_zones: List[Zone] = field(default_factory=list)     # set by auto-segmentation
+    zones: List[Zone] = field(default_factory=list)  # effective zones (manual ▶ auto fallback)
+    manual_zones: List[Zone] = field(default_factory=list)  # set by user via UI
+    auto_zones: List[Zone] = field(default_factory=list)  # set by auto-segmentation
     zone_manager: ZoneManager = field(default_factory=ZoneManager)
 
     # Detection results
@@ -58,7 +60,9 @@ class FeedState:
     last_frame: Optional[np.ndarray] = None
     last_mask_overlay: Optional[np.ndarray] = None
     position: Optional[Tuple[float, float, float]] = None  # NED (x, y, z) from camera vehicle
-    camera_pose: Optional[Dict[str, Any]] = None  # {"position": (x,y,z), "orientation": (p,y,r), "fov": float}
+    camera_pose: Optional[Dict[str, Any]] = (
+        None  # {"position": (x,y,z), "orientation": (p,y,r), "fov": float}
+    )
     frame_count: int = 0
     replay_buffer: deque = field(default_factory=lambda: deque(maxlen=200))
 
@@ -78,6 +82,7 @@ class FeedState:
 # ---------------------------------------------------------------------------
 # FeedManager
 # ---------------------------------------------------------------------------
+
 
 class FeedManager:
     """
@@ -315,8 +320,7 @@ class FeedManager:
                 "caution_count": feed.caution_count,
                 "target_coordinates": target,
                 "last_detection_time": (
-                    feed.last_detection_time.isoformat()
-                    if feed.last_detection_time else None
+                    feed.last_detection_time.isoformat() if feed.last_detection_time else None
                 ),
                 "position": pos,
             }

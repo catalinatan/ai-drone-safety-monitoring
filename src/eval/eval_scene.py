@@ -38,10 +38,10 @@ from ultralytics import YOLO
 # ---------------------------------------------------------------------------
 
 TEST_DATASET_ROOT = Path("data/test_dataset/images")
-MODELS_ROOT       = Path("runs/segment/runs/segment")
-VIS_OUTPUT_ROOT   = Path("eval_output")
+MODELS_ROOT = Path("runs/segment/runs/segment")
+VIS_OUTPUT_ROOT = Path("eval_output")
 
-CONF_THRESHOLD  = 0.25
+CONF_THRESHOLD = 0.25
 INFERENCE_IMGSZ = 640
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png"}
 
@@ -49,6 +49,7 @@ IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png"}
 # ---------------------------------------------------------------------------
 # Mask helpers
 # ---------------------------------------------------------------------------
+
 
 def yolo_polygons_to_mask(label_path: Path, img_w: int, img_h: int) -> np.ndarray:
     mask = np.zeros((img_h, img_w), dtype=np.uint8)
@@ -62,15 +63,16 @@ def yolo_polygons_to_mask(label_path: Path, img_w: int, img_h: int) -> np.ndarra
         coords = list(map(float, parts[1:]))
         if len(coords) < 6:
             continue
-        xs = [round(coords[i]     * img_w) for i in range(0, len(coords), 2)]
+        xs = [round(coords[i] * img_w) for i in range(0, len(coords), 2)]
         ys = [round(coords[i + 1] * img_h) for i in range(0, len(coords), 2)]
         cv2.fillPoly(mask, [np.array(list(zip(xs, ys)), dtype=np.int32)], color=1)
     return mask
 
 
 def get_predicted_mask(model: YOLO, image_path: Path, img_w: int, img_h: int) -> np.ndarray:
-    results = model(str(image_path), conf=CONF_THRESHOLD,
-                    imgsz=INFERENCE_IMGSZ, verbose=False, save=False)
+    results = model(
+        str(image_path), conf=CONF_THRESHOLD, imgsz=INFERENCE_IMGSZ, verbose=False, save=False
+    )
     mask = np.zeros((img_h, img_w), dtype=np.uint8)
     if results[0].masks is None:
         return mask
@@ -82,9 +84,9 @@ def get_predicted_mask(model: YOLO, image_path: Path, img_w: int, img_h: int) ->
 
 def compute_iou(gt: np.ndarray, pred: np.ndarray) -> float:
     intersection = np.logical_and(gt, pred).sum()
-    union        = np.logical_or(gt, pred).sum()
+    union = np.logical_or(gt, pred).sum()
     if union == 0:
-        return 1.0   # both GT and prediction are empty — correct non-detection
+        return 1.0  # both GT and prediction are empty — correct non-detection
     return float(intersection / union)
 
 
@@ -92,13 +94,16 @@ def compute_iou(gt: np.ndarray, pred: np.ndarray) -> float:
 # Visualisation
 # ---------------------------------------------------------------------------
 
-def make_visualisation(img: np.ndarray, gt_mask: np.ndarray,
-                        pred_mask: np.ndarray, iou: float) -> np.ndarray:
+
+def make_visualisation(
+    img: np.ndarray, gt_mask: np.ndarray, pred_mask: np.ndarray, iou: float
+) -> np.ndarray:
     """
     Returns a side-by-side image:
       Left:  original + green GT mask overlay
       Right: original + red predicted mask overlay
     """
+
     def overlay(base, mask, colour):
         out = base.copy().astype(np.float32)
         tint = np.zeros_like(base, dtype=np.float32)
@@ -110,8 +115,8 @@ def make_visualisation(img: np.ndarray, gt_mask: np.ndarray,
         cv2.drawContours(result, contours, -1, colour, 2)
         return result
 
-    left  = overlay(img, gt_mask,   (0, 200, 0))    # green = GT
-    right = overlay(img, pred_mask, (0, 0, 220))    # red   = predicted
+    left = overlay(img, gt_mask, (0, 200, 0))  # green = GT
+    right = overlay(img, pred_mask, (0, 0, 220))  # red   = predicted
 
     h, w = img.shape[:2]
     label_h = 30
@@ -119,18 +124,20 @@ def make_visualisation(img: np.ndarray, gt_mask: np.ndarray,
     def add_label(panel, text):
         labelled = np.zeros((h + label_h, w, 3), dtype=np.uint8)
         labelled[label_h:] = panel
-        cv2.putText(labelled, text, (8, 20),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
+        cv2.putText(
+            labelled, text, (8, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, cv2.LINE_AA
+        )
         return labelled
 
-    left  = add_label(left,  "Ground Truth (green)")
+    left = add_label(left, "Ground Truth (green)")
     right = add_label(right, f"Predicted (red)  IoU={iou:.4f}")
 
     return np.hstack([left, right])
 
 
-def save_all_visualisations(records: list[dict], model: YOLO, model_name: str,
-                            labels_dir: Path, scene: str) -> None:
+def save_all_visualisations(
+    records: list[dict], model: YOLO, model_name: str, labels_dir: Path, scene: str
+) -> None:
     """Save visualisations for every image, sorted by IoU ascending."""
     sorted_records = sorted(records, key=lambda r: r["iou"])
 
@@ -140,8 +147,8 @@ def save_all_visualisations(records: list[dict], model: YOLO, model_name: str,
     out_dir.mkdir(parents=True, exist_ok=True)
 
     for rank, rec in enumerate(sorted_records, 1):
-        img_path   = rec["img_path"]
-        iou        = rec["iou"]
+        img_path = rec["img_path"]
+        iou = rec["iou"]
         label_path = labels_dir / f"{img_path.stem}.txt"
 
         img = cv2.imread(str(img_path))
@@ -149,7 +156,7 @@ def save_all_visualisations(records: list[dict], model: YOLO, model_name: str,
             continue
         h, w = img.shape[:2]
 
-        gt   = yolo_polygons_to_mask(label_path, w, h)
+        gt = yolo_polygons_to_mask(label_path, w, h)
         pred = get_predicted_mask(model, img_path, w, h)
 
         vis = make_visualisation(img, gt, pred, iou)
@@ -163,6 +170,7 @@ def save_all_visualisations(records: list[dict], model: YOLO, model_name: str,
 # Per-scene evaluation
 # ---------------------------------------------------------------------------
 
+
 def evaluate_scene(scene: str, seg_model_path: Path) -> dict:
     images_dir = TEST_DATASET_ROOT / scene / "train" / "images"
     labels_dir = TEST_DATASET_ROOT / scene / "train" / "labels"
@@ -170,14 +178,13 @@ def evaluate_scene(scene: str, seg_model_path: Path) -> dict:
     if not images_dir.exists():
         return {"error": f"No test images at {images_dir}"}
 
-    image_paths = [p for p in sorted(images_dir.iterdir())
-                   if p.suffix.lower() in IMAGE_EXTENSIONS]
+    image_paths = [p for p in sorted(images_dir.iterdir()) if p.suffix.lower() in IMAGE_EXTENSIONS]
     if not image_paths:
         return {"error": "No images found"}
 
-    model      = YOLO(str(seg_model_path))
+    model = YOLO(str(seg_model_path))
     model_name = seg_model_path.parent.parent.name
-    records    = []
+    records = []
 
     for img_path in image_paths:
         label_path = labels_dir / f"{img_path.stem}.txt"
@@ -185,7 +192,7 @@ def evaluate_scene(scene: str, seg_model_path: Path) -> dict:
         if img is None:
             continue
         h, w = img.shape[:2]
-        gt   = yolo_polygons_to_mask(label_path, w, h)
+        gt = yolo_polygons_to_mask(label_path, w, h)
         pred = get_predicted_mask(model, img_path, w, h)
         trivial = int(gt.sum()) == 0 and int(pred.sum()) == 0
         records.append({"img_path": img_path, "iou": compute_iou(gt, pred), "trivial": trivial})
@@ -199,11 +206,11 @@ def evaluate_scene(scene: str, seg_model_path: Path) -> dict:
     save_all_visualisations(records, model, model_name, labels_dir, scene=scene)
 
     return {
-        "n_images":   len(ious),
-        "mean_iou":   round(float(np.mean(ious)),   4),
+        "n_images": len(ious),
+        "mean_iou": round(float(np.mean(ious)), 4),
         "median_iou": round(float(np.median(ious)), 4),
-        "min_iou":    round(float(np.min(ious)),    4),
-        "max_iou":    round(float(np.max(ious)),    4),
+        "min_iou": round(float(np.min(ious)), 4),
+        "max_iou": round(float(np.max(ious)), 4),
     }
 
 
@@ -211,18 +218,24 @@ def evaluate_scene(scene: str, seg_model_path: Path) -> dict:
 # Main
 # ---------------------------------------------------------------------------
 
+
 def main():
-    available_scenes = [
-        d.name for d in TEST_DATASET_ROOT.iterdir()
-        if d.is_dir() and (d / "train" / "images").exists()
-    ] if TEST_DATASET_ROOT.exists() else []
+    available_scenes = (
+        [
+            d.name
+            for d in TEST_DATASET_ROOT.iterdir()
+            if d.is_dir() and (d / "train" / "images").exists()
+        ]
+        if TEST_DATASET_ROOT.exists()
+        else []
+    )
 
     parser = argparse.ArgumentParser(description="Evaluate segmentation IoU on test images")
     parser.add_argument("--scene", choices=available_scenes + ["all"], default="all")
     parser.add_argument("--output-csv", type=str, default=None)
     args = parser.parse_args()
 
-    scenes      = available_scenes if args.scene == "all" else [args.scene]
+    scenes = available_scenes if args.scene == "all" else [args.scene]
     all_results = []
 
     for scene in scenes:
@@ -231,9 +244,9 @@ def main():
             print(f"[{scene.upper()}] No trained models found — skipping.\n")
             continue
 
-        print(f"\n{'='*65}")
+        print(f"\n{'=' * 65}")
         print(f"  SCENE: {scene.upper()}  |  {len(seg_models)} model(s)")
-        print(f"{'='*65}")
+        print(f"{'=' * 65}")
 
         scene_results = []
         for seg_path in seg_models:
@@ -245,10 +258,12 @@ def main():
             if "error" in result:
                 print(f"  ERROR — {result['error']}")
             else:
-                print(f"  mean IoU={result['mean_iou']}  "
-                      f"median={result['median_iou']}  "
-                      f"min={result['min_iou']}  max={result['max_iou']}  "
-                      f"(n={result['n_images']})")
+                print(
+                    f"  mean IoU={result['mean_iou']}  "
+                    f"median={result['median_iou']}  "
+                    f"min={result['min_iou']}  max={result['max_iou']}  "
+                    f"(n={result['n_images']})"
+                )
                 row = {"scene": scene, "model": model_name, **result}
                 scene_results.append(row)
                 all_results.append(row)
@@ -265,14 +280,16 @@ def main():
             print(f"\n  Scene results saved → {scene_csv}")
 
     if all_results:
-        print(f"\n\n{'='*65}")
+        print(f"\n\n{'=' * 65}")
         print("  SUMMARY")
-        print(f"{'='*65}")
+        print(f"{'=' * 65}")
         print(f"{'Model':<45} {'Mean IoU':>9} {'Median':>9} {'Min':>7} {'Max':>7}")
         print("-" * 65)
         for r in sorted(all_results, key=lambda x: -x["mean_iou"]):
-            print(f"{r['model']:<45} {r['mean_iou']:>9} {r['median_iou']:>9} "
-                  f"{r['min_iou']:>7} {r['max_iou']:>7}")
+            print(
+                f"{r['model']:<45} {r['mean_iou']:>9} {r['median_iou']:>9} "
+                f"{r['min_iou']:>7} {r['max_iou']:>7}"
+            )
 
         if args.output_csv:
             fields = ["scene", "model", "mean_iou", "median_iou", "min_iou", "max_iou", "n_images"]

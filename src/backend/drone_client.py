@@ -12,6 +12,7 @@ import requests
 def _default_drone_url() -> str:
     try:
         from src.core.config import get_config
+
         return get_config().get("drone", {}).get("api_url", "http://localhost:8000")
     except Exception:
         return "http://localhost:8000"
@@ -20,6 +21,7 @@ def _default_drone_url() -> str:
 def _default_drone_timeout() -> int:
     try:
         from src.core.config import get_config
+
         return int(get_config().get("drone", {}).get("api_timeout", 5))
     except Exception:
         return 5

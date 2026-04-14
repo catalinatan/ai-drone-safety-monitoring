@@ -24,7 +24,7 @@ class AlarmState:
 
     def __init__(self, cooldown_seconds: float = 5.0) -> None:
         self._cooldown = cooldown_seconds
-        self._last_trigger: float = 0.0   # monotonic timestamp of last trigger
+        self._last_trigger: float = 0.0  # monotonic timestamp of last trigger
         self._active: bool = False
 
     def trigger(self) -> bool:

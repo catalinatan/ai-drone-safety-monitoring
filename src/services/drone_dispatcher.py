@@ -141,6 +141,7 @@ class DroneDispatcher:
             return False
         try:
             import requests
+
             resp = requests.post(f"{self._api.base_url}/return_home", timeout=self._api.timeout)
             return resp.status_code == 200
         except Exception as e:

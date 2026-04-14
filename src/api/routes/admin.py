@@ -120,6 +120,7 @@ async def get_events_endpoint(
 # Live position + calibration
 # ---------------------------------------------------------------------------
 
+
 class PositionBody(BaseModel):
     latitude: float
     longitude: float
@@ -220,8 +221,12 @@ async def calibrate_feed(
     camera_ned = (0.0, 0.0, 0.0)
     if camera_gps:
         camera_ned = gps_to_ned(
-            origin_lat, origin_lon, origin_alt,
-            origin_lat, origin_lon, origin_alt,
+            origin_lat,
+            origin_lon,
+            origin_alt,
+            origin_lat,
+            origin_lon,
+            origin_alt,
         )  # Always (0,0,0) when camera is the origin
 
     # Convert world points from GPS to NED
@@ -242,7 +247,9 @@ async def calibrate_feed(
     )
 
     if result is None:
-        raise HTTPException(status_code=422, detail="Calibration failed — solvePnP could not converge")
+        raise HTTPException(
+            status_code=422, detail="Calibration failed — solvePnP could not converge"
+        )
 
     pitch, yaw, roll = result
     orientation = (pitch, yaw, roll)
@@ -309,9 +316,12 @@ async def calibrate_height(
     world_x, world_y = ned[0], ned[1]
 
     height = proj.calibrate_height(
-        body.pixel_x, body.pixel_y,
-        world_x, world_y,
-        body.frame_w, body.frame_h,
+        body.pixel_x,
+        body.pixel_y,
+        world_x,
+        world_y,
+        body.frame_w,
+        body.frame_h,
     )
 
     if height is None:

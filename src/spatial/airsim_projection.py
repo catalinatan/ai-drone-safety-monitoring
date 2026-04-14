@@ -63,18 +63,22 @@ class AirSimProjection(ProjectionBackend):
             return
         try:
             import math
+
             actor_pose = self._client.simGetObjectPose("ThirdPersonCharacter")
             if math.isnan(actor_pose.position.x_val):
                 return
             cam_info = self._client.simGetCameraInfo(
-                self._camera_name, vehicle_name=self._vehicle_name,
+                self._camera_name,
+                vehicle_name=self._vehicle_name,
             )
             height = actor_pose.position.z_val - cam_info.pose.position.z_val
             if height > 0:
                 self._cctv_height = float(height)
-                print(f"[AirSimProjection] Auto height: {self._cctv_height:.2f}m "
-                      f"(actor Z={actor_pose.position.z_val:.2f}, "
-                      f"cam Z={cam_info.pose.position.z_val:.2f})")
+                print(
+                    f"[AirSimProjection] Auto height: {self._cctv_height:.2f}m "
+                    f"(actor Z={actor_pose.position.z_val:.2f}, "
+                    f"cam Z={cam_info.pose.position.z_val:.2f})"
+                )
         except Exception as e:
             print(f"[AirSimProjection] Auto height failed: {e}")
         self._height_calibrated = True
@@ -144,7 +148,8 @@ class AirSimProjection(ProjectionBackend):
 
         try:
             info = self._client.simGetCameraInfo(
-                self._camera_name, vehicle_name=self._vehicle_name,
+                self._camera_name,
+                vehicle_name=self._vehicle_name,
             )
             cam_pos = info.pose.position
             cam_orient = info.pose.orientation
@@ -153,17 +158,23 @@ class AirSimProjection(ProjectionBackend):
             focal_len = (frame_w / 2) / np.tan(fov_rad / 2)
             c_x, c_y = frame_w / 2, frame_h / 2
 
-            ray_cam = np.array([
-                1.0,
-                (pixel_x - c_x) / focal_len,
-                (pixel_y - c_y) / focal_len,
-            ])
+            ray_cam = np.array(
+                [
+                    1.0,
+                    (pixel_x - c_x) / focal_len,
+                    (pixel_y - c_y) / focal_len,
+                ]
+            )
             ray_cam /= np.linalg.norm(ray_cam)
 
-            r = R.from_quat([
-                cam_orient.x_val, cam_orient.y_val,
-                cam_orient.z_val, cam_orient.w_val,
-            ])
+            r = R.from_quat(
+                [
+                    cam_orient.x_val,
+                    cam_orient.y_val,
+                    cam_orient.z_val,
+                    cam_orient.w_val,
+                ]
+            )
             ray_world = r.as_matrix() @ ray_cam
 
             if abs(ray_world[2]) < 0.001:

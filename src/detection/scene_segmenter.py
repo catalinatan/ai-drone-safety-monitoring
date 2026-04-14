@@ -19,6 +19,7 @@ import numpy as np
 
 def _get_auto_seg_cfg() -> dict:
     from src.core.config import get_config
+
     return get_config().get("auto_segmentation", {})
 
 
@@ -111,9 +112,7 @@ class SceneSegmenter:
             mask_resized = cv2.resize(mask_raw, (w, h), interpolation=cv2.INTER_LINEAR)
             mask_binary = (mask_resized > 0.5).astype(np.uint8)
 
-            contours, _ = cv2.findContours(
-                mask_binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-            )
+            contours, _ = cv2.findContours(mask_binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
             for j, contour in enumerate(contours):
                 area = cv2.contourArea(contour)

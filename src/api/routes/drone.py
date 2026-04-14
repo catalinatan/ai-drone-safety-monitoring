@@ -97,6 +97,7 @@ async def delete_trigger(trigger_id: int, store: TriggerStore = Depends(get_trig
 # Backward-compat endpoints (use latest trigger)
 # ---------------------------------------------------------------------------
 
+
 @router.get("/trigger-snapshot")
 async def get_latest_snapshot(store: TriggerStore = Depends(get_trigger_store)):
     latest = store.latest()
@@ -110,8 +111,11 @@ async def get_latest_trigger_info(store: TriggerStore = Depends(get_trigger_stor
     latest = store.latest()
     if latest is None:
         return {
-            "has_snapshot": False, "feed_id": None, "timestamp": None,
-            "replay_frame_count": 0, "replay_fps": TRIGGER_REPLAY_FPS,
+            "has_snapshot": False,
+            "feed_id": None,
+            "timestamp": None,
+            "replay_frame_count": 0,
+            "replay_fps": TRIGGER_REPLAY_FPS,
             "replay_trigger_index": 0,
         }
     return {

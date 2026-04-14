@@ -76,9 +76,11 @@ MIN_MASK_AREA_FRACTION = 0.001
 # AirSim helpers
 # ---------------------------------------------------------------------------
 
+
 def connect_airsim():
     """Connect to AirSim and return the client."""
     import airsim
+
     client = airsim.MultirotorClient()
     client.confirmConnection()
     return client
@@ -87,9 +89,11 @@ def connect_airsim():
 def get_camera_frame(client, camera_name: str, vehicle_name: str) -> Optional[np.ndarray]:
     """Grab a single RGB frame from an AirSim camera."""
     import airsim
-    responses = client.simGetImages([
-        airsim.ImageRequest(camera_name, airsim.ImageType.Scene, False, False)
-    ], vehicle_name=vehicle_name)
+
+    responses = client.simGetImages(
+        [airsim.ImageRequest(camera_name, airsim.ImageType.Scene, False, False)],
+        vehicle_name=vehicle_name,
+    )
     if not responses or responses[0].width == 0:
         return None
     img1d = np.frombuffer(responses[0].image_data_uint8, dtype=np.uint8)
@@ -117,15 +121,23 @@ def start_follow_loop(client, cameras: dict) -> threading.Event:
 
     # camera_mappings: {vehicle_name: cam_actor_name}
     from src.core.config import get_config
+
     follow_cfg = get_config().get("follow_mode", {})
-    camera_mappings = follow_cfg.get("camera_mappings", {
-        "Drone2": "CCTV1", "Drone3": "CCTV2",
-        "Drone4": "CCTV3", "Drone5": "CCTV4",
-    })
+    camera_mappings = follow_cfg.get(
+        "camera_mappings",
+        {
+            "Drone2": "CCTV1",
+            "Drone3": "CCTV2",
+            "Drone4": "CCTV3",
+            "Drone5": "CCTV4",
+        },
+    )
     interval = follow_cfg.get("follow_interval", 0.01)
 
-    print(f"[FOLLOW] Starting follow loop — teleporting {list(camera_mappings.keys())} "
-          f"to Camera Actors {list(camera_mappings.values())}")
+    print(
+        f"[FOLLOW] Starting follow loop — teleporting {list(camera_mappings.keys())} "
+        f"to Camera Actors {list(camera_mappings.values())}"
+    )
 
     # Arm and takeoff all drones
     takeoff_futures = []
@@ -178,6 +190,7 @@ def start_follow_loop(client, cameras: dict) -> threading.Event:
 # Core evaluation
 # ---------------------------------------------------------------------------
 
+
 def run_evaluation(
     n_samples: int = 50,
     camera_ids: list[str] | None = None,
@@ -201,8 +214,7 @@ def run_evaluation(
     from src.detection.depth_estimator_wrapper import DepthEstimator
     from src.spatial.projection import get_coords_from_lite_mono
 
-    cameras = {k: v for k, v in CAMERA_FEEDS.items()
-               if camera_ids is None or k in camera_ids}
+    cameras = {k: v for k, v in CAMERA_FEEDS.items() if camera_ids is None or k in camera_ids}
 
     if not cameras:
         print("[ERROR] No valid cameras specified")
@@ -238,8 +250,14 @@ def run_evaluation(
     print(f"[EVAL] Cameras: {list(cameras.keys())}")
     print()
 
-    skip_stats = {"no_frame": 0, "no_detection": 0, "no_person": 0,
-                   "no_gt": 0, "no_projection": 0, "too_far": 0}
+    skip_stats = {
+        "no_frame": 0,
+        "no_detection": 0,
+        "no_person": 0,
+        "no_gt": 0,
+        "no_projection": 0,
+        "too_far": 0,
+    }
     gt_z_printed = False
 
     while sample_count < n_samples and attempt < max_attempts:
@@ -247,10 +265,12 @@ def run_evaluation(
 
         # Periodic progress update
         if attempt % 10 == 0:
-            print(f"  [DEBUG] Attempt {attempt} | Samples so far: {sample_count}/{n_samples} | "
-                  f"Skips: frame={skip_stats['no_frame']} det={skip_stats['no_detection']} "
-                  f"person={skip_stats['no_person']} gt={skip_stats['no_gt']} "
-                  f"proj={skip_stats['no_projection']} far={skip_stats['too_far']}")
+            print(
+                f"  [DEBUG] Attempt {attempt} | Samples so far: {sample_count}/{n_samples} | "
+                f"Skips: frame={skip_stats['no_frame']} det={skip_stats['no_detection']} "
+                f"person={skip_stats['no_person']} gt={skip_stats['no_gt']} "
+                f"proj={skip_stats['no_projection']} far={skip_stats['too_far']}"
+            )
 
         for feed_id, cam_cfg in cameras.items():
             if sample_count >= n_samples:
@@ -267,15 +287,26 @@ def run_evaluation(
                 if show:
                     # Show blank placeholder
                     blank = np.zeros((240, 320, 3), dtype=np.uint8)
-                    cv2.putText(blank, f"{feed_id} — NO FRAME", (10, 30),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+                    cv2.putText(
+                        blank,
+                        f"{feed_id} — NO FRAME",
+                        (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.6,
+                        (0, 0, 255),
+                        2,
+                    )
                     cv2.imshow(feed_id, blank)
                 continue
 
             # 2. Detect humans
             results = detector.model(
-                frame, conf=0.25, imgsz=1280,
-                verbose=False, half=detector._use_half, save=False,
+                frame,
+                conf=0.25,
+                imgsz=1280,
+                verbose=False,
+                half=detector._use_half,
+                save=False,
             )
 
             # Build visualisation frame for this camera
@@ -284,46 +315,72 @@ def run_evaluation(
             if not results or results[0].masks is None:
                 skip_stats["no_detection"] += 1
                 if show:
-                    cv2.putText(vis, f"NO DETECTIONS", (10, 30),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                    cv2.putText(
+                        vis,
+                        f"NO DETECTIONS",
+                        (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.7,
+                        (0, 0, 255),
+                        2,
+                    )
                     cv2.imshow(feed_id, cv2.cvtColor(vis, cv2.COLOR_RGB2BGR))
                 continue
 
             # Filter person detections (class 0)
             n_total_det = len(results[0].boxes)
-            person_indices = [
-                i for i, box in enumerate(results[0].boxes)
-                if int(box.cls[0]) == 0
-            ]
+            person_indices = [i for i, box in enumerate(results[0].boxes) if int(box.cls[0]) == 0]
             if not person_indices:
                 skip_stats["no_person"] += 1
                 print(f"  [DEBUG] {feed_id}: {n_total_det} detections but 0 persons")
                 if show:
-                    cv2.putText(vis, f"{n_total_det} det, 0 persons", (10, 30),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 165, 255), 2)
+                    cv2.putText(
+                        vis,
+                        f"{n_total_det} det, 0 persons",
+                        (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.7,
+                        (0, 165, 255),
+                        2,
+                    )
                     cv2.imshow(feed_id, cv2.cvtColor(vis, cv2.COLOR_RGB2BGR))
                 continue
 
-            print(f"  [DEBUG] {feed_id}: {len(person_indices)} person(s) detected "
-                  f"(out of {n_total_det} total)")
+            print(
+                f"  [DEBUG] {feed_id}: {len(person_indices)} person(s) detected "
+                f"(out of {n_total_det} total)"
+            )
 
             # 3. Ground truth (get early so we can match detections)
             gt = get_ground_truth_position(client)
             if gt is None:
                 skip_stats["no_gt"] += 1
-                print(f"  [DEBUG] {feed_id}: ground truth unavailable (ThirdPersonCharacter not found)")
+                print(
+                    f"  [DEBUG] {feed_id}: ground truth unavailable (ThirdPersonCharacter not found)"
+                )
                 if show:
-                    cv2.putText(vis, f"GT UNAVAILABLE", (10, 30),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                    cv2.putText(
+                        vis,
+                        f"GT UNAVAILABLE",
+                        (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.7,
+                        (0, 0, 255),
+                        2,
+                    )
                     cv2.imshow(feed_id, cv2.cvtColor(vis, cv2.COLOR_RGB2BGR))
                 continue
 
             if not gt_z_printed:
                 cam_info_dbg = client.simGetCameraInfo(cam_name, vehicle_name=veh_name)
                 actual_height = gt[2] - cam_info_dbg.pose.position.z_val
-                print(f"  [DEBUG] Actor Z = {gt[2]:.2f}, Camera Z = {cam_info_dbg.pose.position.z_val:.2f}")
-                print(f"  [DEBUG] Actual camera-to-ground height = {actual_height:.2f}m  "
-                      f"(configured CCTV_HEIGHT_METERS = {CCTV_HEIGHT_METERS})")
+                print(
+                    f"  [DEBUG] Actor Z = {gt[2]:.2f}, Camera Z = {cam_info_dbg.pose.position.z_val:.2f}"
+                )
+                print(
+                    f"  [DEBUG] Actual camera-to-ground height = {actual_height:.2f}m  "
+                    f"(configured CCTV_HEIGHT_METERS = {CCTV_HEIGHT_METERS})"
+                )
                 gt_z_printed = True
 
             # Compute actual camera height above ground from AirSim poses
@@ -353,8 +410,10 @@ def run_evaluation(
                 mask_area = len(y_indices)
                 frame_area = frame.shape[0] * frame.shape[1]
                 if mask_area < frame_area * MIN_MASK_AREA_FRACTION:
-                    print(f"  [DEBUG] {feed_id}: detection {idx} skipped — mask too small "
-                          f"({mask_area}/{frame_area} = {mask_area/frame_area:.4f})")
+                    print(
+                        f"  [DEBUG] {feed_id}: detection {idx} skipped — mask too small "
+                        f"({mask_area}/{frame_area} = {mask_area / frame_area:.4f})"
+                    )
                     continue
 
                 # Use bottom-center of mask (feet), not centroid (torso),
@@ -365,10 +424,14 @@ def run_evaluation(
 
                 try:
                     est_pos = get_coords_from_lite_mono(
-                        client, cam_name,
-                        cx, cy,
-                        frame.shape[1], frame.shape[0],
-                        dv, cctv_height_actual,
+                        client,
+                        cam_name,
+                        cx,
+                        cy,
+                        frame.shape[1],
+                        frame.shape[0],
+                        dv,
+                        cctv_height_actual,
                         vehicle_name=veh_name,
                     )
                     ex, ey = est_pos.x_val, est_pos.y_val
@@ -387,23 +450,41 @@ def run_evaluation(
                 skip_stats["no_projection"] += 1
                 print(f"  [DEBUG] {feed_id}: all projections failed")
                 if show:
-                    cv2.putText(vis, f"PROJECTION FAILED", (10, 30),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                    cv2.putText(
+                        vis,
+                        f"PROJECTION FAILED",
+                        (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.7,
+                        (0, 0, 255),
+                        2,
+                    )
                     cv2.imshow(feed_id, cv2.cvtColor(vis, cv2.COLOR_RGB2BGR))
                 continue
 
             # Skip if best match is too far — likely not the target actor
             if best_err_2d > MATCH_DISTANCE_THRESHOLD_M:
                 skip_stats["too_far"] += 1
-                print(f"  [DEBUG] {feed_id}: best match {best_err_2d:.1f}m away "
-                      f"(threshold {MATCH_DISTANCE_THRESHOLD_M}m) — skipping as likely not target")
+                print(
+                    f"  [DEBUG] {feed_id}: best match {best_err_2d:.1f}m away "
+                    f"(threshold {MATCH_DISTANCE_THRESHOLD_M}m) — skipping as likely not target"
+                )
                 if show:
                     for idx in person_indices:
                         m = results[0].masks.data[idx].cpu().numpy()
                         m = cv2.resize(m, (vis.shape[1], vis.shape[0]))
-                        vis[m > 0.5] = (vis[m > 0.5] * 0.5 + np.array([0, 0, 255]) * 0.5).astype(np.uint8)
-                    cv2.putText(vis, f"TOO FAR ({best_err_2d:.1f}m) — SKIPPED", (10, 30),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                        vis[m > 0.5] = (vis[m > 0.5] * 0.5 + np.array([0, 0, 255]) * 0.5).astype(
+                            np.uint8
+                        )
+                    cv2.putText(
+                        vis,
+                        f"TOO FAR ({best_err_2d:.1f}m) — SKIPPED",
+                        (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.7,
+                        (0, 0, 255),
+                        2,
+                    )
                     cv2.imshow(feed_id, cv2.cvtColor(vis, cv2.COLOR_RGB2BGR))
                 continue
 
@@ -420,8 +501,7 @@ def run_evaluation(
             cam_info = client.simGetCameraInfo(cam_name, vehicle_name=veh_name)
             cam_pos = cam_info.pose.position
             cam_to_person = math.sqrt(
-                (cam_pos.x_val - gt[0]) ** 2 +
-                (cam_pos.y_val - gt[1]) ** 2,
+                (cam_pos.x_val - gt[0]) ** 2 + (cam_pos.y_val - gt[1]) ** 2,
             )
 
             record = {
@@ -442,9 +522,11 @@ def run_evaluation(
             records.append(record)
             sample_count += 1
 
-            print(f"  [{sample_count:3d}/{n_samples}] {feed_id}  "
-                  f"2D err={err_2d:6.2f}m  "
-                  f"depth={depth_val:.3f}  cam_dist={cam_to_person:.1f}m")
+            print(
+                f"  [{sample_count:3d}/{n_samples}] {feed_id}  "
+                f"2D err={err_2d:6.2f}m  "
+                f"depth={depth_val:.3f}  cam_dist={cam_to_person:.1f}m"
+            )
 
             # --- Live visualisation (per-camera window) ---
             if show:
@@ -452,13 +534,22 @@ def run_evaluation(
                 for idx in person_indices:
                     m = results[0].masks.data[idx].cpu().numpy()
                     m = cv2.resize(m, (vis.shape[1], vis.shape[0]))
-                    vis[m > 0.5] = (vis[m > 0.5] * 0.5 + np.array([255, 150, 0]) * 0.5).astype(np.uint8)
+                    vis[m > 0.5] = (vis[m > 0.5] * 0.5 + np.array([255, 150, 0]) * 0.5).astype(
+                        np.uint8
+                    )
 
                 # Highlight matched detection in green
                 cx_i, cy_i = int(center_x), int(center_y)
                 cv2.circle(vis, (cx_i, cy_i), 8, (0, 255, 0), -1)
-                cv2.putText(vis, "MATCHED", (cx_i + 12, cy_i - 5),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                cv2.putText(
+                    vis,
+                    "MATCHED",
+                    (cx_i + 12, cy_i - 5),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    (0, 255, 0),
+                    2,
+                )
 
                 # Info overlay
                 info_lines = [
@@ -468,8 +559,15 @@ def run_evaluation(
                     f"Detections: {len(person_indices)}",
                 ]
                 for li, line in enumerate(info_lines):
-                    cv2.putText(vis, line, (10, 25 + li * 25),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                    cv2.putText(
+                        vis,
+                        line,
+                        (10, 25 + li * 25),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.6,
+                        (255, 255, 255),
+                        2,
+                    )
 
                 cv2.imshow(feed_id, cv2.cvtColor(vis, cv2.COLOR_RGB2BGR))
 
@@ -488,17 +586,21 @@ def run_evaluation(
 
     # Final debug summary
     print(f"\n[EVAL] Finished: {sample_count}/{n_samples} samples in {attempt} attempts")
-    print(f"[EVAL] Skip reasons: "
-          f"no_frame={skip_stats['no_frame']}  "
-          f"no_detection={skip_stats['no_detection']}  "
-          f"no_person={skip_stats['no_person']}  "
-          f"no_gt={skip_stats['no_gt']}  "
-          f"no_projection={skip_stats['no_projection']}  "
-          f"too_far={skip_stats['too_far']}")
+    print(
+        f"[EVAL] Skip reasons: "
+        f"no_frame={skip_stats['no_frame']}  "
+        f"no_detection={skip_stats['no_detection']}  "
+        f"no_person={skip_stats['no_person']}  "
+        f"no_gt={skip_stats['no_gt']}  "
+        f"no_projection={skip_stats['no_projection']}  "
+        f"too_far={skip_stats['too_far']}"
+    )
 
     if sample_count < n_samples:
-        print(f"\n[WARN] Only collected {sample_count}/{n_samples} samples "
-              f"after {max_attempts} attempts")
+        print(
+            f"\n[WARN] Only collected {sample_count}/{n_samples} samples "
+            f"after {max_attempts} attempts"
+        )
 
     if show:
         cv2.destroyAllWindows()
@@ -512,6 +614,7 @@ def run_evaluation(
 # ---------------------------------------------------------------------------
 # Output — CSV and plots
 # ---------------------------------------------------------------------------
+
 
 def save_results(records: list[dict], output_dir: Path) -> None:
     """Save raw CSV, summary CSV, and visualisation plots."""
@@ -552,16 +655,16 @@ def save_results(records: list[dict], output_dir: Path) -> None:
     print(f"  Summary       → {summary_path}")
 
     # --- Print summary table ---
-    print(f"\n{'='*65}")
+    print(f"\n{'=' * 65}")
     print(f"  DEPTH ESTIMATION EVALUATION RESULTS")
-    print(f"{'='*65}")
+    print(f"{'=' * 65}")
     print(f"  Samples collected:  {summary['n_samples']}")
     print(f"  Mean 2D error:      {summary['mean_2d_error_m']:.3f} m")
     print(f"  Median 2D error:    {summary['median_2d_error_m']:.3f} m")
     print(f"  Std 2D error:       {summary['std_2d_error_m']:.3f} m")
     print(f"  Max 2D error:       {summary['max_2d_error_m']:.3f} m")
     print(f"  Min 2D error:       {summary['min_2d_error_m']:.3f} m")
-    print(f"{'='*65}")
+    print(f"{'=' * 65}")
 
     # --- Generate plots ---
     _generate_plots(records, summary, output_dir)
@@ -571,6 +674,7 @@ def _generate_plots(records: list[dict], summary: dict, output_dir: Path) -> Non
     """Generate all visualisation plots using matplotlib."""
     try:
         import matplotlib
+
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
     except ImportError:
@@ -616,10 +720,20 @@ def _generate_plots(records: list[dict], summary: dict, output_dir: Path) -> Non
     fig, ax = plt.subplots(figsize=(8, 5))
     err_2d = [r["err_2d"] for r in records]
     ax.hist(err_2d, bins=30, edgecolor="black", alpha=0.7, color="#2196F3")
-    ax.axvline(np.mean(err_2d), color="red", linestyle="--", linewidth=1.5,
-               label=f"Mean = {np.mean(err_2d):.2f} m")
-    ax.axvline(np.median(err_2d), color="orange", linestyle="--", linewidth=1.5,
-               label=f"Median = {np.median(err_2d):.2f} m")
+    ax.axvline(
+        np.mean(err_2d),
+        color="red",
+        linestyle="--",
+        linewidth=1.5,
+        label=f"Mean = {np.mean(err_2d):.2f} m",
+    )
+    ax.axvline(
+        np.median(err_2d),
+        color="orange",
+        linestyle="--",
+        linewidth=1.5,
+        label=f"Median = {np.median(err_2d):.2f} m",
+    )
     ax.set_xlabel("2D Position Error (m)")
     ax.set_ylabel("Count")
     ax.set_title("Distribution of 2D Projection Errors")
@@ -635,10 +749,12 @@ def _generate_plots(records: list[dict], summary: dict, output_dir: Path) -> Non
 # Aggregation — combine results from multiple environments
 # ---------------------------------------------------------------------------
 
+
 def aggregate_results() -> None:
     """Combine results.csv from all environment subdirectories into one report."""
     try:
         import matplotlib
+
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
     except ImportError:
@@ -649,8 +765,11 @@ def aggregate_results() -> None:
 
     # Find all per-env results
     all_records = []
-    env_dirs = [d for d in OUTPUT_ROOT.iterdir()
-                if d.is_dir() and d.name != "aggregate" and (d / "results.csv").exists()]
+    env_dirs = [
+        d
+        for d in OUTPUT_ROOT.iterdir()
+        if d.is_dir() and d.name != "aggregate" and (d / "results.csv").exists()
+    ]
 
     if not env_dirs:
         print("[AGGREGATE] No environment results found. Run evaluations first.")
@@ -663,8 +782,15 @@ def aggregate_results() -> None:
             for row in reader:
                 row["env"] = env_dir.name
                 # Convert numeric fields
-                for k in ["err_2d", "cam_to_person_dist", "depth_val",
-                           "est_x", "est_y", "gt_x", "gt_y"]:
+                for k in [
+                    "err_2d",
+                    "cam_to_person_dist",
+                    "depth_val",
+                    "est_x",
+                    "est_y",
+                    "gt_x",
+                    "gt_y",
+                ]:
                     if k in row:
                         row[k] = float(row[k])
                 all_records.append(row)
@@ -688,25 +814,29 @@ def aggregate_results() -> None:
     for env_name in envs:
         env_records = [r for r in all_records if r["env"] == env_name]
         errs_2d = [r["err_2d"] for r in env_records]
-        comparison.append({
-            "Environment": env_name,
-            "N": len(env_records),
-            "Mean 2D Error (m)": round(float(np.mean(errs_2d)), 3),
-            "Median 2D Error (m)": round(float(np.median(errs_2d)), 3),
-            "Std 2D Error (m)": round(float(np.std(errs_2d)), 3),
-            "Max 2D Error (m)": round(float(np.max(errs_2d)), 3),
-        })
+        comparison.append(
+            {
+                "Environment": env_name,
+                "N": len(env_records),
+                "Mean 2D Error (m)": round(float(np.mean(errs_2d)), 3),
+                "Median 2D Error (m)": round(float(np.median(errs_2d)), 3),
+                "Std 2D Error (m)": round(float(np.std(errs_2d)), 3),
+                "Max 2D Error (m)": round(float(np.max(errs_2d)), 3),
+            }
+        )
 
     # Add overall row
     all_2d = [r["err_2d"] for r in all_records]
-    comparison.append({
-        "Environment": "OVERALL",
-        "N": len(all_records),
-        "Mean 2D Error (m)": round(float(np.mean(all_2d)), 3),
-        "Median 2D Error (m)": round(float(np.median(all_2d)), 3),
-        "Std 2D Error (m)": round(float(np.std(all_2d)), 3),
-        "Max 2D Error (m)": round(float(np.max(all_2d)), 3),
-    })
+    comparison.append(
+        {
+            "Environment": "OVERALL",
+            "N": len(all_records),
+            "Mean 2D Error (m)": round(float(np.mean(all_2d)), 3),
+            "Median 2D Error (m)": round(float(np.median(all_2d)), 3),
+            "Std 2D Error (m)": round(float(np.std(all_2d)), 3),
+            "Max 2D Error (m)": round(float(np.max(all_2d)), 3),
+        }
+    )
 
     comp_path = agg_dir / "comparison_table.csv"
     comp_fields = list(comparison[0].keys())
@@ -717,15 +847,17 @@ def aggregate_results() -> None:
     print(f"  Comparison    → {comp_path}")
 
     # Print table
-    print(f"\n{'='*80}")
+    print(f"\n{'=' * 80}")
     print(f"  CROSS-ENVIRONMENT COMPARISON")
-    print(f"{'='*80}")
+    print(f"{'=' * 80}")
     print(f"  {'Environment':<15} {'N':>5} {'Mean 2D':>10} {'Median 2D':>10} {'Std':>8} {'Max':>8}")
-    print(f"  {'-'*58}")
+    print(f"  {'-' * 58}")
     for row in comparison:
-        print(f"  {row['Environment']:<15} {row['N']:>5} "
-              f"{row['Mean 2D Error (m)']:>9.3f}m {row['Median 2D Error (m)']:>9.3f}m "
-              f"{row['Std 2D Error (m)']:>7.3f}m {row['Max 2D Error (m)']:>7.3f}m")
+        print(
+            f"  {row['Environment']:<15} {row['N']:>5} "
+            f"{row['Mean 2D Error (m)']:>9.3f}m {row['Median 2D Error (m)']:>9.3f}m "
+            f"{row['Std 2D Error (m)']:>7.3f}m {row['Max 2D Error (m)']:>7.3f}m"
+        )
 
     # Plot: box plot by environment
     if plt is not None:
@@ -758,8 +890,9 @@ def aggregate_results() -> None:
             env_r = [r for r in all_records if r["env"] == env_name]
             dists = [r["cam_to_person_dist"] for r in env_r]
             errs = [r["err_2d"] for r in env_r]
-            ax.scatter(dists, errs, alpha=0.5, s=25, label=env_name,
-                       color=cmap(i / max(len(envs) - 1, 1)))
+            ax.scatter(
+                dists, errs, alpha=0.5, s=25, label=env_name, color=cmap(i / max(len(envs) - 1, 1))
+            )
         ax.set_xlabel("Camera-to-Person Distance (m)")
         ax.set_ylabel("2D Position Error (m)")
         ax.set_title("Projection Error vs Distance (All Environments)")
@@ -776,24 +909,36 @@ def aggregate_results() -> None:
 # Main
 # ---------------------------------------------------------------------------
 
+
 def main():
     parser = argparse.ArgumentParser(
         description="Evaluate depth estimation accuracy against AirSim ground truth",
     )
-    parser.add_argument("--samples", type=int, default=50,
-                        help="Number of samples to collect (default: 50)")
-    parser.add_argument("--cameras", nargs="+", default=None,
-                        help="Camera feed IDs to evaluate (default: all)")
-    parser.add_argument("--simulator", action="store_true",
-                        help="Use stock yolo11n-seg model instead of fine-tuned")
-    parser.add_argument("--env", type=str, default="default",
-                        help="Environment name (e.g. bridge, ship, railway)")
-    parser.add_argument("--show", action="store_true",
-                        help="Show live detection window during evaluation")
-    parser.add_argument("--setup", action="store_true",
-                        help="Auto-position drones around ThirdPersonCharacter before starting")
-    parser.add_argument("--aggregate", action="store_true",
-                        help="Aggregate results from all environments (no AirSim needed)")
+    parser.add_argument(
+        "--samples", type=int, default=50, help="Number of samples to collect (default: 50)"
+    )
+    parser.add_argument(
+        "--cameras", nargs="+", default=None, help="Camera feed IDs to evaluate (default: all)"
+    )
+    parser.add_argument(
+        "--simulator", action="store_true", help="Use stock yolo11n-seg model instead of fine-tuned"
+    )
+    parser.add_argument(
+        "--env", type=str, default="default", help="Environment name (e.g. bridge, ship, railway)"
+    )
+    parser.add_argument(
+        "--show", action="store_true", help="Show live detection window during evaluation"
+    )
+    parser.add_argument(
+        "--setup",
+        action="store_true",
+        help="Auto-position drones around ThirdPersonCharacter before starting",
+    )
+    parser.add_argument(
+        "--aggregate",
+        action="store_true",
+        help="Aggregate results from all environments (no AirSim needed)",
+    )
     args = parser.parse_args()
 
     if args.aggregate:

@@ -17,9 +17,11 @@ from src.services.event_logger import get_event_logger as _get_event_logger
 # Trigger history (lives in app state, not in FeedManager)
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class TriggerEvent:
     """A RED-zone intrusion event with snapshot and replay frames."""
+
     id: int
     feed_id: str
     timestamp: str
@@ -43,7 +45,7 @@ class TriggerStore:
     def add(self, event: TriggerEvent) -> None:
         self._triggers.append(event)
         if len(self._triggers) > self.MAX_HISTORY:
-            self._triggers = self._triggers[-self.MAX_HISTORY:]
+            self._triggers = self._triggers[-self.MAX_HISTORY :]
 
     def next_id(self) -> int:
         self._counter += 1
@@ -74,7 +76,7 @@ class TriggerStore:
 _feed_manager: FeedManager = FeedManager()
 _trigger_store: TriggerStore = TriggerStore()
 _config: Dict[str, Any] = {}
-_drone_api = None      # DroneAPIClient or None
+_drone_api = None  # DroneAPIClient or None
 _scene_segmenter = None  # SceneSegmenter or None
 _depth_estimator = None  # DepthEstimator or None
 
