@@ -2,7 +2,7 @@ from __future__ import absolute_import, division, print_function
 import torch
 import torch.nn as nn
 from collections import OrderedDict
-from timm.models.layers import trunc_normal_
+from timm.layers import trunc_normal_
 
 
 class PoseDecoder(nn.Module):
