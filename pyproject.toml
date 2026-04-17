@@ -71,6 +71,7 @@ source = ["src"]
 omit = [
     "src/ui/*",
     "src/*/Lite-Mono/*",
+    "src/eval/*",
     "*/__pycache__/*",
 ]
 

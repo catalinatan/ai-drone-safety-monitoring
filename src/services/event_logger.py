@@ -134,7 +134,7 @@ class EventLogger:
                 print(f"[EventLogger] Failed to read {file_path}: {e}")
 
         # Sort by timestamp descending (most recent first)
-        events.sort(key=lambda e: e.timestamp, reverse=True)
+        events.sort(key=lambda e: (e.timestamp, e.id), reverse=True)
         return events[:limit]
 
 
