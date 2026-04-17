@@ -147,11 +147,10 @@ build:docker:
   services:
     - name: docker:28-dind
       alias: docker
+      command: ["--tls=false", "--host=tcp://0.0.0.0:2375"]
   variables:
-    DOCKER_HOST: tcp://docker:2376
-    DOCKER_TLS_CERTDIR: "/certs"
-    DOCKER_TLS_VERIFY: "1"
-    DOCKER_CERT_PATH: "/certs/client"
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
     IMAGE_NAME: "$CI_REGISTRY_IMAGE"
     IMAGE_TAG: "$CI_COMMIT_SHA"
   before_script:
