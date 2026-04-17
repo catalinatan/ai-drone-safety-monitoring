@@ -170,7 +170,8 @@ build:docker:
         docker push "$IMAGE_NAME:latest"
       fi
   rules:
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-      when: on_success
     - if: $CI_COMMIT_BRANCH
-      when: manual
+      when: on_success
+  needs:
+    - job: lint
+    - job: test:unit
