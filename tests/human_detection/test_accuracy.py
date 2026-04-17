@@ -3,7 +3,7 @@ import numpy as np
 import cv2
 import glob
 import os
-from src.human_detection.detector import HumanDetector
+from src.detection.human_detector import HumanDetector
 
 
 def calculate_iou(mask1, mask2):
@@ -55,6 +55,8 @@ def test_dataset_accuracy():
     and checks if IoU > 0.5
     """
     image_paths = glob.glob("data/human_images/*.jpg")
+    if not image_paths:
+        pytest.skip("No test images found in data/human_images/")
     detector = HumanDetector()
 
     scores = []

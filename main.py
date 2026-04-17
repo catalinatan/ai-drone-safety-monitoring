@@ -1,0 +1,115 @@
+"""
+Development entrypoint — launches all services with one command.
+
+Usage:
+    python main.py                   # backend (8001) + drone API (8000) + React UI (5173)
+    python main.py --no-ui           # backend + drone API only
+    python main.py --follow ship     # CCTV drones follow the ship object
+    python main.py --hover           # CCTV drones take off and hover at altitude
+    python main.py --no-mask         # disable human detection mask overlay on video feeds
+    python main.py --simulator       # use default yolo11n-seg model (no fine-tuning, for AirSim)
+
+Ctrl+C shuts down all processes cleanly.
+"""
+
+import subprocess
+import signal
+import sys
+import os
+import time
+
+REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
+UI_DIR = os.path.join(REPO_ROOT, "src", "ui")
+
+SERVICES = {
+    "drone":   {"cmd": [sys.executable, "-m", "uvicorn", "src.drone_server.app:app", "--host", "0.0.0.0", "--port", "8000"], "port": 8000},
+    "backend": {"cmd": [sys.executable, "-m", "uvicorn", "src.api.app:app", "--host", "0.0.0.0", "--port", "8001"], "port": 8001},
+}
+
+
+def main():
+    no_ui = "--no-ui" in sys.argv
+
+    # Parse --follow <label> (e.g., --follow ship)
+    follow_target = ""
+    if "--follow" in sys.argv:
+        idx = sys.argv.index("--follow")
+        if idx + 1 < len(sys.argv):
+            follow_target = sys.argv[idx + 1]
+        else:
+            print("[ERROR] --follow requires a target label (e.g., --follow ship)")
+            sys.exit(1)
+
+    procs: dict[str, subprocess.Popen] = {}
+
+    def shutdown(*_):
+        print("\n[main] Shutting down all services...")
+        for name, p in procs.items():
+            if p.poll() is None:
+                p.terminate()
+        for name, p in procs.items():
+            try:
+                p.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                p.kill()
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, shutdown)
+    if sys.platform != "win32":
+        signal.signal(signal.SIGTERM, shutdown)
+
+    print("=" * 60)
+    print("  AI SAFETY MONITORING — Development Server")
+    print("=" * 60)
+
+    no_mask = "--no-mask" in sys.argv
+    hover = "--hover" in sys.argv
+    simulator = "--simulator" in sys.argv
+
+    # Build env for subprocesses (pass flags to backend)
+    env = os.environ.copy()
+    if follow_target:
+        env["CCTV_FOLLOW_TARGET"] = follow_target
+    if hover:
+        env["CCTV_HOVER_DRONES"] = "1"
+    if no_mask:
+        env["DISABLE_MASK_OVERLAY"] = "1"
+    if simulator:
+        env["DETECTION_MODEL_PATH"] = "models/human_detection/yolo11n-seg.pt"
+
+    # Launch Python services
+    for name, svc in SERVICES.items():
+        procs[name] = subprocess.Popen(svc["cmd"], cwd=REPO_ROOT, env=env)
+        print(f"  [{name:8s}]  http://localhost:{svc['port']}")
+
+    # Launch React UI
+    if not no_ui:
+        npm = "npm.cmd" if sys.platform == "win32" else "npm"
+        procs["ui"] = subprocess.Popen([npm, "run", "dev"], cwd=UI_DIR)
+        print(f"  [{'ui':8s}]  http://localhost:5173")
+
+    if follow_target:
+        print(f"  [{'follow':8s}]  CCTV drones following '{follow_target}'")
+    if hover:
+        print(f"  [{'hover':8s}]  CCTV drones will hover at altitude")
+    if simulator:
+        print(f"  [{'model':8s}]  Human detection: yolo11n-seg (simulator, no fine-tuning)")
+    print("=" * 60)
+    print("  Press Ctrl+C to stop all services")
+    print("=" * 60)
+
+    # Monitor — if any process exits unexpectedly, shut everything down
+    try:
+        while True:
+            for name, p in list(procs.items()):
+                ret = p.poll()
+                if ret is not None:
+                    print(f"[main] {name} exited with code {ret}")
+                    shutdown()
+            time.sleep(0.5)
+    except KeyboardInterrupt:
+        shutdown()
+
+
+if __name__ == "__main__":
+    main()

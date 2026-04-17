@@ -2,8 +2,9 @@ import pytest
 import numpy as np
 import cv2
 import os
-from src.human_detection.detector import HumanDetector
-from src.human_detection.config import MODEL_PATH
+from src.detection.human_detector import HumanDetector
+from src.core.config import get_config as _get_config
+MODEL_PATH = _get_config().get("detection", {}).get("model_path", "yolo11n-seg.pt")
 
 
 # Marked as integration so it can be easily skipped if we want since this test may take longer

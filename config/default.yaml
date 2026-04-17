@@ -1,0 +1,71 @@
+# AI Safety Monitoring — Default Configuration
+# All values can be overridden by environment variables using UPPER_SNAKE_CASE keys.
+# e.g. DETECTION_FPS=15 overrides detection.fps
+
+# Server
+server:
+  backend_port: 8001
+  drone_api_port: 8000
+  frontend_port: 5173
+
+# Detection
+detection:
+  model_path: "models/human_detection/yolo11s-seg/weights/best.pt"
+  confidence_threshold: 0.25
+  inference_imgsz: 1280
+  fps: 30
+  warmup_frames: 20
+  min_person_area_pixels: 2
+
+# Zones
+zones:
+  overlap_threshold: 0.5
+  alarm_cooldown_seconds: 5.0
+  persistence_file: "data/zones.json"
+
+# Auto-Segmentation
+auto_segmentation:
+  scene_type: "bridge"       # "bridge" | "railway" | "ship" — applies to all CCTV feeds
+  enabled: false             # auto-refresh zones on interval
+  interval_seconds: 60.0
+  confidence: 0.25
+  simplify_epsilon: 2.0
+  min_contour_area: 40.0
+  models:
+    railway: "models/scene_segmentation/railway/railway_hazard_yolo11s-seg/weights/best.pt"
+    ship: "models/scene_segmentation/ship/ship_hazard_yolo11s-seg/weights/best.pt"
+    bridge: "models/scene_segmentation/bridge/bridge_hazard_yolo11s-seg/weights/best.pt"
+
+# Depth Estimation
+depth_estimation:
+  encoder_path: "models/depth_estimation/lite-mono-small_640x192/encoder.pth"
+  decoder_path: "models/depth_estimation/lite-mono-small_640x192/depth.pth"
+
+# Streaming
+streaming:
+  capture_fps: 30
+  stream_fps: 30
+
+# Drone
+drone:
+  api_url: "http://localhost:8000"
+  api_timeout: 5
+  safe_altitude: -10.0
+
+# Equipment deployment (drone-mounted payload)
+equipment:
+  enabled: false
+  label: "Lifevest"
+
+# CCTV Follow Mode (AirSim-specific — used when environment moves, e.g. ship)
+follow_mode:
+  target: ""          # "ship" | "railway" | "bridge" — empty = stationary
+  hover_drones: false
+  hover_altitude: -15.0
+  follow_interval: 0.01
+  follow_speed: 5.0
+  camera_mappings:
+    Drone2: "CCTV1"
+    Drone3: "CCTV2"
+    Drone4: "CCTV3"
+    Drone5: "CCTV4"

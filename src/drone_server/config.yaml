@@ -1,0 +1,12 @@
+safety:
+  max_altitude: 50  # meters
+
+navigation:
+  speed: 5.0  # m/s for automatic mode
+  position_tolerance: 2.0  # meters - how close to target before "arrived"
+  rth_altitude: -10.0  # NED metres — cruise altitude for return-to-home (negative = above ground)
+
+# AirSim vehicle name for the search/deployment drone.
+# Empty string = AirSim default vehicle (matches pre-refactor behavior).
+# Set to an explicit name (e.g. "Drone1") only if your settings.json requires it.
+vehicle_name: ""
