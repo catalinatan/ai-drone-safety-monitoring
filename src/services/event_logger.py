@@ -23,6 +23,7 @@ from typing import Any, List, Optional
 
 class AuditEventType(str, Enum):
     """Types of audit events."""
+
     ALARM_FIRED = "alarm_fired"
     DRONE_AUTO_DEPLOYED = "drone_auto_deployed"
     DRONE_MANUAL_DEPLOYED = "drone_manual_deployed"
@@ -32,6 +33,7 @@ class AuditEventType(str, Enum):
 @dataclass
 class AuditEvent:
     """Single audit event record."""
+
     id: int
     type: AuditEventType
     timestamp: str  # ISO 8601
@@ -132,7 +134,7 @@ class EventLogger:
                 print(f"[EventLogger] Failed to read {file_path}: {e}")
 
         # Sort by timestamp descending (most recent first)
-        events.sort(key=lambda e: e.timestamp, reverse=True)
+        events.sort(key=lambda e: (e.timestamp, e.id), reverse=True)
         return events[:limit]
 
 

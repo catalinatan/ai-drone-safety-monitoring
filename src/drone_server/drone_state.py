@@ -19,18 +19,18 @@ from typing import Optional, Tuple
 
 from pydantic import BaseModel
 
-
 # ---------------------------------------------------------------------------
 # Pydantic request models (used by FastAPI route handlers in app.py)
 # ---------------------------------------------------------------------------
+
 
 class ModeRequest(BaseModel):
     mode: str  # "manual" or "automatic"
 
 
 class GotoRequest(BaseModel):
-    x: float   # North (meters)
-    y: float   # East (meters)
+    x: float  # North (meters)
+    y: float  # East (meters)
     z: Optional[float] = -10.0  # Down (meters, negative = above ground)
 
 
@@ -43,6 +43,7 @@ class MoveRequest(BaseModel):
 # ---------------------------------------------------------------------------
 # Safety check
 # ---------------------------------------------------------------------------
+
 
 def check_safety(
     target_pos: Tuple[float, float, float],
@@ -72,6 +73,7 @@ def check_safety(
 # Shared state
 # ---------------------------------------------------------------------------
 
+
 class DroneState:
     """Thread-safe shared state between the API server thread and the
     control-loop thread.
@@ -85,20 +87,20 @@ class DroneState:
 
     def __init__(self) -> None:
         self.lock = threading.Lock()
-        self.mode: str = "automatic"                  # "manual" | "automatic"
+        self.mode: str = "automatic"  # "manual" | "automatic"
         self.target_position: Optional[Tuple[float, float, float]] = None
         self.home_position: Optional[Tuple[float, float, float]] = None
         self.is_navigating: bool = False
         self.nav_command_sent: bool = False
-        self.nav_task = None                          # AirSim future
+        self.nav_task = None  # AirSim future
         self.idle_hover_sent: bool = False
         self.should_stop: bool = False
         self.returning_home: bool = False
-        self.grounded: bool = True                   # True after RTH land / before first takeoff
+        self.grounded: bool = True  # True after RTH land / before first takeoff
         self.current_pose: Optional[Tuple[float, float, float]] = None
         self.manual_velocity: Tuple[float, float, float] = (0.0, 0.0, 0.0)
-        self.frame_forward = None                    # forward-looking camera (camera 3)
-        self.frame_down = None                       # downward-looking camera (camera 0)
+        self.frame_forward = None  # forward-looking camera (camera 3)
+        self.frame_down = None  # downward-looking camera (camera 0)
 
     # -- Mode --
 

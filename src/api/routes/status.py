@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
@@ -43,22 +42,24 @@ async def websocket_status(
 
     try:
         while True:
-            # Send status every 1 second
-            await asyncio.sleep(1.0)
+            # Send status every 250ms for responsive UI updates
+            await asyncio.sleep(0.25)
 
             # Collect status for all feeds
             feeds_status = []
             for feed_id in fm.feed_ids():
                 state = fm.get_state(feed_id)
                 if state:
-                    feeds_status.append({
-                        "feed_id": feed_id,
-                        "alarm_active": state.alarm_active,
-                        "caution_active": state.caution_active,
-                        "people_count": state.people_count,
-                        "danger_count": state.danger_count,
-                        "caution_count": state.caution_count,
-                    })
+                    feeds_status.append(
+                        {
+                            "feed_id": feed_id,
+                            "alarm_active": state.alarm_active,
+                            "caution_active": state.caution_active,
+                            "people_count": state.people_count,
+                            "danger_count": state.danger_count,
+                            "caution_count": state.caution_count,
+                        }
+                    )
 
             # Send as JSON
             message = {

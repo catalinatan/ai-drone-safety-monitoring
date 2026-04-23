@@ -10,7 +10,6 @@ from __future__ import annotations
 import os
 from typing import List, Optional
 
-import cv2
 import numpy as np
 import torch
 from ultralytics import YOLO
@@ -21,6 +20,7 @@ CLASS_ID_PERSON = 0
 
 def _get_cfg() -> dict:
     from src.core.config import get_config
+
     return get_config().get("detection", {})
 
 
@@ -86,7 +86,11 @@ class HumanDetector:
     ):
         cfg = _get_cfg()
         self._model_path = model_path or cfg.get("model_path", "yolo11n-seg.pt")
-        self._confidence = confidence_threshold if confidence_threshold is not None else cfg.get("confidence_threshold", 0.25)
+        self._confidence = (
+            confidence_threshold
+            if confidence_threshold is not None
+            else cfg.get("confidence_threshold", 0.25)
+        )
         self._imgsz = inference_imgsz or cfg.get("inference_imgsz", 1280)
 
         print(f"[HumanDetector] Loading model: {self._model_path}")
@@ -113,13 +117,17 @@ class HumanDetector:
             return
         print("[HumanDetector] CUDA warmup inference...")
         dummy = np.zeros((480, 640, 3), dtype=np.uint8)
-        self.model(dummy, conf=self._confidence, imgsz=self._imgsz,
-                   verbose=False, half=self._use_half, save=False)
+        self.model(
+            dummy,
+            conf=self._confidence,
+            imgsz=self._imgsz,
+            verbose=False,
+            half=self._use_half,
+            save=False,
+        )
         print("[HumanDetector] Warmup complete")
 
-    def _extract_person_masks(
-        self, result, frame_shape: tuple
-    ) -> List[np.ndarray]:
+    def _extract_person_masks(self, result, frame_shape: tuple) -> List[np.ndarray]:
         """Extract binary person masks from a single YOLO result.
 
         Optimised: filters on GPU, batch-resizes with F.interpolate (GPU),
@@ -131,21 +139,20 @@ class HumanDetector:
         h, w = frame_shape[:2]
 
         # Filter person indices on GPU (avoids per-mask CPU roundtrips)
-        person_idx = [i for i, box in enumerate(result.boxes)
-                      if int(box.cls[0]) == CLASS_ID_PERSON]
+        person_idx = [i for i, box in enumerate(result.boxes) if int(box.cls[0]) == CLASS_ID_PERSON]
         if not person_idx:
             return []
 
         import torch.nn.functional as F
 
-        masks_tensor = result.masks.data[person_idx].float()       # (N, mh, mw) GPU, ensure float
+        masks_tensor = result.masks.data[person_idx].float()  # (N, mh, mw) GPU, ensure float
         masks_resized = F.interpolate(
-            masks_tensor.unsqueeze(1),                             # (N, 1, mh, mw)
+            masks_tensor.unsqueeze(1),  # (N, 1, mh, mw)
             size=(h, w),
             mode="bilinear",
             align_corners=False,
-        ).squeeze(1)                                               # (N, h, w)
-        masks_np = (masks_resized > 0.5).byte().cpu().numpy()     # single transfer
+        ).squeeze(1)  # (N, h, w)
+        masks_np = (masks_resized > 0.5).byte().cpu().numpy()  # single transfer
         return [masks_np[i] for i in range(masks_np.shape[0])]
 
     def get_masks(self, frame: np.ndarray) -> List[np.ndarray]:

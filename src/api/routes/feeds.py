@@ -10,8 +10,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from src.api.dependencies import get_feed_manager, get_config
-from src.core.models import DetectionStatus, TargetCoordinate
+from src.api.dependencies import get_config, get_feed_manager
 from src.services.feed_manager import FeedManager
 
 router = APIRouter()
@@ -27,18 +26,20 @@ async def list_feeds(
     for feed_id in fm.feed_ids():
         state = fm.get_state(feed_id)
         snap = fm.snapshot(feed_id) or {}
-        feeds.append({
-            "id": feed_id,
-            "name": state.name,
-            "location": state.location,
-            "imageSrc": f"http://localhost:{backend_port}/video_feed/{feed_id}",
-            "zones": [z.model_dump() for z in fm.get_zones(feed_id)],
-            "isLive": True,
-            "status": snap,
-            "sceneType": state.scene_type,
-            "autoSegActive": state.auto_seg_active,
-            "detectionEnabled": state.detection_enabled,
-        })
+        feeds.append(
+            {
+                "id": feed_id,
+                "name": state.name,
+                "location": state.location,
+                "imageSrc": f"http://localhost:{backend_port}/video_feed/{feed_id}",
+                "zones": [z.model_dump() for z in fm.get_zones(feed_id)],
+                "isLive": True,
+                "status": snap,
+                "sceneType": state.scene_type,
+                "autoSegActive": state.auto_seg_active,
+                "detectionEnabled": state.detection_enabled,
+            }
+        )
     return {"feeds": feeds}
 
 

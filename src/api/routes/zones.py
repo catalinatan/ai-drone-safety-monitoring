@@ -40,6 +40,7 @@ async def update_zones(
 
     # Persist to disk (use configured path from zones in state)
     from src.core.config import get_config
+
     cfg = get_config()
     zones_file = cfg.get("zones", {}).get("persistence_file", "data/zones.json")
     save_zones(zones_file, feed_id, body.zones)
@@ -51,7 +52,7 @@ async def update_zones(
 def trigger_auto_segment(
     feed_id: str,
     fm: FeedManager = Depends(get_feed_manager),
-    segmenter = Depends(get_scene_segmenter),
+    segmenter=Depends(get_scene_segmenter),
 ):
     state = fm.get_state(feed_id)
     if state is None:

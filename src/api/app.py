@@ -17,7 +17,7 @@ from __future__ import annotations
 import os
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, Future
+from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from typing import Any, Dict
 
@@ -31,25 +31,26 @@ from src.core.config import get_config, get_feeds_config
 from src.hardware import create_camera_backend
 from src.services.feed_manager import FeedManager
 
-
 # ---------------------------------------------------------------------------
 # Projection factory
 # ---------------------------------------------------------------------------
 
-def _create_projection(feed_id: str, feed_def: dict, cfg: dict) -> "ProjectionBackend":
+
+def _create_projection(feed_id: str, feed_def: dict, cfg: dict):
     """
     Create the appropriate projection backend for a feed.
 
     AirSim cameras get AirSimProjection (client set later from detection thread).
     Config-based cameras get ConfigProjection using position/orientation from feeds.yaml.
     """
-    from src.spatial.projection_base import ProjectionBackend
+
     camera_type = feed_def.get("camera", {}).get("type", "")
     safe_z = cfg.get("drone", {}).get("safe_altitude", -10.0)
     cctv_height = cfg.get("detection", {}).get("cctv_height_meters", 10.0)
 
     if camera_type == "airsim":
         from src.spatial.airsim_projection import AirSimProjection
+
         params = feed_def.get("camera", {}).get("params", {})
         return AirSimProjection(
             camera_name=params.get("camera_name", "0"),
@@ -60,7 +61,6 @@ def _create_projection(feed_id: str, feed_def: dict, cfg: dict) -> "ProjectionBa
         )
     else:
         from src.spatial.config_projection import ConfigProjection
-        from src.spatial.gps_utils import gps_to_ned
 
         pos_cfg = feed_def.get("position", {})
         ori_cfg = feed_def.get("orientation", {})
@@ -101,10 +101,12 @@ def _create_projection(feed_id: str, feed_def: dict, cfg: dict) -> "ProjectionBa
 # Background threads
 # ---------------------------------------------------------------------------
 
+
 def _capture_loop(fm: FeedManager, cfg: Dict[str, Any]) -> None:
     """Continuously grab frames from all registered camera backends."""
-    import cv2
     from datetime import datetime
+
+    import cv2
 
     fps = cfg.get("streaming", {}).get("capture_fps", 30)
     interval = 1.0 / max(1, fps)
@@ -139,8 +141,9 @@ def _capture_loop(fm: FeedManager, cfg: Dict[str, Any]) -> None:
                 jpeg_bytes = buf.tobytes() if buf is not None else None
                 timestamp = datetime.utcnow().isoformat() + "Z"
 
-                fm.store_frame(feed_id, frame, position=position,
-                               jpeg_bytes=jpeg_bytes, timestamp=timestamp)
+                fm.store_frame(
+                    feed_id, frame, position=position, jpeg_bytes=jpeg_bytes, timestamp=timestamp
+                )
             except Exception as e:
                 print(f"[CAPTURE] {feed_id}: {e}")
         # Deadline-based sleep: account for time spent capturing
@@ -169,9 +172,11 @@ def _drone_status_loop(
                     nav["is_navigating"] = False
                 # Reset auto-deploy gate only when drone is grounded at home
                 # (after RTH + landing). This is the ONLY path back to auto-deploy.
-                if (nav["first_auto_deployed"]
-                        and status.get("grounded", False)
-                        and status.get("mode") == "automatic"):
+                if (
+                    nav["first_auto_deployed"]
+                    and status.get("grounded", False)
+                    and status.get("mode") == "automatic"
+                ):
                     print("[DRONE] Drone grounded at home — auto-deploy re-enabled")
                     nav["first_auto_deployed"] = False
         except Exception as e:
@@ -206,17 +211,22 @@ def _detection_loop(
     if depth_estimator is not None:
         try:
             import airsim as _airsim
+
             _depth_airsim_client = _airsim.MultirotorClient()
             _depth_airsim_client.confirmConnection()
             print("[DETECTION] Dedicated AirSim client for depth coordinate lookup connected")
             # Wire the AirSim client into any AirSimProjection backends
             if projections:
                 from src.spatial.airsim_projection import AirSimProjection
+
                 for _proj in projections.values():
                     if isinstance(_proj, AirSimProjection):
                         _proj.set_client(_depth_airsim_client)
         except Exception as _e:
-            print(f"[DETECTION] Could not create dedicated AirSim client: {_e} — will use camera position fallback")
+            print(
+                f"[DETECTION] Could not create dedicated AirSim client: {_e} "
+                "— will use camera position fallback"
+            )
 
     det_cfg = cfg.get("detection", {})
     fps = det_cfg.get("fps", 10)
@@ -243,6 +253,7 @@ def _detection_loop(
     def encode_frame_jpeg(frame):
         """Encode numpy array as JPEG bytes."""
         import cv2
+
         _, buf = cv2.imencode(".jpg", frame)
         return buf.tobytes() if buf is not None else b""
 
@@ -287,7 +298,11 @@ def _detection_loop(
             )
 
             return projection.pixel_to_world(
-                center_x, center_y, metric_depth, frame.shape[1], frame.shape[0],
+                center_x,
+                center_y,
+                depth_val,
+                frame.shape[1],
+                frame.shape[0],
             )
         except Exception as e:
             print(f"[DETECTION] Projection failed: {e}, using camera position")
@@ -438,7 +453,8 @@ def _detection_loop(
                                 np.maximum(_dmask, _dm, out=_dmask)
                             if _dmask.shape[:2] != trigger_frame.shape[:2]:
                                 _dmask = _cv2.resize(
-                                    _dmask, (trigger_frame.shape[1], trigger_frame.shape[0]),
+                                    _dmask,
+                                    (trigger_frame.shape[1], trigger_frame.shape[0]),
                                     interpolation=_cv2.INTER_NEAREST,
                                 )
                             _mb = _dmask.astype(bool)
@@ -464,7 +480,8 @@ def _detection_loop(
                                 # Trigger frame — use the danger-mask overlay
                                 # (red, already composited onto trigger_frame).
                                 _, _buf = _cv2.imencode(
-                                    ".jpg", trigger_frame,
+                                    ".jpg",
+                                    trigger_frame,
                                     [_cv2.IMWRITE_JPEG_QUALITY, 70],
                                 )
                                 if _buf is not None:
@@ -488,7 +505,8 @@ def _detection_loop(
                                         + np.array([255, 255, 0], dtype=np.float32) * 0.4
                                     ).astype(np.uint8)
                                     _, _buf = _cv2.imencode(
-                                        ".jpg", _dec,
+                                        ".jpg",
+                                        _dec,
                                         [_cv2.IMWRITE_JPEG_QUALITY, 70],
                                     )
                                     if _buf is not None:
@@ -497,8 +515,12 @@ def _detection_loop(
                             replay.append((_ts, _jpeg))
 
                         coords = get_person_coords(
-                            fm, feed_id, frame, danger_masks,
-                            depth_estimator, projections,
+                            fm,
+                            feed_id,
+                            frame,
+                            danger_masks,
+                            depth_estimator,
+                            projections,
                         )
 
                         event = deps.TriggerEvent(
@@ -515,19 +537,27 @@ def _detection_loop(
                         # Auto-deploy only for the very first trigger.
                         # After that, only manual "Redirect to this Location" can move the drone.
                         # Auto-deploy re-enables only after RTH + landing (grounded + automatic).
-                        if (drone_api is not None
-                                and not nav["is_navigating"]
-                                and not nav["first_auto_deployed"]):
+                        if (
+                            drone_api is not None
+                            and not nav["is_navigating"]
+                            and not nav["first_auto_deployed"]
+                        ):
                             now = time.time()
                             if now - nav["last_deployment_time"] > cooldown:
                                 tx, ty, tz = coords
-                                print(f"[DRONE] First auto-deploy to ({tx:.2f}, {ty:.2f}, {tz:.2f}) for {feed_id}")
+                                print(
+                                    f"[DRONE] First auto-deploy to "
+                                    f"({tx:.2f}, {ty:.2f}, {tz:.2f}) for {feed_id}"
+                                )
                                 if drone_api.goto_position(tx, ty, tz):
                                     nav["last_deployment_time"] = now
                                     nav["is_navigating"] = True
                                     nav["first_auto_deployed"] = True
                                     event.deployed = True
-                                    print("[DRONE] Deployment command sent — subsequent deploys are manual only")
+                                    print(
+                                        "[DRONE] Deployment command sent "
+                                    "— subsequent deploys are manual only"
+                                    )
                                 else:
                                     print("[DRONE] Deployment command failed")
 
@@ -561,7 +591,8 @@ def _detection_loop(
                 f"avg {avg_fps:.1f} FPS | "
                 f"inference {avg_infer:.1f}ms | "
                 f"post {avg_post:.1f}ms "
-                f"[zone {avg_zone:.1f} | mask {avg_mask:.1f} | update {avg_update:.1f} | alarm {avg_alarm:.1f} | drone {avg_drone:.1f}] | "
+                f"[zone {avg_zone:.1f} | mask {avg_mask:.1f} | update {avg_update:.1f} | "
+                f"alarm {avg_alarm:.1f} | drone {avg_drone:.1f}] | "
                 f"lock-wait {avg_lock:.1f}ms | "
                 f"total {avg_total:.1f}ms"
             )
@@ -619,7 +650,10 @@ def _auto_seg_loop(
         # If scene type changed, reset initial segmentation so all feeds re-segment
         if scene_type != last_scene_type:
             if last_scene_type is not None:
-                print(f"[AUTO-SEG] Scene type changed: {last_scene_type} -> {scene_type}, re-segmenting all feeds")
+                print(
+                    f"[AUTO-SEG] Scene type changed: {last_scene_type} "
+                    f"-> {scene_type}, re-segmenting all feeds"
+                )
                 initial_seg_done.clear()
             last_scene_type = scene_type
 
@@ -647,7 +681,9 @@ def _auto_seg_loop(
                             gpu_lock.release()
                     if zone_dicts:
                         zones = [Zone(**z) for z in zone_dicts]
-                        fm.update_zones(feed_id, zones, frame.shape[1], frame.shape[0], source="auto")
+                        fm.update_zones(
+                            feed_id, zones, frame.shape[1], frame.shape[0], source="auto"
+                        )
                         state.auto_seg_active = True
                         state.last_auto_seg_time = now
                     initial_seg_done.add(feed_id)
@@ -718,12 +754,15 @@ def _follow_mode_loop(
 
     interval = follow_cfg.get("follow_interval", 0.01)
 
-    print(f"[FOLLOW] Following '{target}' — teleporting {list(camera_mappings.keys())} "
-          f"to Camera Actors {list(camera_mappings.values())} @ {interval:.3f}s interval")
+    print(
+        f"[FOLLOW] Following '{target}' — teleporting {list(camera_mappings.keys())} "
+        f"to Camera Actors {list(camera_mappings.values())} @ {interval:.3f}s interval"
+    )
 
     # Dedicated AirSim client to avoid IOLoop conflicts with the capture thread
     try:
         import airsim
+
         client = airsim.MultirotorClient()
         client.confirmConnection()
         print("[FOLLOW] Dedicated AirSim client connected")
@@ -775,6 +814,7 @@ def _follow_mode_loop(
 # ---------------------------------------------------------------------------
 # Lifespan
 # ---------------------------------------------------------------------------
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -844,7 +884,9 @@ async def lifespan(app: FastAPI):
     # Store on app.state so routes can access projection backends
     app.state.projections = projections
 
-    print(f"[INIT] {len(feeds_cfg)} feed(s) registered — connections deferred to background threads")
+    print(
+        f"[INIT] {len(feeds_cfg)} feed(s) registered — connections deferred to background threads"
+    )
 
     # Start capture thread EARLY so cameras connect and accumulate warmup
     # frames while models load (models can take minutes on first run).
@@ -880,6 +922,7 @@ async def lifespan(app: FastAPI):
     # Connect to drone API
     try:
         from src.backend.drone_client import DroneAPIClient
+
         drone_api = DroneAPIClient()  # reads url/timeout from config/default.yaml
         if drone_api.check_connection():
             deps.set_drone_api(drone_api)
@@ -896,14 +939,17 @@ async def lifespan(app: FastAPI):
 
     def _load_human_detector():
         from src.detection.human_detector import HumanDetector
+
         return HumanDetector()
 
     def _load_scene_segmenter():
         from src.detection.scene_segmenter import SceneSegmenter
+
         return SceneSegmenter()
 
     def _load_depth_estimator():
         from src.detection.depth_estimator_wrapper import DepthEstimator
+
         enc_path = cfg.get("depth_estimation", {}).get("encoder_path")
         dec_path = cfg.get("depth_estimation", {}).get("decoder_path")
         if enc_path and dec_path:
@@ -947,8 +993,8 @@ async def lifespan(app: FastAPI):
     pipelines = {}
     if detector is not None:
         try:
-            from src.core.detection_pipeline import DetectionPipeline
             from src.core.alarm import AlarmState
+            from src.core.detection_pipeline import DetectionPipeline
 
             cooldown = cfg.get("zones", {}).get("alarm_cooldown_seconds", 5.0)
             warmup = cfg.get("detection", {}).get("warmup_frames", 20)
@@ -981,7 +1027,17 @@ async def lifespan(app: FastAPI):
     if pipelines:
         detection_thread = threading.Thread(
             target=_detection_loop,
-            args=(fm, cfg, pipelines, deps.get_trigger_store(), depth_estimator, drone_api, gpu_lock, nav, projections),
+            args=(
+                fm,
+                cfg,
+                pipelines,
+                deps.get_trigger_store(),
+                depth_estimator,
+                drone_api,
+                gpu_lock,
+                nav,
+                projections,
+            ),
             daemon=True,
             name="detection",
         )
@@ -1027,6 +1083,7 @@ async def lifespan(app: FastAPI):
 # ---------------------------------------------------------------------------
 # App factory
 # ---------------------------------------------------------------------------
+
 
 def create_app() -> FastAPI:
     app = FastAPI(

@@ -7,7 +7,6 @@ The Lite-Mono vendored code remains at src/cctv_monitoring/Lite-Mono/.
 
 from __future__ import annotations
 
-import os
 import sys
 from collections import OrderedDict
 from pathlib import Path
@@ -29,10 +28,10 @@ if _LITEMONO_ROOT not in sys.path:
 
 from networks.depth_encoder import LiteMono  # noqa: E402 (vendor import)
 
-
 # ---------------------------------------------------------------------------
 # Decoder
 # ---------------------------------------------------------------------------
+
 
 class _Conv3x3(nn.Module):
     def __init__(self, in_channels: int, out_channels: int, use_refl: bool = True):
@@ -117,6 +116,7 @@ class DepthDecoder(nn.Module):
 # System
 # ---------------------------------------------------------------------------
 
+
 class LiteMonoDepthSystem(nn.Module):
     def __init__(self, encoder, decoder, skip_adapters=None):
         super().__init__()
@@ -138,6 +138,7 @@ class LiteMonoDepthSystem(nn.Module):
 # ---------------------------------------------------------------------------
 # Loader
 # ---------------------------------------------------------------------------
+
 
 def load_lite_mono_model(
     encoder_path: str,
@@ -207,6 +208,7 @@ def load_lite_mono_model(
 # ---------------------------------------------------------------------------
 # Inference
 # ---------------------------------------------------------------------------
+
 
 def run_lite_mono_inference(model: LiteMonoDepthSystem, img_rgb: np.ndarray) -> np.ndarray:
     """

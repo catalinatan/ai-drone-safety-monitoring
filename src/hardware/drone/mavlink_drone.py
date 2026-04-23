@@ -22,8 +22,8 @@ class MAVLinkDrone(DroneBackend):
 
     # Mode name → MAVLink mode number (ArduPilot/PX4 compatible mappings)
     _MODE_MAP = {
-        "automatic": 4,    # GUIDED mode
-        "manual": 0,       # STABILIZE mode
+        "automatic": 4,  # GUIDED mode
+        "manual": 0,  # STABILIZE mode
     }
 
     def __init__(self, connection_string: str = "udp:127.0.0.1:14550") -> None:
@@ -95,18 +95,20 @@ class MAVLinkDrone(DroneBackend):
 
             # Send waypoint in LOCAL_NED frame
             self._vehicle.mav.mission_item_int_send(
-                self._system_id,        # target_system
-                self._component_id,     # target_component
-                0,                      # seq (mission item index)
+                self._system_id,  # target_system
+                self._component_id,  # target_component
+                0,  # seq (mission item index)
                 mavutil_module.mavlink.MAV_FRAME_LOCAL_NED,
                 mavutil_module.mavlink.MAV_CMD_NAV_WAYPOINT,
-                0,                      # current
-                1,                      # autocontinue
-                0,                      # param1 (hold time) — 0 means default
-                0, 0, 0,                # param2-4 (unused)
+                0,  # current
+                1,  # autocontinue
+                0,  # param1 (hold time) — 0 means default
+                0,
+                0,
+                0,  # param2-4 (unused)
                 int(position.x * 1e4),  # x_int (latitude in 1e-7, but LOCAL_NED uses meters × 1e4)
                 int(position.y * 1e4),  # y_int
-                position.z,             # z (altitude in meters, negative = above)
+                position.z,  # z (altitude in meters, negative = above)
             )
             self._is_navigating = True
             return True
@@ -223,7 +225,13 @@ class MAVLinkDrone(DroneBackend):
                 self._component_id,
                 mavutil_module.mavlink.MAV_CMD_NAV_RETURN_TO_LAUNCH,
                 0,  # confirmation
-                0, 0, 0, 0, 0, 0, 0,  # params 1-7 (unused for RTH)
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,  # params 1-7 (unused for RTH)
             )
             return True
         except Exception as e:

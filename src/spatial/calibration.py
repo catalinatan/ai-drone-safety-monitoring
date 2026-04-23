@@ -50,11 +50,14 @@ def solve_camera_orientation(
 
     # Camera intrinsics from FOV
     focal_len = (frame_w / 2) / np.tan(np.deg2rad(fov) / 2)
-    camera_matrix = np.array([
-        [focal_len, 0, frame_w / 2],
-        [0, focal_len, frame_h / 2],
-        [0, 0, 1],
-    ], dtype=np.float64)
+    camera_matrix = np.array(
+        [
+            [focal_len, 0, frame_w / 2],
+            [0, focal_len, frame_h / 2],
+            [0, 0, 1],
+        ],
+        dtype=np.float64,
+    )
     dist_coeffs = np.zeros(4)  # assume no lens distortion
 
     # Convert world points to camera-relative (subtract camera position)

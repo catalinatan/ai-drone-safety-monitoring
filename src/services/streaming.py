@@ -6,11 +6,8 @@ No threading; these are pure transform functions used by the video route.
 
 from __future__ import annotations
 
-from typing import Iterator
-
 import cv2
 import numpy as np
-
 
 _BOUNDARY = b"--frame\r\nContent-Type: image/jpeg\r\n\r\n"
 _CRLF = b"\r\n"

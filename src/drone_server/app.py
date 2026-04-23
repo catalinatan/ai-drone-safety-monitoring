@@ -30,7 +30,6 @@ from fastapi.responses import StreamingResponse
 from .control_loop import drone_control_loop
 from .drone_state import GotoRequest, ModeRequest, MoveRequest, drone_state
 
-
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
@@ -44,6 +43,7 @@ with open(_CONFIG_PATH, "r") as _f:
 # MJPEG streaming helpers
 # ---------------------------------------------------------------------------
 
+
 def _generate_frames_forward():
     """Yield MJPEG frames from the forward-looking camera (camera 3)."""
     while True:
@@ -51,10 +51,7 @@ def _generate_frames_forward():
         if frame is not None:
             ret, buffer = cv2.imencode(".jpg", frame)
             if ret:
-                yield (
-                    b"--frame\r\n"
-                    b"Content-Type: image/jpeg\r\n\r\n" + buffer.tobytes() + b"\r\n"
-                )
+                yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + buffer.tobytes() + b"\r\n")
         time.sleep(0.033)
 
 
@@ -65,10 +62,7 @@ def _generate_frames_down():
         if frame is not None:
             ret, buffer = cv2.imencode(".jpg", frame)
             if ret:
-                yield (
-                    b"--frame\r\n"
-                    b"Content-Type: image/jpeg\r\n\r\n" + buffer.tobytes() + b"\r\n"
-                )
+                yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + buffer.tobytes() + b"\r\n")
         time.sleep(0.033)
 
 
@@ -76,15 +70,16 @@ def _generate_frames_down():
 # Lifespan
 # ---------------------------------------------------------------------------
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup: connect to AirSim and launch the control loop thread.
     Shutdown: signal the loop to stop and wait for the drone to land."""
-    client = None
     control_thread = None
 
     try:
-        import airsim  # just verify airsim is installed; client created inside the loop thread
+        import airsim  # noqa: F401  # verify airsim is installed; client created inside the loop thread
+
         control_thread = threading.Thread(
             target=drone_control_loop,
             args=(drone_state, None, _cfg),  # None: loop creates its own client
@@ -112,6 +107,7 @@ async def lifespan(app: FastAPI):
 # ---------------------------------------------------------------------------
 # FastAPI application
 # ---------------------------------------------------------------------------
+
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Drone Control API", lifespan=lifespan)
@@ -160,7 +156,10 @@ def create_app() -> FastAPI:
         if drone_state.get_returning_home():
             raise HTTPException(
                 status_code=409,
-                detail="Drone is returning home. New goto commands are blocked until landing completes.",
+                detail=(
+                    "Drone is returning home. New goto commands are blocked "
+                    "until landing completes."
+                ),
             )
 
         target_ned = (request.x, request.y, request.z)

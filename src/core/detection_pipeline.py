@@ -7,44 +7,46 @@ Pure orchestration layer: no I/O, no threading. All dependencies are injected.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List, Optional, Protocol
+from typing import List, Protocol
 
 import numpy as np
 
 from src.core.alarm import AlarmState
 from src.core.zone_manager import ZoneManager
 
-
 # ---------------------------------------------------------------------------
 # Result type
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class DetectionResult:
     """Result of processing one frame through the pipeline."""
+
     people_count: int = 0
-    alarm_active: bool = False     # RED zone intrusion
-    caution_active: bool = False   # YELLOW zone intrusion
-    danger_count: int = 0          # People in RED zones
-    caution_count: int = 0         # People in YELLOW zones
-    person_masks: List[np.ndarray] = field(default_factory=list)   # All detected people
+    alarm_active: bool = False  # RED zone intrusion
+    caution_active: bool = False  # YELLOW zone intrusion
+    danger_count: int = 0  # People in RED zones
+    caution_count: int = 0  # People in YELLOW zones
+    person_masks: List[np.ndarray] = field(default_factory=list)  # All detected people
     danger_masks: List[np.ndarray] = field(default_factory=list)
     caution_masks: List[np.ndarray] = field(default_factory=list)
-    alarm_fired: bool = False      # True if alarm.trigger() returned True this cycle
+    alarm_fired: bool = False  # True if alarm.trigger() returned True this cycle
 
 
 # ---------------------------------------------------------------------------
 # Detector protocol — any object with get_masks() satisfies this
 # ---------------------------------------------------------------------------
 
+
 class DetectorProtocol(Protocol):
-    def get_masks(self, frame: np.ndarray) -> List[np.ndarray]:
-        ...
+    def get_masks(self, frame: np.ndarray) -> List[np.ndarray]: ...
 
 
 # ---------------------------------------------------------------------------
 # Pipeline
 # ---------------------------------------------------------------------------
+
 
 class DetectionPipeline:
     """

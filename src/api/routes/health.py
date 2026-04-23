@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, Depends
 
-from src.api.dependencies import get_feed_manager, get_drone_api
+from src.api.dependencies import get_drone_api, get_feed_manager
 from src.services.feed_manager import FeedManager
 
 router = APIRouter()

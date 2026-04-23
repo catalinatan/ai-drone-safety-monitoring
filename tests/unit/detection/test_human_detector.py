@@ -39,6 +39,7 @@ class TestHumanDetector:
 
     @patch("src.detection.human_detector.YOLO")
     def test_get_masks_person_detected(self, mock_yolo):
+        import torch
         from src.detection.human_detector import HumanDetector, CLASS_ID_PERSON
 
         # Simulate one person detection
@@ -46,12 +47,9 @@ class TestHumanDetector:
         mock_box = MagicMock()
         mock_box.cls = [float(CLASS_ID_PERSON)]
 
-        raw_mask = np.ones((10, 10), dtype=np.float32)
-        mock_mask_wrapper = MagicMock()
-        mock_mask_wrapper.cpu.return_value.numpy.return_value = raw_mask
-
+        # masks.data must be a tensor so list-indexing (data[person_idx]) works
         mock_result.boxes = [mock_box]
-        mock_result.masks.data = [mock_mask_wrapper]
+        mock_result.masks.data = torch.ones((1, 10, 10), dtype=torch.float32)
         mock_yolo.return_value.return_value = [mock_result]
 
         detector = HumanDetector(model_path="dummy.pt")
@@ -64,18 +62,15 @@ class TestHumanDetector:
 
     @patch("src.detection.human_detector.YOLO")
     def test_get_masks_non_person_class_ignored(self, mock_yolo):
+        import torch
         from src.detection.human_detector import HumanDetector
 
         mock_result = MagicMock()
         mock_box = MagicMock()
         mock_box.cls = [2.0]  # Not person (class 0)
 
-        raw_mask = np.ones((10, 10), dtype=np.float32)
-        mock_mask_wrapper = MagicMock()
-        mock_mask_wrapper.cpu.return_value.numpy.return_value = raw_mask
-
         mock_result.boxes = [mock_box]
-        mock_result.masks.data = [mock_mask_wrapper]
+        mock_result.masks.data = torch.ones((1, 10, 10), dtype=torch.float32)
         mock_yolo.return_value.return_value = [mock_result]
 
         detector = HumanDetector(model_path="dummy.pt")

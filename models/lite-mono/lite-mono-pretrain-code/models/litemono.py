@@ -6,8 +6,8 @@ from torch import nn
 import torchvision.models as models
 import torch.utils.model_zoo as model_zoo
 import torch.nn.functional as F
-from timm.models.layers import DropPath
-from timm.models.layers import trunc_normal_
+from timm.layers import DropPath
+from timm.layers import trunc_normal_
 import math
 import torch.cuda
 

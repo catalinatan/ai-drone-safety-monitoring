@@ -113,12 +113,25 @@ def get_coords_from_lite_mono(
     r = R.from_quat([cam_orient.x_val, cam_orient.y_val, cam_orient.z_val, cam_orient.w_val])
     ray_world = r.as_matrix() @ ray_cam
 
-    # Place point at metric depth along the ray
-    point_world = np.array([
-        cam_pos.x_val + ai_depth_val * ray_world[0],
-        cam_pos.y_val + ai_depth_val * ray_world[1],
-        cam_pos.z_val + ai_depth_val * ray_world[2],
-    ])
+    ground_z = 0.0
+    if abs(ray_world[2]) < 0.001:
+        distance = ai_depth_val * (cctv_height_meters * 2.5)
+    else:
+        t_ground = (ground_z - cam_pos.z_val) / ray_world[2]
+        if t_ground < 0:
+            distance = ai_depth_val * (cctv_height_meters * 2.5)
+        else:
+            min_distance = max(1.0, cctv_height_meters * 0.5)
+            max_distance = t_ground
+            distance = min_distance + (max_distance - min_distance) * (ai_depth_val**0.5)
+
+    point_world = np.array(
+        [
+            cam_pos.x_val + distance * ray_world[0],
+            cam_pos.y_val + distance * ray_world[1],
+            cam_pos.z_val + distance * ray_world[2],
+        ]
+    )
     point_world[2] = min(point_world[2], 0.0)
 
     return airsim.Vector3r(point_world[0], point_world[1], point_world[2])

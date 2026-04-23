@@ -10,9 +10,8 @@ No direct AirSim dependency — communicates with the drone server via HTTP.
 from __future__ import annotations
 
 import time
-from typing import Optional
 
-from src.services.event_logger import log_event, AuditEventType
+from src.services.event_logger import AuditEventType, log_event
 
 
 class DroneDispatcher:
@@ -141,6 +140,7 @@ class DroneDispatcher:
             return False
         try:
             import requests
+
             resp = requests.post(f"{self._api.base_url}/return_home", timeout=self._api.timeout)
             return resp.status_code == 200
         except Exception as e:
