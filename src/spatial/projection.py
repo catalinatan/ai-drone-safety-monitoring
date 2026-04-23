@@ -82,35 +82,26 @@ def get_coords_from_lite_mono(
     vehicle_name: str = "",
 ):
     """
-    Convert Lite-Mono relative depth (0–1) into world coordinates via ground
-    plane intersection.
-
-    Casts a ray from the camera through the pixel, intersects it with the
-    ground plane (Z=0 in NED), and uses the relative depth to weight between
-    the nearest and ground-intersection distances.
+    Convert pixel + metric depth into world coordinates (AirSim NED).
 
     Parameters
     ----------
-    client : airsim client
-    camera_name : str
-    pixel_x, pixel_y : float
-    img_w, img_h : int
     ai_depth_val : float
-        Relative depth from Lite-Mono (0 = close, 1 = far).
+        Metric depth in metres — distance from camera to target along the ray.
+        Computed by caller as: scale_factor * inverse_disparity_at_pixel.
+        Pass 0.0 to return camera position.
     cctv_height_meters : float
-        Camera height above ground, used as a fallback distance scale.
-    vehicle_name : str
-        Vehicle the camera is attached to (empty for world-space cameras).
-
-    Returns
-    -------
-    airsim.Vector3r with world-frame (x, y, z) NED coordinates.
+        Camera height above ground (kept for API compatibility but not used
+        in the core projection — scale recovery happens in the caller).
     """
     import airsim
 
     info = client.simGetCameraInfo(camera_name, vehicle_name=vehicle_name)
     cam_pos = info.pose.position
     cam_orient = info.pose.orientation
+
+    if ai_depth_val <= 0:
+        return airsim.Vector3r(cam_pos.x_val, cam_pos.y_val, min(cam_pos.z_val, 0.0))
 
     fov_rad = np.deg2rad(90.0)
     focal_len = (img_w / 2) / np.tan(fov_rad / 2)

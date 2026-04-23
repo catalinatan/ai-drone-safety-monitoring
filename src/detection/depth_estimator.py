@@ -214,8 +214,10 @@ def run_lite_mono_inference(model: LiteMonoDepthSystem, img_rgb: np.ndarray) -> 
     """
     Run depth estimation on an RGB image.
 
-    Returns a normalised depth map (float32, values in [0, 1]) matching the
-    input image's spatial dimensions.
+    Returns an inverse-disparity map (float32) matching the input image's
+    spatial dimensions. Values are proportional to true depth: higher values
+    mean farther from the camera. Use with a per-frame scale factor to
+    recover metric depth in metres.
     """
     input_h, input_w = 192, 640
     img_resized = cv2.resize(img_rgb, (input_w, input_h))
@@ -235,6 +237,5 @@ def run_lite_mono_inference(model: LiteMonoDepthSystem, img_rgb: np.ndarray) -> 
         mode="bilinear",
         align_corners=False,
     )
-    depth_map = pred_disp.squeeze().cpu().numpy()
-    depth_min, depth_max = depth_map.min(), depth_map.max()
-    return (depth_map - depth_min) / (depth_max - depth_min + 1e-8)
+    disp_map = pred_disp.squeeze().cpu().numpy()
+    return 1.0 / (disp_map + 1e-6)

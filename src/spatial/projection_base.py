@@ -56,6 +56,32 @@ class ProjectionBackend(ABC):
         """
         ...
 
+    def compute_scale_factor(
+        self,
+        depth_map: "np.ndarray",
+        frame_w: int,
+        frame_h: int,
+    ) -> float:
+        """
+        Compute per-frame scale factor to convert inverse-disparity to metric depth.
+
+        Samples ground-plane pixels where the geometric distance is known
+        (from camera height + ray direction) and compares to model predictions.
+
+        Parameters
+        ----------
+        depth_map : np.ndarray
+            Inverse-disparity map (H, W) from depth estimator.
+        frame_w, frame_h : int
+            Image dimensions.
+
+        Returns
+        -------
+        Scale factor s such that metric_depth = s * inverse_disparity.
+        Returns 1.0 as default (subclasses should override).
+        """
+        return 1.0
+
     def calibrate_height(
         self,
         pixel_x: float,
